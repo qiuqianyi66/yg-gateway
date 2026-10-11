@@ -337,6 +337,84 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
 }
 #view-keys .switch input:checked + .switch-track { background: var(--ok); }
 #view-keys .switch input:checked + .switch-track::after { transform: translateX(16px); }
+
+/* ── Key 管理：卡片式列表 ──────────────────────────────────────────
+    对齐 hub 的 .key-card 模式：每把 Key 一张卡片，弹性换行适配窄屏。
+    纯 CSS 实现，不依赖任何 UI 库（适配 go:embed 单文件）。 */
+#view-keys .key-list { display: flex; flex-direction: column; gap: 10px; }
+#view-keys .key-card {
+  background: var(--surface-2); border: 1px solid var(--line-soft);
+  border-radius: 10px; padding: 14px 17px; transition: border-color .15s, box-shadow .15s;
+}
+#view-keys .key-card:hover { border-color: var(--line); box-shadow: var(--shadow); }
+#view-keys .key-card.disabled { opacity: .65; }
+#view-keys .key-card.disabled .key-name { color: var(--ink-3); }
+#view-keys .key-card-main {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; flex-wrap: wrap;
+}
+#view-keys .key-info { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; min-width: 0; flex: 1; }
+#view-keys .key-name { font-weight: 600; font-size: 13.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 200px; }
+#view-keys .key-id { font: 11px var(--mono); color: var(--ink-3); }
+#view-keys .key-prefix {
+  font: 11.5px var(--mono); color: var(--ink-2);
+  background: var(--surface); border: 1px solid var(--line-soft);
+  border-radius: 5px; padding: 2px 7px; user-select: all;
+}
+#view-keys .key-badge {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 1px 8px; border-radius: 999px; font-size: 11px; font-weight: 500; white-space: nowrap;
+}
+#view-keys .key-badge.realm-cn { color: var(--bad); background: var(--bad-soft); border: 1px solid color-mix(in srgb, var(--bad) 22%, transparent); }
+#view-keys .key-badge.realm-global { color: var(--accent); background: var(--accent-soft); border: 1px solid color-mix(in srgb, var(--accent) 22%, transparent); }
+#view-keys .key-badge.realm-all { color: var(--ink-3); background: var(--surface); border: 1px solid var(--line); }
+#view-keys .key-badge.models-all { color: var(--ink-3); background: var(--surface); border: 1px solid var(--line); }
+#view-keys .key-badge.models-block { color: var(--bad); background: var(--bad-soft); border: 1px solid color-mix(in srgb, var(--bad) 22%, transparent); }
+#view-keys .key-badge.models-list { color: var(--ok); background: var(--ok-soft); border: 1px solid color-mix(in srgb, var(--ok) 22%, transparent); }
+#view-keys .key-actions { display: flex; gap: 6px; flex: none; }
+#view-keys .key-actions button { padding: 4px 10px; font-size: 12px; border-radius: 6px; white-space: nowrap; }
+#view-keys .key-empty {
+  padding: 48px 20px; text-align: center; color: var(--ink-3);
+}
+#view-keys .key-empty .big { font-size: 14px; color: var(--ink-2); margin-bottom: 8px; }
+#view-keys .key-empty .desc { font-size: 12.5px; max-width: 32em; margin: 0 auto; }
+#view-keys .key-load-error {
+  padding: 32px 20px; text-align: center; color: var(--bad);
+}
+#view-keys .key-load-error .big { font-size: 14px; margin-bottom: 8px; }
+
+/* ── Key 管理：弹窗（新增/编辑/明文展示）──────────────────────────────
+    复用现有 .veil/.dlg 弹窗框架，Key 专用样式用 #view-keys 限定防越界。 */
+#view-keys .key-dlg { width: 480px; }
+#view-keys .key-dlg .field-group { display: flex; flex-direction: column; gap: 14px; }
+#view-keys .key-dlg .realm-pills {
+  display: inline-flex; gap: 3px; background: var(--surface-2);
+  border-radius: 8px; padding: 3px;
+}
+#view-keys .key-dlg .realm-pill {
+  padding: 5px 14px; border-radius: 6px; border: none;
+  background: transparent; color: var(--ink-3); font: 550 12.5px var(--sans); cursor: pointer;
+  transition: background .12s, color .12s;
+}
+#view-keys .key-dlg .realm-pill:hover { color: var(--ink); }
+#view-keys .key-dlg .realm-pill.on { background: var(--surface); color: var(--ink); box-shadow: 0 1px 3px rgba(0,0,0,.22); }
+#view-keys .key-dlg .realm-pill.on.cn { color: var(--bad); }
+#view-keys .key-dlg .realm-pill.on.global { color: var(--accent); }
+#view-keys .key-dlg .key-gen-row { display: flex; gap: 7px; }
+#view-keys .key-dlg .key-gen-row input { flex: 1; }
+#view-keys .key-dlg .models-hint { font-size: 11.5px; color: var(--ink-3); margin-top: 4px; }
+#view-keys .key-plaintext {
+  display: block; font: 600 14px/1.5 var(--mono); word-break: break-all;
+  background: var(--surface-2); border: 1px solid var(--line-soft);
+  border-radius: 8px; padding: 12px 14px; user-select: all; color: var(--ink);
+}
+#view-keys .key-plaintext-warning {
+  display: flex; align-items: flex-start; gap: 8px; margin-top: 12px;
+  padding: 10px 13px; border-radius: 8px; background: var(--warn-soft);
+  border: 1px solid color-mix(in srgb, var(--warn) 22%, transparent); font-size: 12.5px; color: var(--warn);
+}
+#view-keys .key-plaintext-warning svg { width: 15px; height: 15px; flex: none; margin-top: 1px; }
+#view-keys .key-copy-row { display: flex; gap: 8px; margin-top: 12px; }
 .savebar {
   display: flex; align-items: center; gap: 12px; padding: 13px 17px;
   border-top: 1px solid var(--line-soft); background: var(--surface-2);
@@ -955,18 +1033,91 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
           <span class="grow"></span>
           <span class="note" id="keyAdminStatus"></span>
           <button class="xs" id="btnKeyReload">刷新</button>
-          <button class="primary xs" id="btnKeyAdd">新增 Key</button>
+          <button class="primary xs" id="btnKeyAdd">+ 新增 Key</button>
         </header>
         <div class="pad">
-          <div class="tbl-wrap">
-            <table class="acc">
-              <thead><tr>
-                <th>ID</th><th>名称</th><th>密钥</th><th>启停</th><th>Realm</th><th>模型白名单</th><th>操作</th>
-              </tr></thead>
-              <tbody id="keyBody"></tbody>
-            </table>
+          <div class="key-list" id="keyBody"></div>
+          <div id="keyEmpty" class="key-empty" hidden>
+            <div class="big">未配置多 Key</div>
+            <div class="desc">当前使用单 api_key 鉴权。点击「+ 新增 Key」配置第一条多 Key。</div>
           </div>
-          <div id="keyEmpty" class="hint" hidden>未配置多 Key。当前使用单 api_key 鉴权。</div>
+          <div id="keyLoadError" class="key-load-error" hidden>
+            <div class="big">读取 Key 列表失败</div>
+            <div id="keyLoadErrMsg"></div>
+            <button class="xs" id="btnKeyRetry" style="margin-top:12px">重试</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 新增/编辑弹窗 -->
+      <div class="veil" id="keyEditVeil">
+        <div class="dlg key-dlg">
+          <header>
+            <h3 id="keyDlgTitle">新增 Key</h3>
+            <div class="hint" id="keyDlgHint">配置一条新的 API Key</div>
+          </header>
+          <div class="body">
+            <div class="field-group">
+              <label class="fld">
+                <span class="lb">名称</span>
+                <input id="kfName" placeholder="可空，用于标识（如「朋友-GLM」）">
+              </label>
+              <label class="fld">
+                <span class="lb">ID <span style="color:var(--ink-3);font-weight:400">（鉴权用，唯一）</span></span>
+                <input id="kfId" placeholder="必填，[A-Za-z0-9_-] ≤ 64 字符">
+                <span class="hint">ID 是 Key 的唯一标识，不可重复</span>
+              </label>
+              <label class="fld" id="kfKeyWrap">
+                <span class="lb">密钥</span>
+                <div class="key-gen-row">
+                  <input id="kfKey" type="password" placeholder="留空 = 不修改（编辑时）/ 必填（新增时）">
+                  <button type="button" class="xs" id="btnKeyGen">生成</button>
+                </div>
+                <span class="hint" id="kfKeyHint">新增时必填；编辑时留空表示不修改密钥</span>
+              </label>
+              <label class="fld">
+                <span class="lb">Realm 版本约束</span>
+                <div class="realm-pills" id="kfRealmPills">
+                  <button type="button" class="realm-pill on" data-realm="">不限</button>
+                  <button type="button" class="realm-pill cn" data-realm="cn">国内版</button>
+                  <button type="button" class="realm-pill global" data-realm="global">国际版</button>
+                </div>
+                <span class="hint">限定这把 Key 只能调用哪个版本的模型</span>
+              </label>
+              <label class="fld">
+                <span class="lb">模型白名单</span>
+                <input id="kfModels" placeholder="留空 = 不限，逗号分隔（如 deepseek-v4-flash, glm-5.2）">
+                <span class="models-hint">留空 = 不限制（可调用全部模型）；填入模型 ID = 白名单</span>
+              </label>
+            </div>
+          </div>
+          <footer>
+            <span class="grow"></span>
+            <button id="btnKeyCancel">取消</button>
+            <button class="primary" id="btnKeySave">保存</button>
+          </footer>
+        </div>
+      </div>
+
+      <!-- 创建后明文展示弹窗 -->
+      <div class="veil" id="keyShowVeil">
+        <div class="dlg key-dlg">
+          <header>
+            <h3>Key 已创建</h3>
+            <div class="hint">请立即复制保存，关闭后无法再次查看完整密钥</div>
+          </header>
+          <div class="body">
+            <code class="key-plaintext" id="keyPlaintext"></code>
+            <div class="key-plaintext-warning">
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M8 1.8 14 13H2z"/><path d="M8 6v3M8 11.5v.5"/></svg>
+              <span>面板只存哈希，明文仅此一次展示。关闭弹窗后连服务端也拿不回完整密钥。</span>
+            </div>
+          </div>
+          <footer>
+            <span class="grow"></span>
+            <button id="btnKeyCopy">复制密钥</button>
+            <button class="primary" id="btnKeyShowClose">已保存，关闭</button>
+          </footer>
         </div>
       </div>
     </section>
