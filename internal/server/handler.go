@@ -194,9 +194,15 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) withAuth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if _, ok := h.authenticate(r); !ok {
+		key, ok := h.authenticate(r)
+		if !ok {
 			writeOpenAIError(w, http.StatusUnauthorized, "invalid_api_key", "missing or invalid API key")
 			return
+		}
+		// 记录命中的 Key 身份到 requestTrace（供日志/用量归因，不含明文）。
+		// 未启用鉴权时 key 为 nil，跳过。
+		if tr := requestTraceFrom(r); tr != nil && key != nil {
+			tr.setKey(key)
 		}
 		next(w, r)
 	}
