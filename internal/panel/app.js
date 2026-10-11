@@ -966,77 +966,172 @@ $('btnLogPin').onclick = () => {
 };
 
 /* ── API Key 管理（二期，ADR-002）─────────────────────────────────── */
-/* 独立视图 view-keys：列表/新增/编辑/删除/启停，复用 GET/POST /panel/api/config。
+/* 独立视图 view-keys：卡片式列表 + 弹窗表单，复用 GET/POST /panel/api/config。
  * 一期 loadConfigMasked 已把 api_keys[].key 留空 + key_configured 状态字段；
  * mergeConfigMaps 对数组整体替换；normalizeAPIKeys 校验 id/realm/models。
- * 零新增后端接口，纯前端 + go:embed 重编译。 */
+ * 零新增后端接口，纯前端 + go:embed 重编译。
+ *
+ * UI 设计对齐竞品调研（panel-key-mgmt-ui-competitive-notes.md）：
+ * - 卡片式列表（对齐 hub），不是表格行内编辑
+ * - 弹窗表单新增/编辑（三家都用弹窗）
+ * - 创建后明文一次性展示（对齐 manager，只存哈希）
+ * - 胶囊式 realm 开关（对齐 hub），不是 select 下拉
+ * - models 三态展示（对齐 ARP）：null=全部/[]=不放行/[a,b]=N个
+ * - 空状态区分（对齐 manager）：取数失败≠没有密钥
+ * - 提交锁（对齐 manager）：防连点建重复 */
 
 let keyData = null;       // GET config 返回的 api_keys 数组（脱敏后）
 let keyAdminCfg = false;  // api_key_configured 状态
-let keyEditing = null;    // 当前编辑中的 id（新增用 '__new__'）
-let keySaving = false;    // 提交锁：防连点建重复 Key（采纳 manager 同步锁模式）
+let keyEditing = null;    // 当前编辑中的 Key 对象（null=未编辑）
+let keyIsNew = false;     // true=新增模式, false=编辑模式
+let keySaving = false;    // 提交锁：防连点建重复 Key
+let keyLoadFailed = false; // 取数失败标记（区分空状态）
 
 async function loadKeys() {
   try {
     const d = await api('config');
     keyData = Array.isArray(d.config.api_keys) ? d.config.api_keys : [];
     keyAdminCfg = !!d.config.api_key_configured;
+    keyLoadFailed = false;
     renderKeyList();
-  } catch (e) { toast('读取 Key 列表失败：' + e.message, 'err'); }
+  } catch (e) {
+    keyLoadFailed = true;
+    keyData = [];
+    renderKeyList();
+    $('keyLoadErrMsg').textContent = e.message || '未知错误';
+  }
 }
 
 function renderKeyList() {
   $('keyAdminStatus').textContent = '管理员密钥(api_key)：' + (keyAdminCfg ? '已配置' : '未配置');
-  const tb = $('keyBody');
+  const list = $('keyBody');
   const empty = $('keyEmpty');
-  tb.innerHTML = '';
+  const loadErr = $('keyLoadError');
+
+  // 取数失败 ≠ 没有密钥（对齐 manager 防误重建）
+  if (keyLoadFailed) {
+    list.innerHTML = '';
+    empty.hidden = true;
+    loadErr.hidden = false;
+    return;
+  }
+  loadErr.hidden = true;
+
   if (!keyData.length) {
+    list.innerHTML = '';
     empty.hidden = false;
-    empty.textContent = '未配置多 Key。当前使用单 api_key 鉴权。点击「新增 Key」配置第一条。';
     return;
   }
   empty.hidden = true;
-  keyData.forEach((k) => { tb.insertAdjacentHTML('beforeend', keyRowHTML(k, false)); });
+  list.innerHTML = '';
+  keyData.forEach((k) => { list.insertAdjacentHTML('beforeend', keyCardHTML(k)); });
+  attachKeyCardEvents();
 }
 
-function keyRowHTML(k, editing) {
-  const id = esc(k.id || ''), name = esc(k.name || ''), realm = esc(k.realm || '');
+function keyCardHTML(k) {
+  const id = esc(k.id || ''), name = esc(k.name || '') || '—';
   const cfg = !!k.key_configured;
-  const models = Array.isArray(k.models) ? k.models.map(esc).join(', ') : (k.models == null ? '不限' : '全拒');
   const en = k.enabled !== false;
-  if (editing) return keyEditRowHTML(k);
-  return `<tr data-kid="${id}">
-    <td>${id}</td>
-    <td>${name || '—'}</td>
-    <td>${cfg ? '<span class="tag ok">已配置</span>' : '<span class="tag mute">未配置</span>'}</td>
-    <td><label class="switch"><input type="checkbox" ${en ? 'checked' : ''} onchange="toggleKeyEnabled('${id}', this.checked)"><span class="switch-track"></span></label></td>
-    <td>${realm || '不限'}</td>
-    <td>${esc(models)}</td>
-    <td><button class="xs" onclick="editKey('${id}')">编辑</button>
-      <button class="xs danger" onclick="deleteKey('${id}')">删除</button></td>
-  </tr>`;
+  const realm = esc(k.realm || '');
+
+  // realm badge（胶囊式，对齐 hub）
+  const realmBadge = realm === 'cn'
+    ? '<span class="key-badge realm-cn">国内版</span>'
+    : realm === 'global'
+      ? '<span class="key-badge realm-global">国际版</span>'
+      : '<span class="key-badge realm-all">不限</span>';
+
+  // models 三态展示（对齐 ARP）
+  let modelsBadge;
+  if (k.models == null) {
+    modelsBadge = '<span class="key-badge models-all">全部模型</span>';
+  } else if (Array.isArray(k.models) && k.models.length === 0) {
+    modelsBadge = '<span class="key-badge models-block">不放行</span>';
+  } else if (Array.isArray(k.models)) {
+    const n = k.models.length;
+    const names = k.models.map(esc).join(', ');
+    modelsBadge = `<span class="key-badge models-list" title="${names}">${n} 个模型</span>`;
+  } else {
+    modelsBadge = '<span class="key-badge models-all">全部模型</span>';
+  }
+
+  // 密钥状态（脱敏：只显示「已配置/未配置」，不显示明文）
+  const keyStatus = cfg
+    ? '<span class="tag ok">已配置</span>'
+    : '<span class="tag mute">未配置</span>';
+
+  return `<div class="key-card${en ? '' : ' disabled'}" data-kid="${id}">
+    <div class="key-card-main">
+      <div class="key-info">
+        <span class="key-name">${name}</span>
+        <span class="key-id">#${id}</span>
+        ${keyStatus}
+        ${realmBadge}
+        ${modelsBadge}
+      </div>
+      <div class="key-actions">
+        <label class="switch" title="${en ? '已启用' : '已禁用'}">
+          <input type="checkbox" data-action="toggle" data-kid="${id}" ${en ? 'checked' : ''}>
+          <span class="switch-track"></span>
+        </label>
+        <button class="xs" data-action="edit" data-kid="${id}">编辑</button>
+        <button class="xs danger" data-action="delete" data-kid="${id}">删除</button>
+      </div>
+    </div>
+  </div>`;
 }
 
-function keyEditRowHTML(k) {
-  const id = esc(k.id || ''), name = esc(k.name || ''), realm = esc(k.realm || '');
-  const models = Array.isArray(k.models) ? k.models.join(', ') : '';
-  const cfg = !!k.key_configured;
-  return `<tr data-kid="${id || '__new__'}" class="editing">
-    <td>${id ? id + '<input type="hidden" data-f="id" value="' + id + '">' : '<input data-f="id" placeholder="必填，[A-Za-z0-9_-]≤64" style="width:120px">'}</td>
-    <td><input data-f="name" value="${name}" placeholder="可空" style="width:100px"></td>
-    <td><input data-f="key" type="password" placeholder="${cfg ? '留空=不修改' : '必填'}" style="width:180px">
-      <button type="button" class="xs" onclick="fillGenKey(this)">生成</button></td>
-    <td><select data-f="realm"><option value=""${!realm ? ' selected' : ''}>不限</option><option value="cn"${realm==='cn'?' selected':''}>cn</option><option value="global"${realm==='global'?' selected':''}>global</option></select></td>
-    <td><input data-f="models" value="${esc(models)}" placeholder="留空=不限，逗号分隔" style="width:200px"></td>
-    <td><button class="xs primary" onclick="saveKeyRow('${id || '__new__'}')">保存</button>
-      <button class="xs" onclick="loadKeys()">取消</button></td>
-  </tr>`;
+function attachKeyCardEvents() {
+  const list = $('keyBody');
+  list.querySelectorAll('[data-action="toggle"]').forEach(el => {
+    el.onchange = () => toggleKeyEnabled(el.dataset.kid, el.checked);
+  });
+  list.querySelectorAll('[data-action="edit"]').forEach(el => {
+    el.onclick = () => openKeyDialog(el.dataset.kid);
+  });
+  list.querySelectorAll('[data-action="delete"]').forEach(el => {
+    el.onclick = () => deleteKey(el.dataset.kid);
+  });
 }
 
-function fillGenKey(btn) {
-  const input = btn.parentElement.querySelector('[data-f="key"]');
-  input.value = genApiKey();
-  input.type = 'text';
+/* ── 弹窗表单（新增/编辑）────────────────────────────────────────── */
+
+function openKeyDialog(id) {
+  const k = id ? keyData.find(x => x.id === id) : null;
+  keyEditing = k || null;
+  keyIsNew = !k;
+
+  $('keyDlgTitle').textContent = k ? '编辑 Key' : '新增 Key';
+  $('keyDlgHint').textContent = k ? `编辑 Key「${k.name || k.id}」` : '配置一条新的 API Key';
+  $('kfName').value = k ? esc(k.name || '') : '';
+  $('kfId').value = k ? esc(k.id || '') : '';
+  $('kfId').disabled = !!k; // 编辑时 ID 不可改
+  $('kfKey').value = '';
+  $('kfKey').type = 'password';
+  $('kfKeyHint').textContent = k
+    ? '留空 = 不修改密钥；填写 = 更新为新密钥'
+    : '必填；点击「生成」可一键生成随机密钥';
+  $('kfModels').value = (k && Array.isArray(k.models)) ? k.models.join(', ') : '';
+
+  // realm 胶囊（默认不限）
+  const realm = k ? esc(k.realm || '') : '';
+  $('kfRealmPills').querySelectorAll('.realm-pill').forEach(p => {
+    p.classList.toggle('on', p.dataset.realm === realm);
+  });
+
+  showVeil('keyEditVeil');
+  if (!k) $('kfId').focus();
+}
+
+function closeKeyDialog() {
+  hideVeil('keyEditVeil');
+  keyEditing = null;
+  keyIsNew = false;
+}
+
+function getCurrentRealm() {
+  const on = $('kfRealmPills').querySelector('.realm-pill.on');
+  return on ? on.dataset.realm : '';
 }
 
 function genApiKey() {
@@ -1048,65 +1143,96 @@ function genApiKey() {
   return s;
 }
 
-function collectKeyList() {
-  const out = [];
-  const editRow = $('keyBody').querySelector('tr.editing');
-  keyData.forEach((k) => {
-    if (editRow && editRow.dataset.kid === k.id) return;
-    const entry = { id: k.id };
-    if (k.name) entry.name = k.name;
-    if (k.key) entry.key = k.key;
-    if (k.realm) entry.realm = k.realm;
-    if (Array.isArray(k.models)) entry.models = k.models;
-    if (k.enabled !== undefined) entry.enabled = k.enabled;
-    out.push(entry);
-  });
-  if (editRow) {
-    const get = (f) => { const el = editRow.querySelector(`[data-f="${f}"]`); return el ? el.value.trim() : ''; };
-    const id = get('id');
-    if (!id) { toast('ID 不能为空', 'err'); return null; }
-    const entry = { id };
-    const name = get('name'); if (name) entry.name = name;
-    const key = get('key'); if (key) entry.key = key;
-    const realm = get('realm'); if (realm) entry.realm = realm;
-    const models = get('models');
-    if (models) entry.models = models.split(/[,，\s]+/).filter(Boolean);
-    out.push(entry);
+function collectKeyFromDialog() {
+  const id = $('kfId').value.trim();
+  if (!id) { toast('ID 不能为空', 'err'); $('kfId').focus(); return null; }
+  if (!/^[A-Za-z0-9_-]+$/.test(id)) { toast('ID 只能含字母、数字、下划线、连字符', 'err'); $('kfId').focus(); return null; }
+
+  const entry = { id };
+  const name = $('kfName').value.trim();
+  if (name) entry.name = name;
+
+  const key = $('kfKey').value.trim();
+  if (keyIsNew) {
+    if (!key) { toast('新增 Key 时密钥必填', 'err'); $('kfKey').focus(); return null; }
+    entry.key = key;
+  } else if (key) {
+    entry.key = key; // 编辑时填了新值才更新
   }
-  if (!out.length) return null;
+
+  const realm = getCurrentRealm();
+  if (realm) entry.realm = realm;
+
+  const models = $('kfModels').value.trim();
+  if (models) {
+    entry.models = models.split(/[,，\s]+/).filter(Boolean);
+  } else if (keyIsNew) {
+    entry.models = null; // 新增时不填 = 不限（null 三态）
+  }
+
+  return entry;
+}
+
+function buildSavePayload(newEntry) {
+  // 构建完整 api_keys 数组提交（对齐现有 POST /panel/api/config 整体替换语义）
+  const out = [];
+  let replaced = false;
+  keyData.forEach((k) => {
+    if (newEntry && k.id === newEntry.id) {
+      // 编辑：合并更新（保留原有字段，覆盖提交的字段）
+      const merged = { id: k.id };
+      if (k.name) merged.name = k.name;
+      if (newEntry.name) merged.name = newEntry.name;
+      if (newEntry.key) merged.key = newEntry.key;
+      else if (k.key) merged.key = k.key;
+      if (newEntry.realm !== undefined) merged.realm = newEntry.realm;
+      else if (k.realm) merged.realm = k.realm;
+      if (newEntry.models !== undefined) merged.models = newEntry.models;
+      else if (Array.isArray(k.models)) merged.models = k.models;
+      merged.enabled = k.enabled !== false;
+      out.push(merged);
+      replaced = true;
+    } else {
+      // 保留其他 Key 原样
+      const entry = { id: k.id, enabled: k.enabled !== false };
+      if (k.name) entry.name = k.name;
+      if (k.key) entry.key = k.key;
+      if (k.realm) entry.realm = k.realm;
+      if (Array.isArray(k.models)) entry.models = k.models;
+      out.push(entry);
+    }
+  });
+  if (newEntry && !replaced) out.push(newEntry); // 新增
   return out;
 }
 
-async function saveKeys(keys, successMsg) {
-  if (keySaving) return;
+async function saveKeyFromDialog() {
+  if (keySaving) return; // 提交锁：防连点建重复
+  const entry = collectKeyFromDialog();
+  if (!entry) return;
+
   keySaving = true;
   try {
-    const r = await api('config', { method: 'POST', body: JSON.stringify({ api_keys: keys }) });
-    toast(successMsg || 'Key 配置已保存，热生效', 'ok');
-    keyEditing = null;
+    const payload = buildSavePayload(entry);
+    const r = await api('config', { method: 'POST', body: JSON.stringify({ api_keys: payload }) });
+    toast('Key 配置已保存，热生效', 'ok');
+
+    // 新增且有明文返回 → 展示一次性明文弹窗
+    if (keyIsNew && entry.key) {
+      closeKeyDialog();
+      showKeyPlaintext(entry.key);
+    } else {
+      closeKeyDialog();
+    }
     loadKeys();
-  } catch (e) { toast('保存失败：' + e.message, 'err'); }
-  finally { keySaving = false; }
+  } catch (e) {
+    toast('保存失败：' + e.message, 'err');
+  } finally {
+    keySaving = false;
+  }
 }
 
-function editKey(id) {
-  if (keyEditing) { toast('请先保存或取消当前编辑', 'err'); return; }
-  keyEditing = id;
-  const tb = $('keyBody');
-  tb.innerHTML = '';
-  keyData.forEach((k) => { tb.insertAdjacentHTML('beforeend', keyRowHTML(k, k.id === id)); });
-}
-
-function deleteKey(id) {
-  const k = keyData.find(x => x.id === id);
-  const label = (k && (k.name || k.id)) || id;
-  if (!confirm(`确认删除 Key「${label}」？删除后立即生效。`)) return;
-  const remaining = keyData.filter(x => x.id !== id);
-  const payload = remaining.length ? remaining : null;
-  saveKeys(payload, `Key「${label}」已删除，热生效`);
-}
-
-function toggleKeyEnabled(id, enabled) {
+async function toggleKeyEnabled(id, enabled) {
   const keys = keyData.map(k => {
     const entry = { id: k.id, enabled: enabled ? true : false };
     if (k.name) entry.name = k.name;
@@ -1115,22 +1241,105 @@ function toggleKeyEnabled(id, enabled) {
     if (Array.isArray(k.models)) entry.models = k.models;
     return entry;
   });
-  saveKeys(keys, `Key「${id}」已${enabled ? '启用' : '禁用'}，热生效`);
+  try {
+    await api('config', { method: 'POST', body: JSON.stringify({ api_keys: keys }) });
+    toast(`Key「${id}」已${enabled ? '启用' : '禁用'}，热生效`, 'ok');
+    loadKeys();
+  } catch (e) { toast('切换失败：' + e.message, 'err'); loadKeys(); }
 }
+
+function deleteKey(id) {
+  const k = keyData.find(x => x.id === id);
+  const label = (k && (k.name || k.id)) || id;
+  if (!confirm(`确认删除 Key「${label}」？\n\n删除后立即生效，该 Key 将无法再用于鉴权。`)) return;
+  const remaining = keyData.filter(x => x.id !== id);
+  const payload = remaining.length ? remaining.map(k => {
+    const entry = { id: k.id, enabled: k.enabled !== false };
+    if (k.name) entry.name = k.name;
+    if (k.key) entry.key = k.key;
+    if (k.realm) entry.realm = k.realm;
+    if (Array.isArray(k.models)) entry.models = k.models;
+    return entry;
+  }) : null;
+  saveKeys(payload, `Key「${label}」已删除，热生效`);
+}
+
+async function saveKeys(keys, successMsg) {
+  if (keySaving) return;
+  keySaving = true;
+  try {
+    await api('config', { method: 'POST', body: JSON.stringify({ api_keys: keys }) });
+    toast(successMsg || 'Key 配置已保存，热生效', 'ok');
+    loadKeys();
+  } catch (e) { toast('保存失败：' + e.message, 'err'); }
+  finally { keySaving = false; }
+}
+
+/* ── 明文展示弹窗 ────────────────────────────────────────────────── */
+
+function showKeyPlaintext(plaintext) {
+  $('keyPlaintext').textContent = plaintext;
+  showVeil('keyShowVeil');
+}
+
+async function copyKeyPlaintext() {
+  const text = $('keyPlaintext').textContent;
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(text);
+    } else {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      document.body.removeChild(ta);
+    }
+    toast('已复制到剪贴板', 'ok');
+  } catch (e) { toast('复制失败：' + e.message, 'err'); }
+}
+
+/* ── 弹窗辅助（veil 切换）────────────────────────────────────────── */
+
+function showVeil(id) { $(id).classList.add('on'); }
+function hideVeil(id) { $(id).classList.remove('on'); }
+
+/* ── 事件绑定 ────────────────────────────────────────────────────── */
 
 $('btnKeyReload').onclick = loadKeys;
-$('btnKeyAdd').onclick = () => {
-  if (keyEditing) { toast('请先保存或取消当前编辑', 'err'); return; }
-  keyEditing = '__new__';
-  const tb = $('keyBody');
-  tb.insertAdjacentHTML('afterbegin', keyEditRowHTML({}));
+$('btnKeyRetry').onclick = loadKeys;
+$('btnKeyAdd').onclick = () => openKeyDialog(null);
+$('btnKeyCancel').onclick = closeKeyDialog;
+$('btnKeySave').onclick = saveKeyFromDialog;
+$('btnKeyGen').onclick = () => {
+  const input = $('kfKey');
+  input.value = genApiKey();
+  input.type = 'text';
 };
+$('btnKeyCopy').onclick = copyKeyPlaintext;
+$('btnKeyShowClose').onclick = () => hideVeil('keyShowVeil');
 
-async function saveKeyRow(kid) {
-  const keys = collectKeyList();
-  if (!keys) return;
-  saveKeys(keys);
-}
+// realm 胶囊切换
+$('kfRealmPills').querySelectorAll('.realm-pill').forEach(p => {
+  p.onclick = () => {
+    $('kfRealmPills').querySelectorAll('.realm-pill').forEach(x => x.classList.remove('on'));
+    p.classList.add('on');
+  };
+});
+
+// 点击遮罩关闭弹窗
+$('keyEditVeil').onclick = (e) => { if (e.target === $('keyEditVeil')) closeKeyDialog(); };
+$('keyShowVeil').onclick = (e) => { if (e.target === $('keyShowVeil')) hideVeil('keyShowVeil'); };
+
+// ESC 关闭弹窗
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') {
+    if ($('keyEditVeil').classList.contains('on')) closeKeyDialog();
+    if ($('keyShowVeil').classList.contains('on')) hideVeil('keyShowVeil');
+  }
+});
 
 /* ── 配置 ─────────────────────────────────────────────────────────── */
 const CFG_MAP = {
