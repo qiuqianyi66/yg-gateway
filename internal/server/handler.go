@@ -199,8 +199,12 @@ func (h *Handler) withAuth(next http.HandlerFunc) http.HandlerFunc {
 			writeOpenAIError(w, http.StatusUnauthorized, "invalid_api_key", "missing or invalid API key")
 			return
 		}
-		// 记录命中的 Key 身份到 requestTrace（供日志/用量归因，不含明文）。
-		// 未启用鉴权时 key 为 nil，跳过。
+		// 把命中的 Key 身份放进独立 context（供约束校验/归因，不依赖 requestTrace，
+		// 因为 trace 只在 RequestLog 非 nil 时才创建）。
+		if key != nil {
+			r = r.WithContext(context.WithValue(r.Context(), authKeyKey{}, key))
+		}
+		// 同时写进 requestTrace（若存在），供日志归档归因。
 		if tr := requestTraceFrom(r); tr != nil && key != nil {
 			tr.setKey(key)
 		}
@@ -208,11 +212,63 @@ func (h *Handler) withAuth(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
+// authKeyKey 鉴权命中的 Key 的 context 键（独立于 requestTrace，约束校验用）。
+type authKeyKey struct{}
+
+// authKeyFrom 从请求上下文读鉴权命中的 Key（withAuth 写入；nil = 未启用鉴权）。
+func authKeyFrom(r *http.Request) *httpauth.Key {
+	if r == nil {
+		return nil
+	}
+	k, _ := r.Context().Value(authKeyKey{}).(*httpauth.Key)
+	return k
+}
+
 // authenticate 统一鉴权（多 Key 索引 + 单 Key 兼容），返回命中的 Key（不含明文）。
 // 未启用鉴权时返回 (nil, true)；鉴权失败返回 (nil, false)。
 func (h *Handler) authenticate(r *http.Request) (*httpauth.Key, bool) {
 	live := h.loadLive()
 	return httpauth.Authenticate(r, live.AuthIndex, live.APIKey)
+}
+
+// checkKeyConstraints 校验命中的 Key 的 realm / models 约束（ADR-001 §五）。
+//
+// 在鉴权后、选号前执行：被拒请求零上游消耗。返回空串 = 放行；非空 = 错误码
+// （realm_mismatch / model_not_allowed）。错误不泄漏 Key 身份（防探测存活 Key）。
+func (h *Handler) checkKeyConstraints(key *httpauth.Key, reqModel, realm, bareModel string) (code, msg string) {
+	if key == nil {
+		return "", "" // 未启用鉴权，无约束
+	}
+	// realm 约束：空 = 不限；cn = 只 cn；global = 只 global。
+	if key.Realm != "" && key.Realm != realm {
+		want := key.Realm
+		got := realm
+		if want == "cn" {
+			return "realm_mismatch", "该密钥仅限国内版模型，当前请求为国际版模型"
+		}
+		if want == "global" {
+			return "realm_mismatch", "该密钥仅限国际版模型，当前请求为国内版模型"
+		}
+		// 理论上 normalize 已保证 realm 只会是 cn/global/空，这里兜底。
+		return "realm_mismatch", "该密钥限定的版本与请求不匹配（" + want + " vs " + got + "）"
+	}
+	// models 约束三态：nil = 不限 / 非 nil 空 = 全拒 / 非空 = 白名单。
+	if key.Models == nil {
+		return "", ""
+	}
+	if len(key.Models) == 0 {
+		return "model_not_allowed", "该密钥未开放任何模型"
+	}
+	// 请求缺 model / 非字符串 / 空：若配了白名单，不能因缺 model 跳过检查（对齐 manager）。
+	if reqModel == "" {
+		return "model_not_allowed", "该密钥启用了模型白名单，请求必须指定 model"
+	}
+	for _, m := range key.Models {
+		if m == bareModel {
+			return "", ""
+		}
+	}
+	return "model_not_allowed", "模型不在该密钥的白名单内"
 }
 
 // rateLimited 只读端点限流中间件（F-003）。readonlyRL 为 nil 时透传（不限流）。
@@ -612,6 +668,15 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	modelRate := ""
 	if h.cfg.Upstream != nil {
 		modelRate = h.cfg.Upstream.ModelRate(realm, bareModel)
+	}
+
+	// 多 Key 约束校验（T6）：鉴权命中的 Key 的 realm / models 白名单，在选号/出站
+	// 之前执行（ADR-001 §五）。不符合即 400，零上游消耗。
+	if key := authKeyFrom(r); key != nil {
+		if code, msg := h.checkKeyConstraints(key, peek.Model, realm, bareModel); code != "" {
+			writeOpenAIError(w, http.StatusBadRequest, code, msg)
+			return
+		}
 	}
 
 	// 请求级统计：出口即打一行表格日志（任何路径都会走到）。
