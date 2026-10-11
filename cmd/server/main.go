@@ -523,9 +523,10 @@ func saveConfig(raw []byte, path string, live *livecfg.Holder, p *pool.Pool, up 
 
 // loadConfigMasked 加载配置并脱敏密钥明文，供面板 GET /panel/api/config 回显。
 //
-// 阻断项 2：不得把 api_key / api_keys[].key 明文直接返回给面板。这里把配置转成
-// 通用 map，把密钥字段替换为脱敏占位符（保留「是否已设置」的语义），面板配置表单
-// 不依赖 api_keys（CFG_MAP 白名单不含它），所以脱敏不影响前端回显。
+// 阻断项 2（第一轮）：不得把 api_key / api_keys[].key 明文直接返回给面板。
+// 阻断项 1（第二轮）：脱敏占位符会被前端 collectConfig 当真实值提交，覆盖原密钥。
+// 因此 api_key 字段**留空**（前端空值 = 不修改），另加 api_key_configured 状态字段
+// 让前端显示「已配置」；api_keys[].key 同样留空 + 每项带 key_configured。
 func loadConfigMasked(path string) (any, error) {
 	c, err := Load(path)
 	if err != nil {
@@ -540,18 +541,25 @@ func loadConfigMasked(path string) (any, error) {
 	if err := json.Unmarshal(raw, &m); err != nil {
 		return nil, err
 	}
-	// 脱敏顶层 api_key：有值 → 占位符；空 → 保留空串（前端据此判断是否已鉴权）。
+	// api_key：留空（不返回真实值，也不返回占位符，前端空 = 不修改），
+	// 另加 api_key_configured 状态（前端据此显示「已配置」而不误提交）。
 	if v, ok := m["api_key"]; ok {
 		if s, _ := v.(string); s != "" {
-			m["api_key"] = "********" // 不泄漏真实密钥
+			m["api_key"] = ""
+			m["api_key_configured"] = true
+		} else {
+			m["api_key_configured"] = false
 		}
 	}
-	// 脱敏 api_keys[].key
+	// api_keys[].key：留空 + 每项 key_configured 状态。
 	if keys, ok := m["api_keys"].([]any); ok {
 		for _, k := range keys {
 			if km, ok := k.(map[string]any); ok {
-				if km["key"] != nil {
-					km["key"] = "********"
+				if s, _ := km["key"].(string); s != "" {
+					km["key"] = ""
+					km["key_configured"] = true
+				} else {
+					km["key_configured"] = false
 				}
 			}
 		}
