@@ -518,10 +518,15 @@ func (h *Handler) modelList() []map[string]any {
 		entry = applyModelInfoFields(entry, mi)
 		// effort 能力透出——远端 supportedEfforts 权威，缺失落到 CN 静态兜底表
 		// （客户端可发现档位，不再盲传）。无档位 → 省略字段。
+		// 双字段名兼容：reasoning_supported_efforts（既有名）+ supported_efforts
+		// （部分客户端只认裸名，缺失时其内置表把模型当「不校验 effort」处理，
+		// 弹「该模型不校验该参数」）。别名同值，消费方按字段名偏好自取。
 		if efforts, def := upstream.EffortListing("cn", mi.ID, mi.Efforts, mi.DefaultEffort); efforts != nil {
 			entry["reasoning_supported_efforts"] = efforts
+			entry["supported_efforts"] = efforts
 			if def != "" {
 				entry["reasoning_default_effort"] = def
+				entry["default_effort"] = def
 			}
 		}
 		out = append(out, entry)
@@ -559,8 +564,10 @@ func (h *Handler) modelList() []map[string]any {
 			}
 			if efforts, def := upstream.EffortListing("global", id, globalEfforts[id], globalDefaults[id]); efforts != nil {
 				entry["reasoning_supported_efforts"] = efforts
+				entry["supported_efforts"] = efforts // 双字段名兼容（见 CN 分支注释）
 				if def != "" {
 					entry["reasoning_default_effort"] = def
+					entry["default_effort"] = def
 				}
 			}
 			out = append(out, entry)
