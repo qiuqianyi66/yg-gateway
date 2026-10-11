@@ -1156,6 +1156,47 @@ func TestKeyConstraintsBlockBeforeUpstream(t *testing.T) {
 		t.Fatalf("约束拒绝不应打上游，got %d 次上游调用", upstreamCalls)
 	}
 }
+
+// TestKeyConstraintsModelTypeError 白名单启用时，model 字段类型非法（数字/对象等）
+// 直接 400 且不触发下游（T6 收尾：区分「缺 model」与「model 类型非法」）。
+func TestKeyConstraintsModelTypeError(t *testing.T) {
+	var upstreamCalls int
+	up := newFakeUpstream(t, func(authz string) (int, string, bool) {
+		upstreamCalls++
+		return 200, sseOK, true
+	})
+	sum := sha256Of("sk-typed")
+	idx := httpauth.BuildIndex([]httpauth.Key{
+		{ID: "k1", Digest: sum, Models: []string{"allowed"}},
+	})
+	live := livecfg.New(livecfg.Snapshot{AuthIndex: idx})
+	h := NewHandler(Config{
+		Pool:     testPoolWith(&auth.Auth{UID: "u1", AccessToken: "at", ExpiresAt: 9999999999}),
+		Upstream: up,
+		Live:     live,
+	})
+
+	// model 是数字（非字符串）→ 400 model_not_allowed，零上游
+	for _, body := range []string{
+		`{"model":123,"messages":[]}`,
+		`{"model":{"nested":true},"messages":[]}`,
+		`{"model":true,"messages":[]}`,
+	} {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer sk-typed")
+		h.ServeHTTP(rec, req)
+		if rec.Code != 400 {
+			t.Fatalf("model 类型非法应 400，body=%s got %d", body, rec.Code)
+		}
+		if !strings.Contains(rec.Body.String(), "model_not_allowed") {
+			t.Fatalf("错误码应为 model_not_allowed，body=%s", rec.Body.String())
+		}
+	}
+	if upstreamCalls != 0 {
+		t.Fatalf("类型非法不应打上游，got %d 次", upstreamCalls)
+	}
+}
 func TestKeyIdentityInRequestLog(t *testing.T) {
 	sum := sha256Of("sk-secret-key-value")
 	idx := httpauth.BuildIndex([]httpauth.Key{

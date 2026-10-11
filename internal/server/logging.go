@@ -350,18 +350,17 @@ type requestTrace struct {
 	clientIP  string
 	userAgent string
 	// 鉴权命中的下游 Key 身份（多 Key 派发归因，ADR-001 F-005）。
-	// 只存 id/name + 约束（Models/Realm），不存明文（R1）。key 为 nil = 未启用鉴权。
+	// 只存 id/name 两个归因字段，**不持有完整 *httpauth.Key**（约束校验的身份来源
+	// 是 authKeyKey context，这里只做日志归因，避免重复持有含摘要的对象）。
 	keyID   string
 	keyName string
-	key     *httpauth.Key
 }
 
-// setKey 记录鉴权命中的 Key（含约束，不含明文）。
+// setKey 记录鉴权命中的 Key 的归因字段（id/name，不含明文、不含约束对象）。
 func (t *requestTrace) setKey(k *httpauth.Key) {
 	if t == nil || k == nil {
 		return
 	}
-	t.key = k
 	t.keyID = k.ID
 	t.keyName = k.Name
 }
