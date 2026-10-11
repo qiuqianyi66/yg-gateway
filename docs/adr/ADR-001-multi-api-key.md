@@ -145,6 +145,18 @@ YG Gateway 2.0.0 是单 `api_key` 鉴权：`httpauth.VerifyBearer(r, key string)
 **第 8 项（零分配）定位为可测量性能目标**：先测量、记录基准与碰撞桶规模；若实现
 需要临时分配，先评估是否真的影响目标性能，**不为字面「零分配」牺牲正确性或可维护性**。
 
+**基准实测（2026-10-11，i7-14650HX，Go 1.27.2，Windows/amd64）**：
+
+| 基准 | 耗时 | 分配 |
+|---|---|---|
+| Match 1 Key | 110.3 ns/op | 0 B/op, 0 allocs |
+| Match 10 Keys | 116.4 ns/op | 0 B/op, 0 allocs |
+| Match 100 Keys | 173.0 ns/op | 0 B/op, 0 allocs |
+| BuildIndex (100 keys) | 30.3 µs/op | 22.7 KB, 312 allocs |
+
+鉴权热路径（Match）**零分配**；前缀索引 + 桶内常量时间比较不随 Key 数线性退化
+（1→100 只从 110ns 涨到 173ns）。BuildIndex 的分配只在配置变更时发生，不在请求热路径。
+
 ---
 
 ## 八、回滚方案
