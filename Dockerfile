@@ -1,5 +1,7 @@
 # syntax=docker/dockerfile:1
-FROM golang:1.23-alpine AS build
+# 基础镜像必须 ≥ go.mod 要求的 1.27.2：低版本带 9 个 stdlib CVE（HTTP/2 + TLS），
+# 且 GOTOOLCHAIN=local 时 go mod download 直接报错拒绝继续（见 go.mod 的 go 指令）。
+FROM golang:1.27-alpine AS build
 WORKDIR /src
 COPY go.mod ./
 RUN go mod download
