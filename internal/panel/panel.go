@@ -198,8 +198,7 @@ func (p *Panel) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // withAuth 面板 Bearer 鉴权。与 server 包**不同口径**：面板只认「管理员凭证」
 // （单 api_key），不认 api_keys 里的普通下游 Key（阻断项 3：普通 Key 只用于网关 API，
 // 不应获得面板的账号管理/配置读写等完整权限）。
-// api_key 为空时放行（2.0.0 旧语义）。密钥经 livecfg 快照读取：面板里改了 api_key，
-// 下一个请求即用新值（无需重启）。
+// 密钥经 livecfg 快照读取：面板里改了 api_key，下一个请求即用新值（无需重启）。
 func (p *Panel) withAuth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !p.authenticateAdmin(r) {
@@ -212,12 +211,29 @@ func (p *Panel) withAuth(next http.HandlerFunc) http.HandlerFunc {
 
 // authenticateAdmin 面板管理员鉴权：只认单 api_key（Live 优先，回落静态）。
 // 不认多 Key——普通下游 Key 不能访问面板（阻断项 3）。
+//
+// 空 api_key 的行为按配置状态区分（阻断项 2，第二轮）：
+//   - 旧版配置（无多 Key 索引）且 api_key 空 → 放行（2.0.0 旧语义，兼容）
+//   - 多 Key 已启用（AuthIndex 非 nil）且 api_key 空 → **拒绝**（fail closed）
+//     不能因为管理员密钥为空，就把管理面板开放给匿名访问。
 func (p *Panel) authenticateAdmin(r *http.Request) bool {
 	key := p.apiKey()
+	multiEnabled := p.multiKeyEnabled()
 	if key == "" {
-		return true // 未启用鉴权（2.0.0 旧语义）
+		if multiEnabled {
+			return false // 多 Key 模式下管理员密钥为空：拒绝匿名访问（fail closed）
+		}
+		return true // 旧版兼容：无多 Key 且 api_key 空 → 放行（2.0.0 旧语义）
 	}
 	return httpauth.VerifyBearer(r, key)
+}
+
+// multiKeyEnabled 是否启用了多 Key 鉴权（Live 优先，回落静态判断）。
+func (p *Panel) multiKeyEnabled() bool {
+	if p.cfg.Live != nil {
+		return p.cfg.Live.Load().AuthIndex != nil
+	}
+	return false // Live 为 nil（测试/裸用）时无多 Key
 }
 
 // apiKey 当前生效密钥（Live 优先，回落静态字段）。

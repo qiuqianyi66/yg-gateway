@@ -48,18 +48,31 @@ func TestPanelAuthRejectsDownstreamKey(t *testing.T) {
 	}
 }
 
-// TestPanelAuthEmptyKeyAllows 单 api_key 为空时，面板放行（2.0.0 旧语义，非多 Key 语义）。
-func TestPanelAuthEmptyKeyAllows(t *testing.T) {
+// TestPanelAuthEmptyKeyMultiEnabled 多 Key 已启用但 api_key 为空：面板应 fail closed
+// （拒绝匿名访问），不能因为管理员密钥为空就开放管理权限（阻断项 2，第二轮）。
+func TestPanelAuthEmptyKeyMultiEnabled(t *testing.T) {
 	idx := httpauth.BuildIndex([]httpauth.Key{
 		{ID: "downstream", Digest: sha256Digest("sk-downstream")},
 	})
 	live := livecfg.New(livecfg.Snapshot{APIKey: "", AuthIndex: idx})
 	p := New(Config{Version: "test", APIKey: "", Live: live})
 
-	// api_key 空 → 面板不鉴权（即使有多 Key 索引，面板也不走它）
+	// 多 Key 启用 + api_key 空 → 面板匿名访问应 401（fail closed）
 	rec := httptest.NewRecorder()
-	p.ServeHTTP(rec, httptest.NewRequest("GET", "/panel/api/nonexistent", nil))
+	p.ServeHTTP(rec, httptest.NewRequest("GET", "/panel/api/config", nil))
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("多 Key 模式 api_key 空应 401（fail closed），got %d", rec.Code)
+	}
+}
+
+// TestPanelAuthEmptyKeyLegacy 旧版配置（无多 Key）且 api_key 空：保留 2.0.0 放行语义。
+func TestPanelAuthEmptyKeyLegacy(t *testing.T) {
+	// 无 Live 快照（Live=nil 表示无多 Key 索引），api_key 空
+	p := New(Config{Version: "test", APIKey: ""})
+	rec := httptest.NewRecorder()
+	// 用 /panel/api/config（LoadConfig nil → 501，不碰 nil Pool）；若过鉴权层返回 501（非 401）。
+	p.ServeHTTP(rec, httptest.NewRequest("GET", "/panel/api/config", nil))
 	if rec.Code == http.StatusUnauthorized {
-		t.Error("api_key 空时面板应放行（旧语义），不应被多 Key 索引触发鉴权")
+		t.Error("旧版配置 api_key 空应放行（2.0.0 兼容），不应被拒绝")
 	}
 }
