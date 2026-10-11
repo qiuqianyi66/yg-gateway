@@ -11,14 +11,18 @@ package livecfg
 import (
 	"sync/atomic"
 	"time"
+
+	"yg-gateway/internal/httpauth"
 )
 
 // Snapshot 一次读取的不可变配置视图。
 type Snapshot struct {
-	APIKey               string        // 网关/面板共同鉴权密钥；空 = 不鉴权
-	SoftCooldown         time.Duration // 429 软冷却基数（<=0 时调用方回退内置默认）
-	SanitizeFingerprints bool          // 出站请求体指纹脱敏
-	RecordClientInfo     bool          // 请求日志是否记录调用来源（客户端 IP / UA）
+	APIKey               string          // 网关/面板共同鉴权密钥（单 Key 兼容）；空 = 不鉴权
+	APIKeys              []httpauth.Key  // 多 Key 运行时形态（已含摘要）；空 = 无多 Key
+	AuthIndex            *httpauth.Index // 多 Key 鉴权索引（BuildSnapshot 时构建；nil = 无多 Key）
+	SoftCooldown         time.Duration   // 429 软冷却基数（<=0 时调用方回退内置默认）
+	SanitizeFingerprints bool            // 出站请求体指纹脱敏
+	RecordClientInfo     bool            // 请求日志是否记录调用来源（客户端 IP / UA）
 }
 
 // Holder 原子持有当前快照。
@@ -46,3 +50,22 @@ func (h *Holder) Load() Snapshot {
 
 // Store 整体替换快照。
 func (h *Holder) Store(s Snapshot) { h.p.Store(&s) }
+
+// BuildSnapshot 从「单 Key + 多 Key 列表」构建一份完整的鉴权快照（ADR-001 §六）。
+//
+// 这是**热更新的原子单元**：调用方在独立对象里完成校验、摘要、索引构建后，用
+// 返回值一次性 Store；旧快照在切换前保持可用，绝不在已发布结构上原地修改。
+//
+// keys 必须是已带完整 Digest 的运行时 Key（调用方负责 sha256，见 httpauth.BuildIndex）。
+// 空列表 → AuthIndex 为 nil（无多 Key，走单 Key 兼容）。
+func BuildSnapshot(singleKey string, keys []httpauth.Key) Snapshot {
+	var idx *httpauth.Index
+	if len(keys) > 0 {
+		idx = httpauth.BuildIndex(keys)
+	}
+	return Snapshot{
+		APIKey:    singleKey,
+		APIKeys:   keys,
+		AuthIndex: idx,
+	}
+}
