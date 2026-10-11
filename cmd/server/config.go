@@ -280,11 +280,12 @@ type Config struct {
 //	非 nil 空切片（显式 []） = 全拒
 //	非空                     = 白名单
 type APIKeyConfig struct {
-	ID     string   `json:"id"`     // 稳定身份标识，必填，[A-Za-z0-9_-] ≤64，不重复
-	Key    string   `json:"key"`    // 明文 Key；空条目 normalize 忽略
-	Name   string   `json:"name"`   // 展示名（可空）
-	Models []string `json:"models"` // 三态模型白名单
-	Realm  string   `json:"realm"`  // cn/global/空=不限；其他值 fail fast
+	ID      string   `json:"id"`      // 稳定身份标识，必填，[A-Za-z0-9_-] ≤64，不重复
+	Key     string   `json:"key"`     // 明文 Key；空条目 normalize 忽略
+	Name    string   `json:"name"`    // 展示名（可空）
+	Models  []string `json:"models"`  // 三态模型白名单
+	Realm   string   `json:"realm"`   // cn/global/空=不限；其他值 fail fast
+	Enabled *bool    `json:"enabled"` // 启停开关：nil/true=启用；false=禁用（不进鉴权索引，但保留在 config 里）
 }
 
 // Default 默认配置。

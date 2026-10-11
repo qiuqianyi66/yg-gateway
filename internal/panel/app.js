@@ -338,13 +338,14 @@ let lastPackagesAt = 0;
 let expFetching = false;                       // 到期卡片在途标记（防重复打上游）
 const EXP_FRESH_MS = 2 * 60 * 1000;            // 缓存新鲜窗口：2 分钟内复用
 
-const TITLES = { accounts: '账号池', usage: '用量', packages: '积分构成', taskscenter: '任务中心', models: '模型与档位', config: '配置', logs: '运行日志' };
+const TITLES = { accounts: '账号池', usage: '用量', packages: '积分构成', taskscenter: '任务中心', models: '模型与档位', keys: 'API Key 管理', config: '配置', logs: '运行日志' };
 function go(v) {
   view = v;
   document.querySelectorAll('.view').forEach(s => s.hidden = s.id !== 'view-' + v);
   document.querySelectorAll('.nav a').forEach(a => a.classList.toggle('on', a.dataset.view === v));
   $('ttl').textContent = TITLES[v];
   if (v === 'models' && !$('mdBody').children.length) loadModels();
+  if (v === 'keys') loadKeys();
   if (v === 'config') loadConfig();
   if (v === 'logs') loadLogs();
   if (v === 'usage') loadUsage();
@@ -963,6 +964,173 @@ $('btnLogPin').onclick = () => {
   logPin = !logPin;
   $('btnLogPin').textContent = '自动滚动：' + (logPin ? '开' : '关');
 };
+
+/* ── API Key 管理（二期，ADR-002）─────────────────────────────────── */
+/* 独立视图 view-keys：列表/新增/编辑/删除/启停，复用 GET/POST /panel/api/config。
+ * 一期 loadConfigMasked 已把 api_keys[].key 留空 + key_configured 状态字段；
+ * mergeConfigMaps 对数组整体替换；normalizeAPIKeys 校验 id/realm/models。
+ * 零新增后端接口，纯前端 + go:embed 重编译。 */
+
+let keyData = null;       // GET config 返回的 api_keys 数组（脱敏后）
+let keyAdminCfg = false;  // api_key_configured 状态
+let keyEditing = null;    // 当前编辑中的 id（新增用 '__new__'）
+let keySaving = false;    // 提交锁：防连点建重复 Key（采纳 manager 同步锁模式）
+
+async function loadKeys() {
+  try {
+    const d = await api('config');
+    keyData = Array.isArray(d.config.api_keys) ? d.config.api_keys : [];
+    keyAdminCfg = !!d.config.api_key_configured;
+    renderKeyList();
+  } catch (e) { toast('读取 Key 列表失败：' + e.message, 'err'); }
+}
+
+function renderKeyList() {
+  $('keyAdminStatus').textContent = '管理员密钥(api_key)：' + (keyAdminCfg ? '已配置' : '未配置');
+  const tb = $('keyBody');
+  const empty = $('keyEmpty');
+  tb.innerHTML = '';
+  if (!keyData.length) {
+    empty.hidden = false;
+    empty.textContent = '未配置多 Key。当前使用单 api_key 鉴权。点击「新增 Key」配置第一条。';
+    return;
+  }
+  empty.hidden = true;
+  keyData.forEach((k) => { tb.insertAdjacentHTML('beforeend', keyRowHTML(k, false)); });
+}
+
+function keyRowHTML(k, editing) {
+  const id = esc(k.id || ''), name = esc(k.name || ''), realm = esc(k.realm || '');
+  const cfg = !!k.key_configured;
+  const models = Array.isArray(k.models) ? k.models.map(esc).join(', ') : (k.models == null ? '不限' : '全拒');
+  const en = k.enabled !== false;
+  if (editing) return keyEditRowHTML(k);
+  return `<tr data-kid="${id}">
+    <td>${id}</td>
+    <td>${name || '—'}</td>
+    <td>${cfg ? '<span class="tag ok">已配置</span>' : '<span class="tag mute">未配置</span>'}</td>
+    <td><label class="switch"><input type="checkbox" ${en ? 'checked' : ''} onchange="toggleKeyEnabled('${id}', this.checked)"><span class="switch-track"></span></label></td>
+    <td>${realm || '不限'}</td>
+    <td>${esc(models)}</td>
+    <td><button class="xs" onclick="editKey('${id}')">编辑</button>
+      <button class="xs danger" onclick="deleteKey('${id}')">删除</button></td>
+  </tr>`;
+}
+
+function keyEditRowHTML(k) {
+  const id = esc(k.id || ''), name = esc(k.name || ''), realm = esc(k.realm || '');
+  const models = Array.isArray(k.models) ? k.models.join(', ') : '';
+  const cfg = !!k.key_configured;
+  return `<tr data-kid="${id || '__new__'}" class="editing">
+    <td>${id ? id + '<input type="hidden" data-f="id" value="' + id + '">' : '<input data-f="id" placeholder="必填，[A-Za-z0-9_-]≤64" style="width:120px">'}</td>
+    <td><input data-f="name" value="${name}" placeholder="可空" style="width:100px"></td>
+    <td><input data-f="key" type="password" placeholder="${cfg ? '留空=不修改' : '必填'}" style="width:180px">
+      <button type="button" class="xs" onclick="fillGenKey(this)">生成</button></td>
+    <td><select data-f="realm"><option value=""${!realm ? ' selected' : ''}>不限</option><option value="cn"${realm==='cn'?' selected':''}>cn</option><option value="global"${realm==='global'?' selected':''}>global</option></select></td>
+    <td><input data-f="models" value="${esc(models)}" placeholder="留空=不限，逗号分隔" style="width:200px"></td>
+    <td><button class="xs primary" onclick="saveKeyRow('${id || '__new__'}')">保存</button>
+      <button class="xs" onclick="loadKeys()">取消</button></td>
+  </tr>`;
+}
+
+function fillGenKey(btn) {
+  const input = btn.parentElement.querySelector('[data-f="key"]');
+  input.value = genApiKey();
+  input.type = 'text';
+}
+
+function genApiKey() {
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+  const arr = new Uint8Array(32);
+  crypto.getRandomValues(arr);
+  let s = 'sk-';
+  for (let i = 0; i < 32; i++) s += chars[arr[i] % chars.length];
+  return s;
+}
+
+function collectKeyList() {
+  const out = [];
+  const editRow = $('keyBody').querySelector('tr.editing');
+  keyData.forEach((k) => {
+    if (editRow && editRow.dataset.kid === k.id) return;
+    const entry = { id: k.id };
+    if (k.name) entry.name = k.name;
+    if (k.key) entry.key = k.key;
+    if (k.realm) entry.realm = k.realm;
+    if (Array.isArray(k.models)) entry.models = k.models;
+    if (k.enabled !== undefined) entry.enabled = k.enabled;
+    out.push(entry);
+  });
+  if (editRow) {
+    const get = (f) => { const el = editRow.querySelector(`[data-f="${f}"]`); return el ? el.value.trim() : ''; };
+    const id = get('id');
+    if (!id) { toast('ID 不能为空', 'err'); return null; }
+    const entry = { id };
+    const name = get('name'); if (name) entry.name = name;
+    const key = get('key'); if (key) entry.key = key;
+    const realm = get('realm'); if (realm) entry.realm = realm;
+    const models = get('models');
+    if (models) entry.models = models.split(/[,，\s]+/).filter(Boolean);
+    out.push(entry);
+  }
+  if (!out.length) return null;
+  return out;
+}
+
+async function saveKeys(keys, successMsg) {
+  if (keySaving) return;
+  keySaving = true;
+  try {
+    const r = await api('config', { method: 'POST', body: JSON.stringify({ api_keys: keys }) });
+    toast(successMsg || 'Key 配置已保存，热生效', 'ok');
+    keyEditing = null;
+    loadKeys();
+  } catch (e) { toast('保存失败：' + e.message, 'err'); }
+  finally { keySaving = false; }
+}
+
+function editKey(id) {
+  if (keyEditing) { toast('请先保存或取消当前编辑', 'err'); return; }
+  keyEditing = id;
+  const tb = $('keyBody');
+  tb.innerHTML = '';
+  keyData.forEach((k) => { tb.insertAdjacentHTML('beforeend', keyRowHTML(k, k.id === id)); });
+}
+
+function deleteKey(id) {
+  const k = keyData.find(x => x.id === id);
+  const label = (k && (k.name || k.id)) || id;
+  if (!confirm(`确认删除 Key「${label}」？删除后立即生效。`)) return;
+  const remaining = keyData.filter(x => x.id !== id);
+  const payload = remaining.length ? remaining : null;
+  saveKeys(payload, `Key「${label}」已删除，热生效`);
+}
+
+function toggleKeyEnabled(id, enabled) {
+  const keys = keyData.map(k => {
+    const entry = { id: k.id, enabled: enabled ? true : false };
+    if (k.name) entry.name = k.name;
+    if (k.key) entry.key = k.key;
+    if (k.realm) entry.realm = k.realm;
+    if (Array.isArray(k.models)) entry.models = k.models;
+    return entry;
+  });
+  saveKeys(keys, `Key「${id}」已${enabled ? '启用' : '禁用'}，热生效`);
+}
+
+$('btnKeyReload').onclick = loadKeys;
+$('btnKeyAdd').onclick = () => {
+  if (keyEditing) { toast('请先保存或取消当前编辑', 'err'); return; }
+  keyEditing = '__new__';
+  const tb = $('keyBody');
+  tb.insertAdjacentHTML('afterbegin', keyEditRowHTML({}));
+};
+
+async function saveKeyRow(kid) {
+  const keys = collectKeyList();
+  if (!keys) return;
+  saveKeys(keys);
+}
 
 /* ── 配置 ─────────────────────────────────────────────────────────── */
 const CFG_MAP = {

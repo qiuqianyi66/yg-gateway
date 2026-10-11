@@ -323,6 +323,20 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
 .hr { height: 1px; background: var(--line-soft); margin: 4px 0 16px; }
 .switch { display: flex; align-items: center; justify-content: space-between; padding: 9px 0; }
 .switch .lb { font-size: 13.5px; }
+/* Key 管理页的 toggle switch（无 .lb，纯开关） */
+#view-keys .switch { display: inline-flex; padding: 0; cursor: pointer; }
+#view-keys .switch input { appearance: none; width: 0; height: 0; margin: 0; position: absolute; }
+#view-keys .switch-track {
+  width: 34px; height: 18px; border-radius: 10px; background: var(--line);
+  position: relative; transition: background .15s; flex: none;
+}
+#view-keys .switch-track::after {
+  content: ''; position: absolute; top: 2px; left: 2px;
+  width: 14px; height: 14px; border-radius: 50%; background: #fff;
+  transition: transform .15s; box-shadow: 0 1px 2px rgba(0,0,0,.2);
+}
+#view-keys .switch input:checked + .switch-track { background: var(--ok); }
+#view-keys .switch input:checked + .switch-track::after { transform: translateX(16px); }
 .savebar {
   display: flex; align-items: center; gap: 12px; padding: 13px 17px;
   border-top: 1px solid var(--line-soft); background: var(--surface-2);
@@ -647,6 +661,9 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
       <li><a href="#models" data-view="models">
         <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M8 1.8 14 5v6L8 14.2 2 11V5z"/><path d="M2 5l6 3.2L14 5M8 8.2v6"/></svg>
         模型与档位</a></li>
+      <li><a href="#keys" data-view="keys">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="5" cy="11" r="3"/><path d="M7.2 8.8 13 3M11 1l2 2M9.5 4.5l2 2"/></svg>
+        API Key</a></li>
       <li><a href="#config" data-view="config">
         <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="8" cy="8" r="2.2"/><path d="M8 1.6v1.9M8 12.5v1.9M1.6 8h1.9M12.5 8h1.9M3.5 3.5l1.3 1.3M11.2 11.2l1.3 1.3M12.5 3.5l-1.3 1.3M4.8 11.2l-1.3 1.3"/></svg>
         配置</a></li>
@@ -926,6 +943,30 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
             <thead id="usCreditHead"></thead>
             <tbody id="usCreditBody"></tbody>
           </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- API Key 管理 -->
+    <section class="view" id="view-keys" hidden>
+      <div class="box">
+        <header>
+          <h3>API Key 管理</h3>
+          <span class="grow"></span>
+          <span class="note" id="keyAdminStatus"></span>
+          <button class="xs" id="btnKeyReload">刷新</button>
+          <button class="primary xs" id="btnKeyAdd">新增 Key</button>
+        </header>
+        <div class="pad">
+          <div class="tbl-wrap">
+            <table class="acc">
+              <thead><tr>
+                <th>ID</th><th>名称</th><th>密钥</th><th>启停</th><th>Realm</th><th>模型白名单</th><th>操作</th>
+              </tr></thead>
+              <tbody id="keyBody"></tbody>
+            </table>
+          </div>
+          <div id="keyEmpty" class="hint" hidden>未配置多 Key。当前使用单 api_key 鉴权。</div>
         </div>
       </div>
     </section>
