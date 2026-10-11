@@ -11,6 +11,7 @@ import (
 	"yg-gateway/internal/httpauth"
 	"yg-gateway/internal/livecfg"
 	"yg-gateway/internal/reqlog"
+	"yg-gateway/internal/usage"
 )
 
 // 端到端集成冒烟（不碰真实上游）：用 newFakeUpstream + 多 Key live 快照，验证
@@ -98,6 +99,54 @@ func doChat(t *testing.T, h *Handler, authz, body string) *httptest.ResponseReco
 	return rec
 }
 
+// TestE2EUsageKeyAttribution：鉴权命中的 Key ID 真的流进用量桶（ADR-001 F-005
+// 二期：用量按 Key 聚合）。两个 Key 各打一次，usage 的 ByKey 必须出现两行且各自
+// 计数为 1；把 handler 里 `KeyID: keyID` 去掉（或 authKey 取错作用域）→ 两笔都
+// 落进空 Key 分组 → 本测试 FAIL。
+func TestE2EUsageKeyAttribution(t *testing.T) {
+	keys := []httpauth.Key{
+		{ID: "key-a", Name: "甲", Digest: sha256OfE2E("sk-a"), Models: []string{"model-a"}},
+		{ID: "key-b", Name: "乙", Digest: sha256OfE2E("sk-b"), Models: []string{"model-b"}},
+	}
+	var calls int64
+	up := newFakeUpstream(t, func(authz string) (int, string, bool) {
+		atomic.AddInt64(&calls, 1)
+		return 200, sseOK, true
+	})
+	rec := usage.New(t.TempDir() + "/usage.json")
+	h := NewHandler(Config{
+		Pool:     testPoolWith(&auth.Auth{UID: "u1", AccessToken: "at", ExpiresAt: 9999999999}),
+		Upstream: up,
+		Live:     livecfg.New(livecfg.Snapshot{AuthIndex: httpauth.BuildIndex(keys)}),
+		Usage:    rec,
+	})
+
+	if r := doChat(t, h, "Bearer sk-a", `{"model":"model-a","messages":[]}`); r.Code != 200 {
+		t.Fatalf("Key A 应 200, got %d body=%s", r.Code, r.Body.String())
+	}
+	if r := doChat(t, h, "Bearer sk-b", `{"model":"model-b","messages":[]}`); r.Code != 200 {
+		t.Fatalf("Key B 应 200, got %d body=%s", r.Code, r.Body.String())
+	}
+
+	snap := rec.SnapshotWindow(usage.Window{}, nil, map[string]string{"key-a": "甲", "key-b": "乙"}, nil)
+	if len(snap.ByKey) != 2 {
+		t.Fatalf("by_key 应 2 行（key-a/key-b），got %+v", snap.ByKey)
+	}
+	byKey := map[string]usage.KeyedAgg{}
+	for _, row := range snap.ByKey {
+		byKey[row.Key] = row
+	}
+	if got, ok := byKey["key-a"]; !ok || got.Requests != 1 {
+		t.Fatalf("key-a 归因 = %+v, want requests=1", got)
+	}
+	if got, ok := byKey["key-b"]; !ok || got.Requests != 1 {
+		t.Fatalf("key-b 归因 = %+v, want requests=1", got)
+	}
+	if byKey["key-a"].Extra != "甲" || byKey["key-b"].Extra != "乙" {
+		t.Fatalf("Key 展示名未透出: %+v", snap.ByKey)
+	}
+}
+
 // TestE2EMultiKeyFullChain 完整链路：两个 Key 白名单内各自成功 + 归因正确。
 func TestE2EMultiKeyFullChain(t *testing.T) {
 	keys := []httpauth.Key{
@@ -143,10 +192,10 @@ func TestE2EAuthRejectNoUpstream(t *testing.T) {
 	h, _, calls := newMultiKeyHandler(t, keys, false)
 
 	for name, authz := range map[string]string{
-		"缺 Key":      "",
-		"错误 Key":    "Bearer sk-wrong",
-		"缺 Bearer":   "sk-a",
-		"前缀大小写错": "bearer sk-a",
+		"缺 Key":    "",
+		"错误 Key":   "Bearer sk-wrong",
+		"缺 Bearer": "sk-a",
+		"前缀大小写错":   "bearer sk-a",
 	} {
 		rec := doChat(t, h, authz, `{"model":"model-a","messages":[]}`)
 		if rec.Code != 401 {

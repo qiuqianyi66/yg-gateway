@@ -56,18 +56,23 @@ node --check internal/panel/app.js        # 前端语法（go:embed 不查内容
 8. **竞品分析**：`docs/COMPETITIVE-ANALYSIS.md`，含诚实劣势 + 4 条差异化优势 + 4 条路线图
 9. **多 API Key 派发（一期，ADR-001）**：httpauth 前缀索引 + 常量时间比较、config.json `api_keys` 数组 + 三态 models、realm 约束、热更新、脱敏回显、key_id/key_name 归因；测试门禁 8 类全绿
 10. **面板 Key 管理页（二期，ADR-002）**：卡片+弹窗风格，新增/编辑/启停/删除/一键生成，明文一次性展示，CSP 兼容（无行内 onclick）
+11. **用量按 Key 聚合**：`usage` 桶加 Key 维度（fileVersion 4→5），面板用量页与积分页各加「按 Key」页签；旧数据归入「未归因」（无损）
+12. **`/v1/models` 档位字段双名**：`supported_efforts` / `default_effort` 作为 `reasoning_*` 的别名，兼容只认裸名字段的客户端（修「该模型不校验该参数」提示）
 
 ## 五、当前待办（新对话从这里接）
 
 **主线已完成**：
 - ✅ 多 API Key 派发（一期，ADR-001）：httpauth 前缀索引 + 常量时间比较、realm/models 约束、热更新、脱敏回显
 - ✅ 面板 Key 管理页（二期，ADR-002）：卡片+弹窗、新增/编辑/启停/删除/一键生成、明文一次性展示
+- ✅ 用量按 Key 聚合（ADR-001 F-005 二期收尾）：`by_key` / `credit_by_key` 两维度 + 面板「按 Key」页签；usage.json 升至 v5，旧数据无损归入「未归因」
+- ✅ `/v1/models` 档位字段双名兼容（`supported_efforts` / `default_effort` 别名，兼容只认裸名的客户端）
+- ✅ 全仓 gofmt 归零（18 个文件的历史对齐漂移）
 
 **可选下一步路线图**（等你拍板）：
-1. 用量按 Key 聚合（reqlog 已记 key_id，只差展示）
-2. Key 额度/限流/过期/软删除（偏 B 端，自用可不做）
+1. OpenRouter 费率折算（回答"我省了多少钱"）
+2. 增量用量聚合 + 落库（目前 JSONL + usage.json，量大后查询会慢）
 3. 自动养号任务补齐（任务中心有 Sequential_Tasks_* 预留）
-4. OpenRouter 费率折算 / 成本优先调度
+4. 更完整的客户端生态（Claude Code / Codex 直连）
 5. Anthropic 协议双支持
 
 ## 六、关键架构事实（新对话必知）
