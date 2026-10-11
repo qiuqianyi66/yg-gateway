@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-10-11
-status: 待确认（已按设计审查修订）
+status: 已完成（T0~T7 + 最终审查 6 阻断项修复，已合并 main）
 owner: YG
 modification_level: L3（架构 / 数据模型 / 鉴权链路承重墙）
 complexity: C 耦合（鉴权 + 存储 + 派发，跨模块责任）

@@ -8,37 +8,35 @@
 
 ## 任务拆分
 
-### T0：HTML 骨架（index.html）
+### T0：HTML 骨架（index.html） ✅
 - 导航栏插入「API Key」项（`data-view="keys"`，在「配置」之前）
-- `view-keys` section：表头 + 表格 thead + 空状态 div + 新增/刷新按钮
+- `view-keys` section：表头 + 卡片容器 + 空状态 div + 新增/刷新按钮
 - 不改现有 `view-config` 的任何内容
 
-### T1：JS 路由 + 数据加载（app.js）
+### T1：JS 路由 + 数据加载（app.js） ✅
 - `TITLES` 加 `keys: 'API Key 管理'`
 - `go()` 加 `if (v === 'keys') loadKeys();`
 - `loadKeys()`：GET config → 取 `api_keys` + `api_key_configured` → 调 `renderKeyList()`
-- `renderKeyList(keys)`：生成表格行 HTML，空状态切换
+- `renderKeyList(keys)`：生成卡片 HTML，空状态切换
 
-### T2：列表渲染 + 行内编辑/删除（app.js）
-- `keyRowHTML(k, editing)`：普通模式（展示）+ 编辑模式（表单 input）
-- 普通行：id / name / key_configured 状态 / realm / models / 编辑+删除按钮
-- 编辑行：name input / key password / realm select / models text / 保存+取消
-- `deleteKey(id)`：confirm → collectKeyList 移除条目 → saveKeys
-- `editKey(id)`：行切换 editing 状态 + 重渲染
+### T2：列表渲染 + 弹窗编辑/删除（app.js） ✅
+- 最终采用卡片式列表 + 弹窗表单（ADR-002 D-303 修订为弹窗，非行内编辑）
+- `keyCardHTML(k)`：id/name/realm/models 徽标/启停开关/编辑/删除按钮
+- `openKeyDialog(id)`：弹窗新增/编辑（id 编辑时只读）
+- `deleteKey(id)`：confirm → 移除条目 → saveKeys
 
-### T3：新增 + 生成 + 保存（app.js）
-- `btnKeyAdd` onclick：列表顶部插入空白编辑行
+### T3：新增 + 生成 + 保存（app.js） ✅
+- `btnKeyAdd` onclick：打开新增弹窗
 - `genApiKey()`：crypto.getRandomValues 生成 sk- + 32 字符 base62
-- `collectKeyList()`：从 DOM 逐行收集 id/name/key/realm/models
-  - 密钥空 = 不带 key 字段（编辑时）；新增时必填
-  - models 空输入 = 不带 models 字段（缺失=不限）
-  - 长度 0 → 返回 null（D-304）
-- `saveKeys(keys)`：POST config `{ api_keys: keys }` → 成功 toast + loadKeys 刷新
+- `saveKeyFromDialog()`：收集表单 → POST config `{ api_keys: payload }` → 成功 toast + loadKeys 刷新
+- 新增成功后展示明文一次性弹窗（showKeyPlaintext）
+- 删除最后一条 → 提交 null（退化为单 Key 模式，D-304）
 
-### T4：前端语法校验 + 人工验证
-- `node --check app.js` 语法
-- 浏览器打开 #keys 验收 13 个场景（PRD §七）
-- 重点：删除最后一条提交 null + 热生效
+### T4：前端语法校验 + 人工验证 ✅
+- `node --check app.js` 语法通过
+- HTTP 冒烟：view-keys/key-card/key-dlg/keyEditVeil/keyShowVeil 全部 OK
+- CSP 兼容：无行内 onclick
+- 浏览器人工验证：待 YG 在 http://127.0.0.1:7863/panel/#keys 实际点一遍
 
 ---
 
