@@ -197,7 +197,7 @@ type Config struct {
 
 	// PromptText 解析后的系统提示词文本（custom/append 模式使用）。
 	PromptText string `json:"-"`
-	Upstash struct {
+	Upstash    struct {
 		URL   string `json:"url"`   // 空 = 纯内存模式；支持完整 rediss:// URL 或 https://xxx.upstash.io host
 		Token string `json:"token"` // url 非完整连接串时用于组装 rediss://default:<token>@<host>:6379
 	} `json:"upstash"`

@@ -3,6 +3,7 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -18,6 +19,7 @@ import (
 	"time"
 
 	"yg-gateway/internal/auth"
+	"yg-gateway/internal/httpauth"
 	"yg-gateway/internal/livecfg"
 	"yg-gateway/internal/panel"
 	"yg-gateway/internal/pool"
@@ -35,6 +37,7 @@ import (
 // 独立化后从 2.0.0 起号，明确区别于上游 1.x 线：
 //   - 2.0.0 = 脱离上游 fork 的首个版本（module 改名、身份标识改名、构建工具链升级）
 //   - 此后本仓库独立演进，不再与上游版本号对齐
+//
 // 注意：CI 发布时会断言 tag == 本值（剥掉后缀后比对），改这里要同步打 tag。
 const appVersion = "2.0.0"
 
@@ -236,13 +239,8 @@ func main() {
 
 	// 管理面板日志镜像：标准 log（stderr）与 chat 表格日志（stdout）双路复制进
 	// 面板环形缓冲，供 /panel/api/logs 读取；控制台输出行为完全不变。
-	// live 承载可热改字段（api_key/soft_rate/脱敏开关），面板保存配置时在线替换。
-	live := livecfg.New(livecfg.Snapshot{
-		APIKey:               cfg.APIKey,
-		SoftCooldown:         cfg.SoftRateDur,
-		SanitizeFingerprints: cfg.Features.SanitizeBlacklistFingerprints,
-		RecordClientInfo:     cfg.Logging.RequestClientInfo,
-	})
+	// live 承载可热改字段（api_key/多 key/soft_rate/脱敏开关），面板保存配置时在线替换。
+	live := livecfg.New(buildAuthSnapshot(cfg))
 	// 用量记录器：与 state 文件同目录，随 state_file 配置一起搬移。
 	// datapath 由 state 文件路径推出，避免再加一个配置项。
 	usagePath := usagePathFor(cfg.StateFile)
@@ -496,12 +494,9 @@ func saveConfig(raw []byte, path string, live *livecfg.Holder, p *pool.Pool, up 
 	}
 
 	// 4) 热应用：能立即生效的字段全部应用，并列出仍需重启的字段。
-	live.Store(livecfg.Snapshot{
-		APIKey:               newCfg.APIKey,
-		SoftCooldown:         newCfg.SoftRateDur,
-		SanitizeFingerprints: newCfg.Features.SanitizeBlacklistFingerprints,
-		RecordClientInfo:     newCfg.Logging.RequestClientInfo,
-	})
+	// 鉴权快照一次构建 + 一次原子切换（ADR-001 §六）：先在独立对象里完成
+	// 摘要计算与索引构建，成功后 Store；失败则不落盘不切换（见下方 err 检查）。
+	live.Store(buildAuthSnapshot(newCfg))
 	up.SanitizeFingerprints.Store(newCfg.Features.SanitizeBlacklistFingerprints)
 	p.SetBreaker(newCfg.Pool.BreakerThreshold, newCfg.BreakerCooldownDur, newCfg.BreakerCooldownMaxD)
 	p.SetMaxInFlight(newCfg.Pool.MaxInFlight)
@@ -524,6 +519,30 @@ func saveConfig(raw []byte, path string, live *livecfg.Holder, p *pool.Pool, up 
 	sch.SetIncludeDisabledInTasks(newCfg.Schedule.IncludeDisabledInTasks)
 
 	return restartRequiredFields(newCfg), nil
+}
+
+// buildAuthSnapshot 把 Config 的鉴权配置（单 api_key + 多 api_keys）转成运行时快照。
+//
+// 这是热更新的原子单元：在这里完成「配置 → 摘要 → 索引」的全部构建，返回的
+// Snapshot 由调用方一次 Store（ADR-001 §六）。APIKeys 已 normalize 过（空条目已过滤、
+// id/realm 已校验），这里只做摘要计算与运行时 Key 组装。
+func buildAuthSnapshot(c *Config) livecfg.Snapshot {
+	keys := make([]httpauth.Key, 0, len(c.APIKeys))
+	for _, k := range c.APIKeys {
+		sum := sha256.Sum256([]byte(k.Key))
+		keys = append(keys, httpauth.Key{
+			ID:     k.ID,
+			Name:   k.Name,
+			Digest: sum[:],
+			Models: k.Models,
+			Realm:  k.Realm,
+		})
+	}
+	snap := livecfg.BuildSnapshot(c.APIKey, keys)
+	snap.SoftCooldown = c.SoftRateDur
+	snap.SanitizeFingerprints = c.Features.SanitizeBlacklistFingerprints
+	snap.RecordClientInfo = c.Logging.RequestClientInfo
+	return snap
 }
 
 // restartRequiredFields 返回本次改动中无法热生效、需要重启进程的字段名。
