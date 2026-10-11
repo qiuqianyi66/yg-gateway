@@ -1,6 +1,15 @@
 {
   "listen": ":7863",
   "api_key": "test_key",
+  "api_keys": [
+    {
+      "id": "user-001",
+      "key": "sk-multi-key-example",
+      "name": "小明",
+      "models": ["deepseek-v4-flash"],
+      "realm": "cn"
+    }
+  ],
   "auth_dir": "./auths",
   "state_file": "./data/state.json",
   "server": {
