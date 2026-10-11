@@ -216,7 +216,7 @@ func TestSnapshotExplicitWindow(t *testing.T) {
 	s := r.SnapshotWindow(Window{
 		From: base.Add(2 * time.Hour),
 		To:   base.Add(3 * time.Hour),
-	}, nil, nil)
+	}, nil, nil, nil)
 	if s.Totals.Requests != 2 || s.Totals.PromptTokens != 20 {
 		t.Fatalf("显式区间 totals = %d/%d, want 2/20", s.Totals.Requests, s.Totals.PromptTokens)
 	}
@@ -231,7 +231,7 @@ func TestSnapshotExplicitWindow(t *testing.T) {
 	}
 
 	// 只有 From（「今天」的形态）：从该点起到最新，全量命中。
-	only := r.SnapshotWindow(Window{From: base.Add(4 * time.Hour)}, nil, nil)
+	only := r.SnapshotWindow(Window{From: base.Add(4 * time.Hour)}, nil, nil, nil)
 	if only.Totals.Requests != 2 {
 		t.Fatalf("仅 From 的 totals = %d, want 2", only.Totals.Requests)
 	}
@@ -240,7 +240,7 @@ func TestSnapshotExplicitWindow(t *testing.T) {
 	}
 
 	// 空窗口（From/To 全零且 Hours<=0）= 全部历史，与 Snapshot(0) 等价。
-	all := r.SnapshotWindow(Window{}, nil, nil)
+	all := r.SnapshotWindow(Window{}, nil, nil, nil)
 	if all.Totals.Requests != 6 {
 		t.Fatalf("全零窗口 totals = %d, want 6（全部历史）", all.Totals.Requests)
 	}
@@ -351,5 +351,133 @@ func TestCacheTokensPersistRoundtrip(t *testing.T) {
 	snap := r2.Snapshot(0, nil)
 	if snap.CreditByModel[0].CacheHitRate != 75 {
 		t.Fatalf("恢复后 cache_hit_rate=%v want 75", snap.CreditByModel[0].CacheHitRate)
+	}
+}
+
+// TestByKeyAttribution（ADR-001 F-005 二期）：用量按下游 Key 归因——不同 KeyID
+// 落进不同分组，ByKey/CreditByKey 各自独立；空 KeyID（旧桶 / 未启用鉴权）聚到
+// 「未归因」一行，不伪造 Key 名。
+//
+// 牙齿：把 KeyID 从 bucketKey 里去掉（或 Add 不落 b.Key）→ 两把 Key 合并成一行 →
+// 本测试 FAIL。
+func TestByKeyAttribution(t *testing.T) {
+	r := New("")
+	base := time.Date(2026, 10, 1, 10, 0, 0, 0, time.Local)
+	// 两个 Key 各两次请求，token 量刻意不同，便于断言归属。
+	r.Add(base, "cn", "u1", "glm-5.2", Delta{PromptTokens: 100, HasPromptTokens: true, Credit: 1, HasCredit: true, TotalTokens: 100, HasTotal: true, KeyID: "friend-a"}, true)
+	r.Add(base.Add(time.Minute), "cn", "u1", "glm-5.2", Delta{PromptTokens: 100, HasPromptTokens: true, Credit: 1, HasCredit: true, TotalTokens: 100, HasTotal: true, KeyID: "friend-a"}, true)
+	r.Add(base.Add(2*time.Minute), "cn", "u2", "glm-5.2", Delta{PromptTokens: 10, HasPromptTokens: true, Credit: 0.5, HasCredit: true, TotalTokens: 10, HasTotal: true, KeyID: "friend-b"}, true)
+	// 未启用鉴权时放行的请求（无 KeyID）。
+	r.Add(base.Add(3*time.Minute), "cn", "u2", "glm-5.2", Delta{KeyID: ""}, true)
+
+	snap := r.SnapshotWindow(Window{}, nil, map[string]string{"friend-a": "朋友A", "friend-b": ""}, nil)
+
+	if len(snap.ByKey) != 3 {
+		t.Fatalf("by_key 分组数 = %d, want 3（friend-a / friend-b / 未归因）: %+v", len(snap.ByKey), snap.ByKey)
+	}
+	byKey := map[string]KeyedAgg{}
+	for _, row := range snap.ByKey {
+		byKey[row.Key] = row
+	}
+	a, ok := byKey["friend-a"]
+	if !ok {
+		t.Fatalf("缺 friend-a 分组: %+v", snap.ByKey)
+	}
+	if a.Requests != 2 || a.PromptTokens != 200 || a.Extra != "朋友A" {
+		t.Fatalf("friend-a = %+v, want requests=2 pt=200 extra=朋友A", a)
+	}
+	b, ok := byKey["friend-b"]
+	if !ok || b.Requests != 1 || b.PromptTokens != 10 {
+		t.Fatalf("friend-b = %+v, want requests=1 pt=10", b)
+	}
+	// friend-b 无展示名：Extra 空（前端回落显示 ID 本身，不伪造）。
+	if b.Extra != "" {
+		t.Fatalf("friend-b 无映射时应留空 Extra, got %q", b.Extra)
+	}
+	un, ok := byKey["(未归因)"]
+	if !ok || un.Requests != 1 {
+		t.Fatalf("未归因 = %+v, want requests=1（空 KeyID 归到一行）", un)
+	}
+
+	// 积分维度同口径：只统计与 credit 同时观测到的样本，未归因那笔没有 credit 观测
+	// 故不进这一维度，分组数是 2（不是 3）。
+	if len(snap.CreditByKey) != 2 {
+		t.Fatalf("credit_by_key 分组数 = %d, want 2（未归因无 credit 观测不参与）: %+v", len(snap.CreditByKey), snap.CreditByKey)
+	}
+	credByKey := map[string]CreditAgg{}
+	for _, row := range snap.CreditByKey {
+		credByKey[row.Key] = row
+	}
+	if got := credByKey["friend-a"]; got.Credits != 2 || got.CreditTokens != 200 {
+		t.Fatalf("friend-a 积分归因 = %+v, want credits=2 tokens=200", got)
+	}
+	if got := credByKey["friend-b"]; got.Credits != 0.5 {
+		t.Fatalf("friend-b 积分归因 = %+v, want credits=0.5", got)
+	}
+	// 未归因那笔没有 credit 观测 → 不进积分维度（只统计与 credit 同在的样本）。
+	if got, ok := credByKey["(未归因)"]; ok {
+		t.Fatalf("无 credit 观测的未归因请求不该进 credit_by_key: %+v", got)
+	}
+}
+
+// TestRollupPreservesKeyDimension：小时桶折叠成日桶时 Key 维度必须保留。
+//
+// 牙齿：Rollup 的目标键若漏掉 b.Key，两把 Key 的旧小时桶会合并进同一个日桶 →
+// 100 天前的请求在 ByKey 里错记到一把 Key 上 → 本测试 FAIL。
+func TestRollupPreservesKeyDimension(t *testing.T) {
+	r := New("")
+	old := time.Now().AddDate(0, 0, -100) // 超出 90 天小时保留，必然被折叠
+	r.Add(old, "cn", "u", "m", Delta{PromptTokens: 7, HasPromptTokens: true, KeyID: "k1"}, true)
+	r.Add(old, "cn", "u", "m", Delta{PromptTokens: 3, HasPromptTokens: true, KeyID: "k2"}, true)
+
+	r.Rollup(time.Now())
+
+	// 全部历史口径：折叠后的日桶必须仍按 Key 分开。
+	snap := r.SnapshotWindow(Window{}, nil, nil, nil)
+	if len(snap.ByKey) != 2 {
+		t.Fatalf("折叠后 by_key 分组数 = %d, want 2（k1/k2 不得合并）: %+v", len(snap.ByKey), snap.ByKey)
+	}
+	byKey := map[string]KeyedAgg{}
+	for _, row := range snap.ByKey {
+		byKey[row.Key] = row
+	}
+	if got := byKey["k1"]; got.PromptTokens != 7 {
+		t.Fatalf("k1 折叠后 pt = %d, want 7: %+v", got.PromptTokens, got)
+	}
+	if got := byKey["k2"]; got.PromptTokens != 3 {
+		t.Fatalf("k2 折叠后 pt = %d, want 3: %+v", got.PromptTokens, got)
+	}
+}
+
+// TestKeyDimensionPersistRoundtrip：KeyID 落盘 v5 并无损恢复（旧文件 Key 缺失 →
+// 归入「未归因」，不崩、不丢桶）。
+func TestKeyDimensionPersistRoundtrip(t *testing.T) {
+	dir := t.TempDir()
+	r := New(dir + "/usage.json")
+	base := time.Date(2026, 10, 1, 10, 0, 0, 0, time.Local)
+	r.Add(base, "cn", "u1", "m", Delta{PromptTokens: 5, HasPromptTokens: true, KeyID: "k1"}, true)
+	r.Add(base.Add(time.Minute), "cn", "u1", "m", Delta{PromptTokens: 9, HasPromptTokens: true, KeyID: "k2"}, true)
+	r.Save()
+
+	r2 := New(dir + "/usage.json")
+	snap := r2.SnapshotWindow(Window{}, nil, nil, nil)
+	if len(snap.ByKey) != 2 {
+		t.Fatalf("落盘往返后 by_key 分组数 = %d, want 2: %+v", len(snap.ByKey), snap.ByKey)
+	}
+
+	// 旧版本文件（无 k 字段）→ 全部归入「未归因」，不崩。
+	legacy := `{"version":4,"saved":"2026-10-01T10:00:00+08:00","buckets":[` +
+		`{"s":"h:2026-10-01T10","r":"cn","u":"u1","m":"m","q":1,"p":42,"t":42}]}`
+	legacyPath := filepath.Join(dir, "legacy.json")
+	if err := os.WriteFile(legacyPath, []byte(legacy), 0o600); err != nil {
+		t.Fatalf("写旧版文件失败: %v", err)
+	}
+	r3 := New(legacyPath)
+	old := r3.SnapshotWindow(Window{}, nil, nil, nil)
+	if len(old.ByKey) != 1 || old.ByKey[0].Key != "(未归因)" {
+		t.Fatalf("旧文件应全部归入未归因: %+v", old.ByKey)
+	}
+	if old.Totals.PromptTokens != 42 {
+		t.Fatalf("旧文件 token 应完整保留, got %d", old.Totals.PromptTokens)
 	}
 }

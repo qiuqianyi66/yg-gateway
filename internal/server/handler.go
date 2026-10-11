@@ -712,8 +712,11 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 
 	// 多 Key 约束校验（T6）：鉴权命中的 Key 的 realm / models 白名单，在选号/出站
 	// 之前执行（ADR-001 §五）。不符合即 400，零上游消耗。
-	if key := authKeyFrom(r); key != nil {
-		if code, msg := h.checkKeyConstraints(key, peek.Model, realm, bareModel, modelKind); code != "" {
+	// authKey 提到外层作用域：下方用量记录要用它的 ID 做归因（ADR-001 F-005 二期），
+	// 复用同一次匹配结果，不重新鉴权（身份一致性不变量）。
+	authKey := authKeyFrom(r)
+	if authKey != nil {
+		if code, msg := h.checkKeyConstraints(authKey, peek.Model, realm, bareModel, modelKind); code != "" {
 			writeOpenAIError(w, http.StatusBadRequest, code, msg)
 			return
 		}
@@ -835,6 +838,10 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 			if a, ok := h.cfg.Pool.Status(uid); ok && a.Realm != "" {
 				realm = a.Realm
 			}
+			keyID := ""
+			if authKey != nil {
+				keyID = authKey.ID
+			}
 			h.cfg.Usage.Add(time.Now(), realm, uid, delta.Model, usage.Delta{
 				PromptTokens:     delta.PromptTokens,
 				HasPromptTokens:  delta.HasPromptTokens,
@@ -848,6 +855,7 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 				CacheHitTokens:   st.cacheHit,
 				CacheMissTokens:  st.cacheMiss,
 				ModelRate:        modelRate,
+				KeyID:            keyID,
 				LatencyMs:        delta.LatencyMs,
 				HasLatency:       delta.HasLatencyMs,
 				TokensPerSecond:  delta.TokensPerSecond,

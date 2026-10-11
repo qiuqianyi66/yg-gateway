@@ -2264,6 +2264,8 @@ const US_DIMS = {
   account: { key: 'by_account', title: '账号', withRealm: true, withPerf: true, span: 10 },
   model: { key: 'by_model', title: '模型', withRealm: false, withPerf: false, span: 7 },
   realm: { key: 'by_realm', title: 'realm', withRealm: false, withPerf: false, span: 7 },
+  // Key 维度带性能两列（谁在拖慢网关，按 Key 看得出来），故 span 与 account 同为 9+1。
+  key: { key: 'by_key', title: 'API Key', withRealm: false, withPerf: true, span: 9 },
 };
 
 // usSortRows 按当前排序字段降序（默认合计 Token，最大者最相关）。
@@ -2298,7 +2300,8 @@ function usTabsHtml(dims, active, counts) {
   }).join('');
 }
 
-const US_DIM_TABS = [['account', '按账号'], ['model', '按模型'], ['realm', '按域']];
+const US_DIM_TABS = [['account', '按账号'], ['model', '按模型'], ['realm', '按域'], ['key', '按 Key']];
+const US_CREDIT_TABS = [['account', '按账号'], ['model', '按模型'], ['key', '按 Key']];
 
 function renderUsageDim() {
   const d = usageData || {};
@@ -2308,27 +2311,37 @@ function renderUsageDim() {
     account: (d.by_account || []).length,
     model: (d.by_model || []).length,
     realm: (d.by_realm || []).length,
+    key: (d.by_key || []).length,
   });
   $('usDimHead').innerHTML = usDimHead(usDim);
   $('usDimBody').innerHTML = rows.map(x =>
     usRow(usDim === 'account' ? String(x.key || '').slice(0, 8) : x.key,
-      usDim === 'account' ? (x.extra || '') : '',
+      (usDim === 'account' || usDim === 'key') ? (x.extra || '') : '',
       x,
       usDim === 'account' ? '<td class="num">' + esc(x.realm || '') + '</td>' : '',
       m.withPerf)
   ).join('') || '<tr><td colspan="' + m.span + '" class="empty">暂无数据</td></tr>';
-  $('usDimNote').textContent = rows.length + ' 行 · 请求数含失败尝试';
+  // Key 维度的口径说明：只对「有 Key 鉴权」的部署有意义，未启用鉴权时全落在未归因行。
+  $('usDimNote').textContent = usDim === 'key'
+    ? rows.length + ' 行 · 按鉴权 Key 归因（未启用鉴权 / 旧数据归入「未归因」）'
+    : rows.length + ' 行 · 请求数含失败尝试';
 }
 
-/* 积分扣除：按账号 / 按模型两个维度共用一张表（同上，两个 box 合成一个）。 */
+/* 积分扣除：按账号 / 按模型 / 按 Key 三个维度共用一张表（同上，多个 box 合成一个）。 */
 function usCreditHead(dim) {
-  return dim === 'model'
-    ? '<tr><th class="mark" aria-hidden="true"></th><th>模型</th><th>积分倍率</th>' +
-      '<th class="num">请求</th><th class="num">扣除积分</th>' +
-      '<th class="num">有效样本 Token</th><th class="num">积分 / 1M Token</th><th class="num">缓存命中率</th></tr>'
-    : '<tr><th class="mark" aria-hidden="true"></th><th>账号</th>' +
+  if (dim === 'model') {
+    return '<tr><th class="mark" aria-hidden="true"></th><th>模型</th><th>积分倍率</th>' +
       '<th class="num">请求</th><th class="num">扣除积分</th>' +
       '<th class="num">有效样本 Token</th><th class="num">积分 / 1M Token</th><th class="num">缓存命中率</th></tr>';
+  }
+  if (dim === 'key') {
+    return '<tr><th class="mark" aria-hidden="true"></th><th>API Key</th>' +
+      '<th class="num">请求</th><th class="num">扣除积分</th>' +
+      '<th class="num">有效样本 Token</th><th class="num">积分 / 1M Token</th><th class="num">缓存命中率</th></tr>';
+  }
+  return '<tr><th class="mark" aria-hidden="true"></th><th>账号</th>' +
+    '<th class="num">请求</th><th class="num">扣除积分</th>' +
+    '<th class="num">有效样本 Token</th><th class="num">积分 / 1M Token</th><th class="num">缓存命中率</th></tr>';
 }
 
 /* 缓存命中率（issue #92）：颜色即健康度——≥90% 绿 / 80–90% 黄 / <80% 红，
@@ -2360,6 +2373,25 @@ function renderCreditDim() {
         '<td class="num">' + cacheRateCell(row.cache_hit_tokens, row.cache_miss_tokens) + '</td>' +
       '</tr>'
     ).join('') || '<tr><td colspan="8" class="empty">' + empty + '</td></tr>';
+  } else if (usCreditDim === 'key') {
+    // 按 Key 的积分扣除（ADR-001 F-005 二期）：谁在烧积分一眼可见。
+    const keys = d.credit_by_key || [];
+    $('usCreditBody').innerHTML = keys.map(row => {
+      const id = String(row.key || '');
+      // 未归因那行给一句解释，避免被读成"有把叫未归因的 Key"。
+      const sub = row.nickname
+        ? esc(row.nickname) + (id && id !== '(未归因)' ? ' · ' + esc(id) : '')
+        : (id === '(未归因)' ? '未启用鉴权的放行请求 / 旧数据' : '');
+      return '<tr>' +
+        '<td class="mark" aria-hidden="true"></td>' +
+        '<td>' + esc(id || '—') + (sub ? '<div class="note">' + sub + '</div>' : '') + '</td>' +
+        '<td class="num">' + fmtTok(row.requests) + '</td>' +
+        '<td class="num">' + fmtCredit(row.credits) + '</td>' +
+        '<td class="num">' + fmtTok(row.credit_tokens) + '</td>' +
+        '<td class="num">' + fmtCreditRatio(row.credits_per_1m_tokens, row.credit_samples, row.credit_tokens) + '</td>' +
+        '<td class="num">' + cacheRateCell(row.cache_hit_tokens, row.cache_miss_tokens) + '</td>' +
+        '</tr>';
+    }).join('') || '<tr><td colspan="7" class="empty">' + empty + '</td></tr>';
   } else {
     const accounts = d.credit_by_account || [];
     $('usCreditBody').innerHTML = accounts.map(row => {
@@ -2376,9 +2408,10 @@ function renderCreditDim() {
         '</tr>';
     }).join('') || '<tr><td colspan="7" class="empty">' + empty + '</td></tr>';
   }
-  $('usCreditTabs').innerHTML = usTabsHtml([['account', '按账号'], ['model', '按模型']], usCreditDim, {
+  $('usCreditTabs').innerHTML = usTabsHtml(US_CREDIT_TABS, usCreditDim, {
     account: (d.credit_by_account || []).length,
     model: (d.credit_by_model || []).length,
+    key: (d.credit_by_key || []).length,
   });
 }
 
@@ -2685,7 +2718,7 @@ async function loadUsage() {
     $('usDimHead').innerHTML = '';
     $('usCreditHead').innerHTML = '';
     $('usDimTabs').innerHTML = usTabsHtml(US_DIM_TABS, usDim, null);
-    $('usCreditTabs').innerHTML = usTabsHtml([['account', '按账号'], ['model', '按模型']], usCreditDim, null);
+    $('usCreditTabs').innerHTML = usTabsHtml(US_CREDIT_TABS, usCreditDim, null);
     $('usDimBody').innerHTML = '<tr><td colspan="10" class="empty">读取用量失败</td></tr>';
     $('usCreditBody').innerHTML = '<tr><td colspan="7" class="empty">读取用量失败</td></tr>';
   }

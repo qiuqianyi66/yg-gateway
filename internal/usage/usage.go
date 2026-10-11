@@ -42,18 +42,23 @@ const (
 )
 
 // fileVersion 是 usage.json 的当前格式版本。版本 2 增加积分观测字段，版本 3
-// 增加模型生效倍率分区，版本 4 增加前缀缓存命中/未命中累计；
+// 增加模型生效倍率分区，版本 4 增加前缀缓存命中/未命中累计，版本 5 增加下游
+// Key 身份分区（ADR-001 F-005 二期：用量按 Key 聚合）；
 // 旧版本缺失字段按零值加载，旧数据不会丢弃。
-const fileVersion = 4
+const fileVersion = 5
 
-// bucket 一个 (时间片, realm, uid, model, rate) 的累计量。
+// bucket 一个 (时间片, realm, uid, model, rate, key) 的累计量。
 // JSON 字段名刻意取短，因为桶数量会随时间增长。
 type bucket struct {
-	Scope string  `json:"s"`            // "h:2006-01-02T15" 或 "d:2006-01-02"
-	Realm string  `json:"r"`            // cn / global
-	UID   string  `json:"u"`            // 账号 uid
-	Model string  `json:"m"`            // 上游裸模型名
-	Rate  string  `json:"x,omitempty"`  // 请求时生效积分倍率（规范化数值；旧桶为空）
+	Scope string `json:"s"`           // "h:2006-01-02T15" 或 "d:2006-01-02"
+	Realm string `json:"r"`           // cn / global
+	UID   string `json:"u"`           // 账号 uid
+	Model string `json:"m"`           // 上游裸模型名
+	Rate  string `json:"x,omitempty"` // 请求时生效积分倍率（规范化数值；旧桶为空）
+	// Key 鉴权命中的下游 Key ID（多 Key 派发归因，ADR-001 F-005/二期用量聚合）。
+	// 单 api_key 兼容路径下为 httpauth.SingleKeyID（"single"）；旧桶升级后为空串，
+	// 展示层归入「未归因」。只存短稳定 ID，**不存 Key 明文、不存 Authorization**。
+	Key   string  `json:"k,omitempty"`
 	Req   int64   `json:"q"`            // 请求数（含失败）
 	Err   int64   `json:"e"`            // 失败数
 	PT    int64   `json:"p"`            // prompt tokens
@@ -81,13 +86,20 @@ type file struct {
 type Recorder struct {
 	mu      sync.Mutex
 	path    string
-	buckets map[string]*bucket // key: scope|realm|uid|model|rate
+	buckets map[string]*bucket // key: bucketKey(scope, realm, uid, model, rate, keyID)
 	dirty   bool
 	started time.Time
 
 	stopOnce sync.Once
 	stop     chan struct{}
 	done     chan struct{}
+}
+
+// bucketKey 桶唯一键。拼接规则集中在此，避免 Add / Rollup / load 三处各拼一份
+// 而在加字段时漂移（版本 5 加 Key 维度时正是这么踩过的）。用 '|' 分隔：各字段
+// 取值域（时间戳 / realm / uid / 模型名 / 倍率 / Key ID）都不含 '|'。
+func bucketKey(scope, realm, uid, model, rate, keyID string) string {
+	return scope + "|" + realm + "|" + uid + "|" + model + "|" + rate + "|" + keyID
 }
 
 // New 创建记录器。path 为空时禁用落盘（纯内存，测试用）。
@@ -148,14 +160,17 @@ type Delta struct {
 	Credit           float64
 	HasCredit        bool
 	ModelRate        string
+	// KeyID 鉴权命中的下游 Key ID（多 Key 派发归因）。空串 = 未归因（未启用鉴权
+	// 或旧调用方未传），展示层归入「未归因」而不是伪造一把 Key。
+	KeyID string
 	// CacheHitTokens / CacheMissTokens 前缀缓存命中/未命中观测（issue #92）。
-	HasCacheTokens   bool
-	CacheHitTokens   int64
-	CacheMissTokens  int64
-	LatencyMs        int64
-	HasLatency       bool
-	TokensPerSecond  float64
-	HasTPS           bool
+	HasCacheTokens  bool
+	CacheHitTokens  int64
+	CacheMissTokens int64
+	LatencyMs       int64
+	HasLatency      bool
+	TokensPerSecond float64
+	HasTPS          bool
 }
 
 // Add 记录一次请求尝试。
@@ -173,14 +188,14 @@ func (r *Recorder) Add(now time.Time, realm, uid, model string, d Delta, ok bool
 		model = "(unknown)"
 	}
 	scope := "h:" + now.Format(hourLayout)
-	key := scope + "|" + realm + "|" + uid + "|" + model + "|" + d.ModelRate
+	key := bucketKey(scope, realm, uid, model, d.ModelRate, d.KeyID)
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	b := r.buckets[key]
 	if b == nil {
-		b = &bucket{Scope: scope, Realm: realm, UID: uid, Model: model, Rate: d.ModelRate}
+		b = &bucket{Scope: scope, Realm: realm, UID: uid, Model: model, Rate: d.ModelRate, Key: d.KeyID}
 		r.buckets[key] = b
 	}
 	b.Req++
@@ -247,7 +262,7 @@ func (r *Recorder) Rollup(now time.Time) {
 			continue
 		}
 		day := "d:" + ts.Format(dayLayout)
-		moves = append(moves, move{from: k, to: day + "|" + b.Realm + "|" + b.UID + "|" + b.Model + "|" + b.Rate})
+		moves = append(moves, move{from: k, to: bucketKey(day, b.Realm, b.UID, b.Model, b.Rate, b.Key)})
 	}
 	for _, m := range moves {
 		src := r.buckets[m.from]
@@ -300,7 +315,7 @@ func (r *Recorder) load() error {
 	}
 	for i := range f.Buckets {
 		b := f.Buckets[i]
-		r.buckets[b.Scope+"|"+b.Realm+"|"+b.UID+"|"+b.Model+"|"+b.Rate] = &b
+		r.buckets[bucketKey(b.Scope, b.Realm, b.UID, b.Model, b.Rate, b.Key)] = &b
 	}
 	log.Printf("[usage] 已恢复 %d 个用量桶（%s）", len(r.buckets), r.path)
 	return nil
@@ -470,9 +485,11 @@ type Snapshot struct {
 	ByRealm         []KeyedAgg  `json:"by_realm"`
 	ByAccount       []KeyedAgg  `json:"by_account"`
 	ByModel         []KeyedAgg  `json:"by_model"`
+	ByKey           []KeyedAgg  `json:"by_key"`
 	Series          []Point     `json:"series"`
 	CreditByAccount []CreditAgg `json:"credit_by_account"`
 	CreditByModel   []CreditAgg `json:"credit_by_model"`
+	CreditByKey     []CreditAgg `json:"credit_by_key"`
 	Buckets         int         `json:"buckets"`
 	FileBytes       int64       `json:"file_bytes"`
 	Since           string      `json:"since,omitempty"`
@@ -540,17 +557,20 @@ func (r *Recorder) Snapshot(hours int, nicks map[string]string) Snapshot {
 // SnapshotWithRates 与 Snapshot 相同，但允许为缺少历史倍率的旧桶提供当前
 // 模型倍率回填。currentRate 返回空串时该行按“未知倍率”聚合，不伪造价格。
 func (r *Recorder) SnapshotWithRates(hours int, nicks map[string]string, currentRate func(realm, model string) string) Snapshot {
-	return r.SnapshotWindow(Window{Hours: hours}, nicks, currentRate)
+	return r.SnapshotWindow(Window{Hours: hours}, nicks, nil, currentRate)
 }
 
 // SnapshotWindow 聚合**所选窗口内**的桶，产出面板一次拉取的全部用量视图数据。
 //
 // 窗口语义见 Window：滚动窗口（Hours）/ 显式区间（From-To）/ 全部历史。卡片汇总、
-// 按域、按账号、按模型、时序**全部**按同一窗口口径统计——切窗口时所有数字随之变化
-// （曾长期是"卡片为全部历史累计、hours 只改时序分片"的口径，界面上被读成"筛选没
-// 生效"，已废弃）。小时桶按整点入窗；日桶（Rollup 折叠出的长期数据）按日起点入窗，
-// 故小时窗口天然不含更早的日桶。
-func (r *Recorder) SnapshotWindow(w Window, nicks map[string]string, currentRate func(realm, model string) string) Snapshot {
+// 按域、按账号、按模型、按 Key、时序**全部**按同一窗口口径统计——切窗口时所有数字
+// 随之变化（曾长期是"卡片为全部历史累计、hours 只改时序分片"的口径，界面上被读成
+// "筛选没生效"，已废弃）。小时桶按整点入窗；日桶（Rollup 折叠出的长期数据）按日
+// 起点入窗，故小时窗口天然不含更早的日桶。
+//
+// keyNames 是下游 Key ID→展示名映射（来自 livecfg 快照，仅用于展示，不含明文）。
+// nil 或缺失的 ID 展示为空名，前端回落显示 ID 本身。
+func (r *Recorder) SnapshotWindow(w Window, nicks map[string]string, keyNames map[string]string, currentRate func(realm, model string) string) Snapshot {
 	if r == nil {
 		return Snapshot{Generated: time.Now().Format(time.RFC3339)}
 	}
@@ -570,10 +590,12 @@ func (r *Recorder) SnapshotWindow(w Window, nicks map[string]string, currentRate
 	acctAgg := map[string]*aggAcc{}
 	acctRealm := map[string]string{}
 	modelAgg := map[string]*aggAcc{}
+	keyAgg := map[string]*aggAcc{}
 	hourSeries := map[string]*aggAcc{}
 	daySeries := map[string]*aggAcc{}
 	creditAcctAgg := map[string]*creditAcc{}
 	creditModelAgg := map[string]*creditAcc{}
+	creditKeyAgg := map[string]*creditAcc{}
 	rateCache := map[string]string{}
 
 	// 数据起点（全库最早分片）：不受窗口影响，表示"记录自何时开始"。scope 字典序
@@ -621,6 +643,13 @@ func (r *Recorder) SnapshotWindow(w Window, nicks map[string]string, currentRate
 		}
 		modelAgg[b.Model].add(b)
 
+		// 按下游 Key 归因（ADR-001 F-005 二期）。空 Key（旧桶 / 未启用鉴权的放行
+		// 请求）统一落在同一个空键分组，由 label 函数翻成「未归因」展示名。
+		if keyAgg[b.Key] == nil {
+			keyAgg[b.Key] = &aggAcc{}
+		}
+		keyAgg[b.Key].add(b)
+
 		if strings.HasPrefix(b.Scope, "h:") {
 			scope := strings.TrimPrefix(b.Scope, "h:")
 			if hourSeries[scope] == nil {
@@ -664,6 +693,18 @@ func (r *Recorder) SnapshotWindow(w Window, nicks map[string]string, currentRate
 				creditModelAgg[modelKey] = cm
 			}
 			cm.add(b)
+
+			// 积分按下游 Key 归因：与账号/模型维度同口径（只统计与 credit 同时
+			// 观测到的 Token），展示名走 keyNames 映射。
+			ck := creditKeyAgg[b.Key]
+			if ck == nil {
+				ck = &creditAcc{CreditAgg: CreditAgg{
+					Key:      b.Key,
+					Nickname: keyNames[b.Key],
+				}}
+				creditKeyAgg[b.Key] = ck
+			}
+			ck.add(b)
 		}
 	}
 
@@ -675,11 +716,26 @@ func (r *Recorder) SnapshotWindow(w Window, nicks map[string]string, currentRate
 		ByAccount: keyed(acctAgg, func(k string) (string, string) {
 			return k, nicks[k]
 		}),
-		ByModel:         keyed(modelAgg, func(k string) (string, string) { return k, "" }),
+		ByModel: keyed(modelAgg, func(k string) (string, string) { return k, "" }),
+		// Key 维度的展示名：有映射用映射，没映射（已删除的 Key / 旧桶）回落显示
+		// ID 本身；空 ID 是一条真实分组（未启用鉴权时放行的请求、版本 5 之前的
+		// 旧桶），标签化为「未归因」而不是伪造一把不存在的 Key。
+		ByKey: keyed(keyAgg, func(k string) (string, string) {
+			if k == "" {
+				return "(未归因)", ""
+			}
+			return k, keyNames[k]
+		}),
 		CreditByAccount: creditKeyed(creditAcctAgg),
 		CreditByModel:   creditKeyed(creditModelAgg),
-		Buckets:         matched,
-		Generated:       time.Now().Format(time.RFC3339),
+		CreditByKey: creditKeyedLabeled(creditKeyAgg, func(k string) (string, string) {
+			if k == "" {
+				return "(未归因)", ""
+			}
+			return k, keyNames[k]
+		}),
+		Buckets:   matched,
+		Generated: time.Now().Format(time.RFC3339),
 	}
 	for i := range snap.ByAccount {
 		snap.ByAccount[i].Realm = acctRealm[snap.ByAccount[i].Key]
@@ -739,9 +795,23 @@ func canonicalUsageModel(model string) string {
 }
 
 func creditKeyed(m map[string]*creditAcc) []CreditAgg {
+	return creditKeyedLabeled(m, nil)
+}
+
+// creditKeyedLabeled 与 creditKeyed 相同，但允许把原始分组键重写为展示键/展示名
+// （Key 维度用：空键 → 「未归因」）。label 为 nil 时保持原键原样。
+func creditKeyedLabeled(m map[string]*creditAcc, label func(string) (string, string)) []CreditAgg {
 	out := make([]CreditAgg, 0, len(m))
-	for _, v := range m {
-		out = append(out, v.finish())
+	for k, v := range m {
+		row := v.finish()
+		if label != nil {
+			key, extra := label(k)
+			row.Key = key
+			if extra != "" {
+				row.Nickname = extra
+			}
+		}
+		out = append(out, row)
 	}
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].Credits != out[j].Credits {

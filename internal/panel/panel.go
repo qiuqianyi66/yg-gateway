@@ -787,11 +787,37 @@ func (p *Panel) usage(w http.ResponseWriter, r *http.Request) {
 			nicks[s.UID] = s.Nickname
 		}
 	}
+	// 下游 Key 的 ID→展示名（用量按 Key 聚合用）。只取 id/name 两个展示字段，
+	// 摘要与明文都不外泄（httpauth.Key 本身就不含明文）。
+	keyNames := p.keyNameMap()
 	var currentRate func(realm, model string) string
 	if p.cfg.Upstream != nil {
 		currentRate = p.cfg.Upstream.ModelRate
 	}
-	writeJSON(w, http.StatusOK, p.cfg.Usage.SnapshotWindow(win, nicks, currentRate))
+	writeJSON(w, http.StatusOK, p.cfg.Usage.SnapshotWindow(win, nicks, keyNames, currentRate))
+}
+
+// keyNameMap 当前生效的下游 Key ID→展示名映射（livecfg 快照，无明文）。
+// 单 api_key 合成身份（ID="single"）归入映射并给出可读名，让用量页的「按 Key」
+// 维度对最常见的单 Key 部署也有意义。
+func (p *Panel) keyNameMap() map[string]string {
+	out := map[string]string{}
+	if p.cfg.Live == nil {
+		return out
+	}
+	snap := p.cfg.Live.Load()
+	for i := range snap.APIKeys {
+		k := snap.APIKeys[i]
+		if k.ID != "" {
+			out[k.ID] = k.Name
+		}
+	}
+	if snap.APIKey != "" {
+		if _, ok := out[httpauth.SingleKeyID]; !ok {
+			out[httpauth.SingleKeyID] = "管理员密钥（单 api_key）"
+		}
+	}
+	return out
 }
 
 // parseTimeParam 解析时间查询参数：unix 秒（前端默认）或 RFC3339（便于手工调
