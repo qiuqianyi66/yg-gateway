@@ -60,3 +60,14 @@ func BenchmarkBuildIndex(b *testing.B) {
 		BuildIndex(keys)
 	}
 }
+
+// BenchmarkVerifyBearer 单 Key 兼容路径必须零分配（2.0.0 行为不回归，ADR §七 第 8 项）。
+func BenchmarkVerifyBearer(b *testing.B) {
+	r := httptest.NewRequest("GET", "/", nil)
+	r.Header.Set("Authorization", "Bearer sk-abc123")
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		VerifyBearer(r, "sk-abc123")
+	}
+}

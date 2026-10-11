@@ -8,6 +8,7 @@ package httpauth
 import (
 	"crypto/subtle"
 	"net/http"
+	"strings"
 )
 
 // bearerPrefix 认证方案前缀（大小写敏感，与 HTTP 规范及既有实现一致）。
@@ -21,18 +22,18 @@ const bearerPrefix = "Bearer "
 //   - 先摘要再比较，长度差异被吸收进摘要（不会因长度不同提前返回）；
 //   - 摘要本身不可逆，即便有侧信道也拿不到密钥原文。
 //
-// 多 Key 场景请用 Index.BuildIndex + Match（见 index.go）；本函数保留旧签名，
-// 供单 Key 兼容路径与既有测试使用，内部委托给「单 Key 的 Index」以复用同一比较原语。
+// 单 Key 路径保持零分配（2.0.0 行为），**不委托** BuildIndex——那是多 Key 的
+// 索引结构，每次构建会引入 map/切片分配，单 Key 场景不值得付这个代价。
 func VerifyBearer(r *http.Request, key string) bool {
 	if key == "" {
 		return true
 	}
-	idx := BuildIndex([]Key{{ID: "single", Digest: digest(key)}})
-	_, ok := idx.Match(r)
-	if ok {
-		return true
+	authz := r.Header.Get("Authorization")
+	if !strings.HasPrefix(authz, bearerPrefix) {
+		// 缺头/方案不对：仍走一次摘要比较，保持耗时形状一致。
+		subtle.ConstantTimeCompare(digest(""), digest(key))
+		return false
 	}
-	// 缺头/方案不对：仍走一次摘要比较，保持耗时形状一致（与 2.0.0 缺头路径同形状）。
-	subtle.ConstantTimeCompare(digest(""), digest(key))
-	return false
+	tok := authz[len(bearerPrefix):]
+	return subtle.ConstantTimeCompare(digest(tok), digest(key)) == 1
 }
