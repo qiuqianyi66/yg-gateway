@@ -195,12 +195,14 @@ func (p *Panel) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	p.mux.ServeHTTP(w, r)
 }
 
-// withAuth 与 server 包同口径的 Bearer 鉴权（经 httpauth 常量时间比较）；
-// api_key 为空时放行。密钥经 livecfg 快照读取：面板里改了 api_key，下一个请求
-// 即用新值（无需重启）。多 Key 走 httpauth.Authenticate 统一入口。
+// withAuth 面板 Bearer 鉴权。与 server 包**不同口径**：面板只认「管理员凭证」
+// （单 api_key），不认 api_keys 里的普通下游 Key（阻断项 3：普通 Key 只用于网关 API，
+// 不应获得面板的账号管理/配置读写等完整权限）。
+// api_key 为空时放行（2.0.0 旧语义）。密钥经 livecfg 快照读取：面板里改了 api_key，
+// 下一个请求即用新值（无需重启）。
 func (p *Panel) withAuth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if _, ok := p.authenticate(r); !ok {
+		if !p.authenticateAdmin(r) {
 			writeErr(w, http.StatusUnauthorized, "invalid_api_key")
 			return
 		}
@@ -208,15 +210,14 @@ func (p *Panel) withAuth(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-// authenticate 统一鉴权（多 Key 索引 + 单 Key 兼容），返回命中的 Key。
-func (p *Panel) authenticate(r *http.Request) (*httpauth.Key, bool) {
-	live := p.cfg.Live
-	if live != nil {
-		snap := live.Load()
-		return httpauth.Authenticate(r, snap.AuthIndex, snap.APIKey)
+// authenticateAdmin 面板管理员鉴权：只认单 api_key（Live 优先，回落静态）。
+// 不认多 Key——普通下游 Key 不能访问面板（阻断项 3）。
+func (p *Panel) authenticateAdmin(r *http.Request) bool {
+	key := p.apiKey()
+	if key == "" {
+		return true // 未启用鉴权（2.0.0 旧语义）
 	}
-	// Live 为 nil（测试/裸用）：单 Key 兼容路径。
-	return httpauth.Authenticate(r, nil, p.cfg.APIKey)
+	return httpauth.VerifyBearer(r, key)
 }
 
 // apiKey 当前生效密钥（Live 优先，回落静态字段）。
@@ -228,7 +229,8 @@ func (p *Panel) apiKey() string {
 }
 
 // authEnabled 是否启用了鉴权（单 Key 或多 Key 任一非空）。
-// 与 server 侧 authenticate 的口径一致：只要快照里有鉴权索引或单 Key，就需鉴权。
+// 注意：面板鉴权本身只看单 api_key（见 authenticateAdmin），这里仍报「多 Key 也需
+// 鉴权」是因为网关 API 侧多 Key 已启用鉴权；面板 auth_required 用于前端提示。
 func (p *Panel) authEnabled() bool {
 	if p.cfg.Live != nil {
 		snap := p.cfg.Live.Load()

@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"yg-gateway/internal/httpauth"
 	"yg-gateway/internal/prompt"
 )
 
@@ -25,7 +26,12 @@ type Config struct {
 	// APIKeys 多 Key 鉴权（ADR-001）。nil = 键缺失/null（旧版兼容，单 Key 语义）；
 	// 非 nil 空切片 = 显式空数组（配置错误，normalize fail fast）。
 	// 每个条目的 Key 明文只在配置源；运行时索引只存摘要（见 httpauth.Index）。
-	APIKeys []APIKeyConfig `json:"api_keys"`
+	// omitempty：WriteDefault 生成默认配置时不输出 api_keys（避免生成 "api_keys":null
+	// 又被 Load 判成 fail fast 的显式 null——阻断项 4 修复引入的回归）。
+	APIKeys []APIKeyConfig `json:"api_keys,omitempty"`
+	// apiKeysFieldSet 记录 JSON 里是否显式出现了 api_keys 键（区分「键缺失」与「显式 null」）。
+	// json:"-" 不参与序列化；由 ParseConfigInto 在 unmarshal 前探测原始 JSON 设置。
+	apiKeysFieldSet bool `json:"-"`
 
 	Panel struct {
 		// PackageDetailLimit 积分构成页单账号默认展示的最近到期包数；<=0 回落 5。
@@ -376,6 +382,13 @@ func Load(path string) (*Config, error) {
 // ParseConfigInto 把 JSON 覆盖到 c 上并 normalize（不做 env、不读文件）。
 // 面板保存配置走这条路径：与 Load 完全同一套解析/校验逻辑，避免两处漂移。
 func ParseConfigInto(raw []byte, c *Config) (*Config, error) {
+	// 探测 api_keys 键是否显式出现（区分「键缺失」与「显式 null」，阻断项 4）。
+	var probe map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &probe); err == nil {
+		if _, ok := probe["api_keys"]; ok {
+			c.apiKeysFieldSet = true
+		}
+	}
 	if err := json.Unmarshal(raw, c); err != nil {
 		return nil, fmt.Errorf("parse config: %w", err)
 	}
@@ -679,20 +692,31 @@ func (c *Config) normalize() error {
 //
 // 空值语义（靠 Go slice 的 nil 区分，无需自定义反序列化）：
 //
-//	APIKeys == nil          → 键缺失/null（旧版兼容，跳过校验）
+//	APIKeys == nil          → 键缺失（旧版兼容，跳过校验）
 //	APIKeys != nil && len 0 → 显式 []，配置错误 fail fast
 //	过滤空 key 条目后为 0     → 全空条目，配置错误 fail fast
+//
+// 阻断项 1（重复密钥）：同一个密钥值同时出现在 api_key（单值）与 api_keys[].key，
+// 或出现在两条多 Key 之间，会导致 Match 命中第一把 Key 而绕过另一把的 models/realm
+// 约束。这里**拒绝重复的有效密钥**，不静默合并约束、不依赖索引插入顺序。
 func (c *Config) normalizeAPIKeys() error {
-	if c.APIKeys == nil {
-		return nil // 键缺失/null：旧版兼容，无多 Key
+	// 键缺失：旧版兼容（无多 Key）。
+	if c.APIKeys == nil && !c.apiKeysFieldSet {
+		return nil
+	}
+	// 显式 null：按 PRD/ADR 契约 fail fast（不能静默降级为免鉴权，阻断项 4）。
+	if c.APIKeys == nil && c.apiKeysFieldSet {
+		return fmt.Errorf("api_keys: 显式 null 不是合法配置；要么删除该键（回到单 api_key），要么提供有效数组")
 	}
 	if len(c.APIKeys) == 0 {
 		return fmt.Errorf("api_keys: 显式空数组；要关闭多 Key 请删除该键（回到单 api_key），而不是配空数组")
 	}
 	seenID := map[string]bool{}
+	seenKey := map[string]string{} // 明文 key → id（重复检测）
 	filtered := make([]APIKeyConfig, 0, len(c.APIKeys)) // 新切片：append 不污染 c.APIKeys 底层数组
 	for _, k := range c.APIKeys {
-		if strings.TrimSpace(k.Key) == "" {
+		key := strings.TrimSpace(k.Key)
+		if key == "" {
 			continue // 空 key 条目忽略
 		}
 		id := strings.TrimSpace(k.ID)
@@ -702,14 +726,26 @@ func (c *Config) normalizeAPIKeys() error {
 		if !validKeyID(id) {
 			return fmt.Errorf("api_keys[%s]: id 仅允许 [A-Za-z0-9_-] 且 ≤64 字符", id)
 		}
+		if id == httpauth.SingleKeyID {
+			return fmt.Errorf("api_keys[%s]: id %q 是保留名（旧版单 api_key 的合成身份），请换一个 id", id, httpauth.SingleKeyID)
+		}
 		if seenID[id] {
 			return fmt.Errorf("api_keys: id %q 重复（id 是稳定归因键，必须唯一）", id)
 		}
 		seenID[id] = true
+		// 重复密钥检测（阻断项 1）：与单值 api_key 或已见多 Key 重复 → fail fast。
+		if c.APIKey != "" && key == c.APIKey {
+			return fmt.Errorf("api_keys[%s]: key 与顶层 api_key 重复；同一密钥不能同时作为单值 Key 与受限多 Key（会绕过 models/realm 约束）", id)
+		}
+		if prevID, dup := seenKey[key]; dup {
+			return fmt.Errorf("api_keys: key 重复（id %q 与 %q 使用同一密钥）；同一密钥值只能出现一次，避免约束被另一把绕过", prevID, id)
+		}
+		seenKey[key] = id
 		if r := strings.ToLower(strings.TrimSpace(k.Realm)); r != "" && r != "cn" && r != "global" {
 			return fmt.Errorf("api_keys[%s]: realm %q 不是合法值（cn / global / 空）", id, k.Realm)
 		}
 		k.ID = id
+		k.Key = key
 		k.Realm = strings.ToLower(strings.TrimSpace(k.Realm))
 		filtered = append(filtered, k)
 	}

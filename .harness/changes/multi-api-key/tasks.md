@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-10-11
-status: 任务已拆分，待开工
+status: 全部完成（T0~T7 + 最终审查 4 阻断项修复）
 owner: YG
 adr: docs/adr/ADR-001-multi-api-key.md
 prd: docs/prd/REQ-yg-gateway-multi-api-key-2026-10-11.md
