@@ -1121,8 +1121,41 @@ func sha256Of(s string) []byte {
 	return sum[:]
 }
 
-// TestKeyIdentityInRequestLog 鉴权命中的 Key 身份写入请求日志（key_id/key_name），
-// 且不泄漏 Key 明文、不泄漏 Authorization 原文（ADR-001 F-005 / R1/R2）。
+// TestKeyConstraintsBlockBeforeUpstream 约束拒绝发生在选号/出站之前：白名单外模型
+// 直接 400，不产生任何上游请求（零上游消耗，ADR-001 §五）。
+func TestKeyConstraintsBlockBeforeUpstream(t *testing.T) {
+	var upstreamCalls int
+	up := newFakeUpstream(t, func(authz string) (int, string, bool) {
+		upstreamCalls++
+		return 200, sseOK, true
+	})
+	sum := sha256Of("sk-constrained")
+	idx := httpauth.BuildIndex([]httpauth.Key{
+		{ID: "k1", Name: "甲", Digest: sum, Models: []string{"allowed-model"}},
+	})
+	live := livecfg.New(livecfg.Snapshot{AuthIndex: idx})
+	h := NewHandler(Config{
+		Pool:     testPoolWith(&auth.Auth{UID: "u1", AccessToken: "at", ExpiresAt: 9999999999}),
+		Upstream: up,
+		Live:     live,
+	})
+
+	// 白名单外模型 → 400，零上游调用
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("POST", "/v1/chat/completions",
+		strings.NewReader(`{"model":"forbidden-model","messages":[]}`))
+	req.Header.Set("Authorization", "Bearer sk-constrained")
+	h.ServeHTTP(rec, req)
+	if rec.Code != 400 {
+		t.Fatalf("白名单外模型应 400，got %d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "model_not_allowed") {
+		t.Fatalf("错误码应为 model_not_allowed，body=%s", rec.Body.String())
+	}
+	if upstreamCalls != 0 {
+		t.Fatalf("约束拒绝不应打上游，got %d 次上游调用", upstreamCalls)
+	}
+}
 func TestKeyIdentityInRequestLog(t *testing.T) {
 	sum := sha256Of("sk-secret-key-value")
 	idx := httpauth.BuildIndex([]httpauth.Key{
