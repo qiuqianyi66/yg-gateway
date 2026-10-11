@@ -6,6 +6,21 @@
 
 ---
 
+## 为什么选 YG Gateway
+
+同类项目不少（[workbuddy-manager](https://github.com/ithtelab/workbuddy-manager)、[workbuddy2api-hub](https://github.com/ardeyouxipianyi/workbuddy2api-hub)、[ARP](https://github.com/KaiXuanSama/ARP)…），它们拼的是**多租户派发、成本优化、功能广度**。YG Gateway 走的是另一条路，四个它们普遍没做透的点：
+
+1. **单二进制零依赖**：面板 JS/CSS `go:embed` 进一个 ~10MB 的 exe，拷到任意机器直接跑，**不需要 Node / Python / Docker**。五平台二进制直接下。
+2. **养号友好型选号**：快过期积分优先消耗、成本分层、积分保底、全自动养号（签到/活跃/旅行/保活/成长任务一键完成）——目标是**账号活得久、积分不浪费**，而不是单纯压成本。
+3. **安全底座实打实加固**：禁 HTTP/2、入站 body 上限、受信任代理防伪造 XFF、只读端点限流、Windows 凭证 ACL 加固、Go 1.27.2（零 stdlib CVE）。
+4. **公开可审计的工程治理**：仓库带 `.harness/` 治理体系（十阶段流程 + 红线 + 变更追踪），每个改动可追溯。
+
+**一句话定位**：*一个二进制、零依赖、养号友好的 CodeBuddy 网关——把"部署省心"和"账号活得久"两件事同时做对。*
+
+完整对比（含诚实劣势与路线图）见 [docs/COMPETITIVE-ANALYSIS.md](docs/COMPETITIVE-ANALYSIS.md)。
+
+---
+
 ## 与上游的关系
 
 | | 说明 |
