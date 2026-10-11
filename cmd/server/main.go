@@ -533,7 +533,7 @@ func buildAuthSnapshot(c *Config) livecfg.Snapshot {
 	keys := make([]httpauth.Key, 0, len(c.APIKeys)+1)
 	if c.APIKey != "" {
 		sum := sha256.Sum256([]byte(c.APIKey))
-		keys = append(keys, httpauth.Key{ID: "single", Digest: sum[:]})
+		keys = append(keys, httpauth.Key{ID: httpauth.SingleKeyID, Digest: sum[:]})
 	}
 	for _, k := range c.APIKeys {
 		sum := sha256.Sum256([]byte(k.Key))
