@@ -2,6 +2,7 @@ package server
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"io"
@@ -15,6 +16,8 @@ import (
 	"time"
 
 	"yg-gateway/internal/auth"
+	"yg-gateway/internal/httpauth"
+	"yg-gateway/internal/livecfg"
 	"yg-gateway/internal/pool"
 	"yg-gateway/internal/prompt"
 	"yg-gateway/internal/redisstore"
@@ -1072,6 +1075,49 @@ func TestAPIKeyAuth(t *testing.T) {
 	if rec.Code != 200 {
 		t.Errorf("right key: code=%d", rec.Code)
 	}
+}
+
+// TestMultiKeyAuth 多 Key 鉴权（T4）：live 快照带 AuthIndex，单值 + 多 Key 均放行。
+func TestMultiKeyAuth(t *testing.T) {
+	sumA := sha256Of("sk-multi-a")
+	sumB := sha256Of("sk-multi-b")
+	idx := httpauth.BuildIndex([]httpauth.Key{
+		{ID: "k-a", Digest: sumA},
+		{ID: "k-b", Digest: sumB},
+	})
+	live := livecfg.New(livecfg.Snapshot{
+		AuthIndex: idx,
+		APIKey:    "single",
+	})
+	h := NewHandler(Config{
+		Pool:     testPoolWith(&auth.Auth{UID: "u1", AccessToken: "at", ExpiresAt: 9999999999}),
+		Upstream: upstream.New(),
+		Live:     live,
+	})
+
+	// 多 Key 之一放行
+	req := httptest.NewRequest("GET", "/v1/models", nil)
+	req.Header.Set("Authorization", "Bearer sk-multi-a")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != 200 {
+		t.Errorf("multi key A: code=%d, want 200", rec.Code)
+	}
+
+	// 未知 key 拒绝
+	req = httptest.NewRequest("GET", "/v1/models", nil)
+	req.Header.Set("Authorization", "Bearer sk-unknown")
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != 401 {
+		t.Errorf("unknown key: code=%d, want 401", rec.Code)
+	}
+}
+
+// sha256Of 计算 SHA256 摘要（测试辅助）。
+func sha256Of(s string) []byte {
+	sum := sha256.Sum256([]byte(s))
+	return sum[:]
 }
 
 func TestStatusEndpoint(t *testing.T) {

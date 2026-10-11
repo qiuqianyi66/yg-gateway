@@ -197,15 +197,26 @@ func (p *Panel) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // withAuth 与 server 包同口径的 Bearer 鉴权（经 httpauth 常量时间比较）；
 // api_key 为空时放行。密钥经 livecfg 快照读取：面板里改了 api_key，下一个请求
-// 即用新值（无需重启）。
+// 即用新值（无需重启）。多 Key 走 httpauth.Authenticate 统一入口。
 func (p *Panel) withAuth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if !httpauth.VerifyBearer(r, p.apiKey()) {
+		if _, ok := p.authenticate(r); !ok {
 			writeErr(w, http.StatusUnauthorized, "invalid_api_key")
 			return
 		}
 		next(w, r)
 	}
+}
+
+// authenticate 统一鉴权（多 Key 索引 + 单 Key 兼容），返回命中的 Key。
+func (p *Panel) authenticate(r *http.Request) (*httpauth.Key, bool) {
+	live := p.cfg.Live
+	if live != nil {
+		snap := live.Load()
+		return httpauth.Authenticate(r, snap.AuthIndex, snap.APIKey)
+	}
+	// Live 为 nil（测试/裸用）：单 Key 兼容路径。
+	return httpauth.Authenticate(r, nil, p.cfg.APIKey)
 }
 
 // apiKey 当前生效密钥（Live 优先，回落静态字段）。
@@ -214,6 +225,16 @@ func (p *Panel) apiKey() string {
 		return p.cfg.Live.Load().APIKey
 	}
 	return p.cfg.APIKey
+}
+
+// authEnabled 是否启用了鉴权（单 Key 或多 Key 任一非空）。
+// 与 server 侧 authenticate 的口径一致：只要快照里有鉴权索引或单 Key，就需鉴权。
+func (p *Panel) authEnabled() bool {
+	if p.cfg.Live != nil {
+		snap := p.cfg.Live.Load()
+		return snap.AuthIndex != nil || snap.APIKey != ""
+	}
+	return p.cfg.APIKey != ""
 }
 
 // expiringSoonWindow 返回调度器当前生效的快过期路由窗口；测试面板无调度器时返回 0。
@@ -240,7 +261,7 @@ func (p *Panel) overview(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"version":         p.cfg.Version,
 		"uptime_sec":      int(time.Since(p.started).Seconds()),
-		"auth_required":   p.apiKey() != "",
+		"auth_required":   p.authEnabled(),
 		"redis_mode":      p.cfg.RedisMode,
 		"sticky_sessions": sticky,
 		"total":           total,
