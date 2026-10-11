@@ -12,8 +12,8 @@ import (
 	"encoding/json"
 
 	"fmt"
-	"yg-gateway/internal/auth"
 	"net/http"
+	"yg-gateway/internal/auth"
 )
 
 // streakRedeemPath / lottery 路径（growth 域，growthJSON 走 www.workbuddy.cn）。

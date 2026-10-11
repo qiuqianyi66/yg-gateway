@@ -34,10 +34,10 @@ func (c *ReadOnlyRateLimit) build() *rateLimiter {
 
 // rateLimiter 固定窗口限流器（进程内，重启清零）。
 type rateLimiter struct {
-	mu      sync.Mutex
-	limit   int           // 窗口内最大请求数
-	window  time.Duration // 窗口长度
-	counts  map[string]int
+	mu          sync.Mutex
+	limit       int           // 窗口内最大请求数
+	window      time.Duration // 窗口长度
+	counts      map[string]int
 	windowStart time.Time
 }
 
