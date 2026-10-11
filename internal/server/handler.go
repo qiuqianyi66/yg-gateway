@@ -194,12 +194,19 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) withAuth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if !httpauth.VerifyBearer(r, h.loadLive().APIKey) {
+		if _, ok := h.authenticate(r); !ok {
 			writeOpenAIError(w, http.StatusUnauthorized, "invalid_api_key", "missing or invalid API key")
 			return
 		}
 		next(w, r)
 	}
+}
+
+// authenticate 统一鉴权（多 Key 索引 + 单 Key 兼容），返回命中的 Key（不含明文）。
+// 未启用鉴权时返回 (nil, true)；鉴权失败返回 (nil, false)。
+func (h *Handler) authenticate(r *http.Request) (*httpauth.Key, bool) {
+	live := h.loadLive()
+	return httpauth.Authenticate(r, live.AuthIndex, live.APIKey)
 }
 
 // rateLimited 只读端点限流中间件（F-003）。readonlyRL 为 nil 时透传（不限流）。

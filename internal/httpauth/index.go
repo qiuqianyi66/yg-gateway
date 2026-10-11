@@ -106,3 +106,33 @@ func digest(s string) []byte {
 	sum := sha256.Sum256([]byte(s))
 	return sum[:]
 }
+
+// Authenticate 统一鉴权入口：多 Key 索引 + 单 Key 兼容，handler 与 panel 共用，
+// 避免两处各写一份漂移（ADR-001 §五「一次匹配」）。
+//
+// 语义（ADR-001 §四 兼容策略）：
+//   - index 非空 → 走多 Key 索引匹配；命中返回该 Key。
+//   - index 为空（无多 Key）→ 回退单 Key 语义：singleKey 空 = 不鉴权（放行，返回 nil,true）；
+//     非空 = 用 VerifyBearer 校验单 Key。
+//   - 单 Key 命中返回一个合成 Key（ID="single"，不携带明文）。
+//
+// 返回 (nil, false) = 鉴权失败（调用方回 401）；(nil, true) = 未启用鉴权（放行）。
+// 返回 (key, true) = 命中某把 Key（key 不含明文，只含 id/name/约束）。
+func Authenticate(r *http.Request, index *Index, singleKey string) (*Key, bool) {
+	if index != nil {
+		if k, ok := index.Match(r); ok {
+			return k, true
+		}
+		// 多 Key 索引存在但未命中：不再回退单 Key（单 Key 也应纳入索引）。
+		// 这里返回失败，由调用方回 401。
+		return nil, false
+	}
+	// 无多 Key：单 Key 兼容路径。
+	if singleKey == "" {
+		return nil, true // 未启用鉴权，放行
+	}
+	if VerifyBearer(r, singleKey) {
+		return &Key{ID: "single", Digest: digest(singleKey)}, true
+	}
+	return nil, false
+}

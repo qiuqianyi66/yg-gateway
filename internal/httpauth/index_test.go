@@ -130,3 +130,46 @@ func TestHexPrefix(t *testing.T) {
 		t.Fatalf("hexPrefix 长度 = %d, want 12", len(p))
 	}
 }
+
+// TestAuthenticate 统一鉴权入口：多 Key 索引 + 单 Key 兼容。
+func TestAuthenticate(t *testing.T) {
+	idx := BuildIndex([]Key{
+		{ID: "k1", Digest: digest("sk-multi")},
+	})
+
+	cases := []struct {
+		name      string
+		index     *Index
+		singleKey string
+		authz     string
+		wantOK    bool
+		wantID    string // 命中时期望 ID；未启用鉴权时为 "" 且 wantOK=true
+	}{
+		{"多Key命中", idx, "", "Bearer sk-multi", true, "k1"},
+		{"多Key未命中", idx, "", "Bearer sk-wrong", false, ""},
+		{"无索引+单Key命中", nil, "sk-single", "Bearer sk-single", true, "single"},
+		{"无索引+单Key错误", nil, "sk-single", "Bearer sk-wrong", false, ""},
+		{"无索引+空key放行", nil, "", "Bearer anything", true, ""},
+		{"无索引+空key缺头也放行", nil, "", "", true, ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, ok := Authenticate(keyReq(c.authz), c.index, c.singleKey)
+			if ok != c.wantOK {
+				t.Fatalf("Authenticate ok=%v, want %v", ok, c.wantOK)
+			}
+			if !ok {
+				return
+			}
+			if c.wantID == "" {
+				if got != nil {
+					t.Fatalf("未启用鉴权应返回 nil key，got %+v", got)
+				}
+				return
+			}
+			if got == nil || got.ID != c.wantID {
+				t.Fatalf("Authenticate key.ID=%v, want %q", got, c.wantID)
+			}
+		})
+	}
+}

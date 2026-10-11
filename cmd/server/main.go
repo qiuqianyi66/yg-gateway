@@ -526,8 +526,15 @@ func saveConfig(raw []byte, path string, live *livecfg.Holder, p *pool.Pool, up 
 // 这是热更新的原子单元：在这里完成「配置 → 摘要 → 索引」的全部构建，返回的
 // Snapshot 由调用方一次 Store（ADR-001 §六）。APIKeys 已 normalize 过（空条目已过滤、
 // id/realm 已校验），这里只做摘要计算与运行时 Key 组装。
+//
+// 单 api_key 也作为一个合成条目（ID="single"）纳入索引：这样「单 Key + 多 Key 并存
+// 时两者都放行」由索引统一承载，鉴权侧无需区分来源（ADR-001 §四 兼容策略表第 3 行）。
 func buildAuthSnapshot(c *Config) livecfg.Snapshot {
-	keys := make([]httpauth.Key, 0, len(c.APIKeys))
+	keys := make([]httpauth.Key, 0, len(c.APIKeys)+1)
+	if c.APIKey != "" {
+		sum := sha256.Sum256([]byte(c.APIKey))
+		keys = append(keys, httpauth.Key{ID: "single", Digest: sum[:]})
+	}
 	for _, k := range c.APIKeys {
 		sum := sha256.Sum256([]byte(k.Key))
 		keys = append(keys, httpauth.Key{
