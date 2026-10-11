@@ -7,8 +7,9 @@ import (
 )
 
 // expiringVirtualSlots 快过期账号在新会话候选集中的虚拟实例权重。
-// 3:1 是温和偏好，不是固定比例：账号组成变化会自然改变最终占比。
-const expiringVirtualSlots = 3
+// 2:1 是温和偏好（原 3:1 实测把无快过期号压到 ~7.5%，接近饿死；降到 2 后回到 ~11%，
+// 快过期号仍优先消耗但不至于让普通号长期零流量）。账号组成变化会自然改变最终占比。
+const expiringVirtualSlots = 2
 
 // AvailableUIDsForRealm 同 AvailableUIDs，但仅返回 Realm()==realm 的账号。
 // realm=="" 退化为 AvailableUIDs（现状语义）。
