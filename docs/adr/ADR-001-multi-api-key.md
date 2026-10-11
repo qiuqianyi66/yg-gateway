@@ -124,6 +124,23 @@ YG Gateway 2.0.0 是单 `api_key` 鉴权：`httpauth.VerifyBearer(r, key string)
 - 后续若调整鉴权链路，必须保持「授权身份」与「日志归因」一致；任何新增身份来源
   都必须回到同一次匹配结果，禁止引入第二次匹配。
 
+### 权限边界（最终审查新增，阻断项 3）
+
+- **普通下游 Key（`api_keys[].key`）只用于网关 API（`/v1/*`）**，不授予面板权限。
+- **面板（`/panel/*`）只认单 `api_key`（管理员凭证）**：`panel.authenticateAdmin` 走
+  `VerifyBearer(r, api_key)`，不查 `AuthIndex`。
+- 因此持有普通 Key 的调用者**不能**读取/修改管理配置、不能调用账号管理接口。
+- 保留 ID `"single"`（`httpauth.SingleKeyID`）是旧单 api_key 的合成身份，用户配的
+  `api_keys[].id` 不得使用该值（normalize 拒绝）。
+
+### 密钥重复与 null 契约（最终审查新增，阻断项 1/4）
+
+- **重复密钥 fail fast**：同一密钥值出现在单 `api_key` 与 `api_keys[].key` 之间，或
+  出现在两条多 Key 之间，都会让 `Match` 命中第一把 Key 而绕过另一把的 models/realm
+  约束，故 normalize 阶段**拒绝重复有效密钥**（不静默合并、不依赖索引顺序）。
+- **显式 `null` fail fast**：`api_keys: null` 是配置错误，与「键缺失」区分（靠
+  `apiKeysFieldSet` 字段存在标记）。只有键缺失才允许旧版兼容。
+
 ---
 
 ## 六、并发与热更新契约

@@ -282,7 +282,7 @@ func main() {
 		ProbeFile:  stateSibling(cfg.StateFile, "output_probes.json"),
 		ConfigPath: *cfgPath,
 		LoadConfig: func() (any, error) {
-			return Load(*cfgPath)
+			return loadConfigMasked(*cfgPath)
 		},
 		SaveConfig: func(raw []byte) ([]string, error) {
 			return saveConfig(raw, *cfgPath, live, p, up, sch)
@@ -519,6 +519,44 @@ func saveConfig(raw []byte, path string, live *livecfg.Holder, p *pool.Pool, up 
 	sch.SetIncludeDisabledInTasks(newCfg.Schedule.IncludeDisabledInTasks)
 
 	return restartRequiredFields(newCfg), nil
+}
+
+// loadConfigMasked 加载配置并脱敏密钥明文，供面板 GET /panel/api/config 回显。
+//
+// 阻断项 2：不得把 api_key / api_keys[].key 明文直接返回给面板。这里把配置转成
+// 通用 map，把密钥字段替换为脱敏占位符（保留「是否已设置」的语义），面板配置表单
+// 不依赖 api_keys（CFG_MAP 白名单不含它），所以脱敏不影响前端回显。
+func loadConfigMasked(path string) (any, error) {
+	c, err := Load(path)
+	if err != nil {
+		return nil, err
+	}
+	// 序列化成 map 再脱敏，避免依赖 *Config 的具体类型（panel 只当 any 用）。
+	raw, err := json.Marshal(c)
+	if err != nil {
+		return nil, err
+	}
+	var m map[string]any
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return nil, err
+	}
+	// 脱敏顶层 api_key：有值 → 占位符；空 → 保留空串（前端据此判断是否已鉴权）。
+	if v, ok := m["api_key"]; ok {
+		if s, _ := v.(string); s != "" {
+			m["api_key"] = "********" // 不泄漏真实密钥
+		}
+	}
+	// 脱敏 api_keys[].key
+	if keys, ok := m["api_keys"].([]any); ok {
+		for _, k := range keys {
+			if km, ok := k.(map[string]any); ok {
+				if km["key"] != nil {
+					km["key"] = "********"
+				}
+			}
+		}
+	}
+	return m, nil
 }
 
 // buildAuthSnapshot 把 Config 的鉴权配置（单 api_key + 多 api_keys）转成运行时快照。

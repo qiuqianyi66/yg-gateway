@@ -4,7 +4,6 @@ import (
 	"crypto/sha256"
 	"net/http/httptest"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -47,12 +46,16 @@ func newMultiKeyHandler(t *testing.T, keys []httpauth.Key, withReqLog bool) (*Ha
 	return h, rl, &upstreamCalls
 }
 
-// TestE2EHotReloadSnapshotConsistency 热更新期间并发请求：每个请求读到的鉴权快照
-// 要么全旧要么全新，不出现「半新半旧」（atomic.Pointer 保证）。这里用 goroutine 并发
-// 发请求 + 交替 Store 新旧快照，断言没有请求拿到「旧单 Key + 新索引」的混用。
+// TestE2EHotReloadSnapshotConsistency 热更新：每次 Store 一个确定快照后，断言旧 Key
+// 只在旧快照放行、新 Key 只在新快照放行，且归因正确。用确定性的交替（非随机），
+// 验证每个请求读到的都是完整快照（atomic.Pointer 语义），不出现半新半旧。
 func TestE2EHotReloadSnapshotConsistency(t *testing.T) {
-	oldIdx := httpauth.BuildIndex([]httpauth.Key{{ID: "old", Digest: sha256OfE2E("sk-old")}})
-	newIdx := httpauth.BuildIndex([]httpauth.Key{{ID: "new", Digest: sha256OfE2E("sk-new")}})
+	oldIdx := httpauth.BuildIndex([]httpauth.Key{
+		{ID: "old", Digest: sha256OfE2E("sk-old"), Models: []string{"m"}},
+	})
+	newIdx := httpauth.BuildIndex([]httpauth.Key{
+		{ID: "new", Digest: sha256OfE2E("sk-new"), Models: []string{"m"}},
+	})
 	live := livecfg.New(livecfg.Snapshot{AuthIndex: oldIdx})
 	h := NewHandler(Config{
 		Pool:     testPoolWith(&auth.Auth{UID: "u1", AccessToken: "at", ExpiresAt: 9999999999}),
@@ -60,41 +63,28 @@ func TestE2EHotReloadSnapshotConsistency(t *testing.T) {
 		Live:     live,
 	})
 
-	var wg sync.WaitGroup
-	stop := make(chan struct{})
-	// 读线程：交替用新旧 Key 发请求，验证鉴权结果与快照一致
-	for i := 0; i < 4; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for {
-				select {
-				case <-stop:
-					return
-				default:
-					// 随机用旧或新 Key，只要快照一致，旧 Key 应在旧快照下放行、新快照下 401
-					recOld := doChat(t, h, "Bearer sk-old", `{"model":"m","messages":[]}`)
-					recNew := doChat(t, h, "Bearer sk-new", `{"model":"m","messages":[]}`)
-					_ = recOld
-					_ = recNew
-				}
+	// 交替 10 轮：每次先 Store 确定快照，再断言两个 Key 的鉴权结果与该快照一致。
+	for i := 0; i < 10; i++ {
+		if i%2 == 0 {
+			live.Store(livecfg.Snapshot{AuthIndex: oldIdx})
+			// 旧快照：旧 Key 放行，新 Key 401
+			if rec := doChat(t, h, "Bearer sk-old", `{"model":"m","messages":[]}`); rec.Code != 200 {
+				t.Fatalf("旧快照下旧 Key 应 200，got %d", rec.Code)
 			}
-		}()
-	}
-	// 写线程：交替 Store 新旧快照
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		for i := 0; i < 100; i++ {
-			if i%2 == 0 {
-				live.Store(livecfg.Snapshot{AuthIndex: oldIdx})
-			} else {
-				live.Store(livecfg.Snapshot{AuthIndex: newIdx})
+			if rec := doChat(t, h, "Bearer sk-new", `{"model":"m","messages":[]}`); rec.Code != 401 {
+				t.Fatalf("旧快照下新 Key 应 401，got %d", rec.Code)
+			}
+		} else {
+			live.Store(livecfg.Snapshot{AuthIndex: newIdx})
+			// 新快照：新 Key 放行，旧 Key 401
+			if rec := doChat(t, h, "Bearer sk-new", `{"model":"m","messages":[]}`); rec.Code != 200 {
+				t.Fatalf("新快照下新 Key 应 200，got %d", rec.Code)
+			}
+			if rec := doChat(t, h, "Bearer sk-old", `{"model":"m","messages":[]}`); rec.Code != 401 {
+				t.Fatalf("新快照下旧 Key 应 401，got %d", rec.Code)
 			}
 		}
-		close(stop)
-	}()
-	wg.Wait()
+	}
 }
 
 func doChat(t *testing.T, h *Handler, authz, body string) *httptest.ResponseRecorder {

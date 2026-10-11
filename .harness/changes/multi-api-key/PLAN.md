@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-10-11
-status: ADR-001 已通过，进入任务拆分
+status: 实现完成，最终审查已过（4 阻断项已修复），待合并
 owner: YG
 modification_level: L3（架构 / 数据模型 / 鉴权链路承重墙）
 complexity: C 耦合（鉴权 + 存储 + 面板 + 派发，跨模块责任）

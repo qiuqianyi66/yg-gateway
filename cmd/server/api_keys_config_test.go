@@ -60,14 +60,11 @@ func TestAPIKeysExplicitEmptyFailsFast(t *testing.T) {
 	}
 }
 
-// TestAPIKeysNullTreatedAsMissing null 与键缺失同语义（都是「没配多 Key」）。
-func TestAPIKeysNullTreatedAsMissing(t *testing.T) {
-	c, err := loadWith(`{"api_key":"k","api_keys":null}`, t)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if c.APIKeys != nil {
-		t.Fatalf("api_keys:null 应视同缺失（nil），got %#v", c.APIKeys)
+// TestAPIKeysNullFailsFast 显式 null 按 PRD/ADR 契约 fail fast（阻断项 4）。
+// 与「键缺失」区分：null 是显式配置错误，不是旧版兼容。
+func TestAPIKeysNullFailsFast(t *testing.T) {
+	if _, err := loadWith(`{"api_key":"k","api_keys":null}`, t); err == nil {
+		t.Fatal("显式 api_keys:null 应 fail fast（契约：null 是配置错误，不是键缺失）")
 	}
 }
 
@@ -182,5 +179,32 @@ func TestAPIKeysSingleAndMultiCoexist(t *testing.T) {
 	}
 	if len(c.APIKeys) != 1 || c.APIKeys[0].Key != "sk-multi" {
 		t.Fatalf("api_keys=%#v want [sk-multi]", c.APIKeys)
+	}
+}
+
+// TestAPIKeysReservedID 保留名 "single"（旧单 api_key 合成身份）不能作为用户 id（🟡 审查项）。
+func TestAPIKeysReservedID(t *testing.T) {
+	body := `{"api_keys":[` + apiKeyEntry("single", "sk-a", "", "", "") + `]}`
+	if _, err := loadWith(body, t); err == nil {
+		t.Fatal("保留 id \"single\" 应 fail fast（与旧单 api_key 合成身份冲突）")
+	}
+}
+
+// TestAPIKeysDuplicateKeyFailsFast 重复密钥 fail fast（阻断项 1）：
+// 同一密钥值出现在两条多 Key 之间，或出现在单 api_key 与多 Key 之间，都会让 Match
+// 命中第一把 Key 而绕过另一把的 models/realm 约束，必须在配置层拒绝。
+func TestAPIKeysDuplicateKeyFailsFast(t *testing.T) {
+	// 两条多 Key 重复
+	body1 := `{"api_keys":[` +
+		apiKeyEntry("k1", "sk-dup", "", "", `["m1"]`) + `,` +
+		apiKeyEntry("k2", "sk-dup", "", "", `["m2"]`) + `]}`
+	if _, err := loadWith(body1, t); err == nil {
+		t.Fatal("两条多 Key 使用同一密钥值应 fail fast")
+	}
+
+	// 单 api_key 与多 Key 重复
+	body2 := `{"api_key":"sk-dup", "api_keys":[` + apiKeyEntry("k1", "sk-dup", "", "", `["m1"]`) + `]}`
+	if _, err := loadWith(body2, t); err == nil {
+		t.Fatal("单 api_key 与多 Key 使用同一密钥值应 fail fast")
 	}
 }
