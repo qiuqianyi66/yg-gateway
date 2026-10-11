@@ -582,6 +582,10 @@ func buildAuthSnapshot(c *Config) livecfg.Snapshot {
 		keys = append(keys, httpauth.Key{ID: httpauth.SingleKeyID, Digest: sum[:]})
 	}
 	for _, k := range c.APIKeys {
+		// Enabled=nil/true=启用；false=禁用（不进索引，但保留在 config.json 里以便面板管理）
+		if k.Enabled != nil && !*k.Enabled {
+			continue
+		}
 		sum := sha256.Sum256([]byte(k.Key))
 		keys = append(keys, httpauth.Key{
 			ID:     k.ID,
