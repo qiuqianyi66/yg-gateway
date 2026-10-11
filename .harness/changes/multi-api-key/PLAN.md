@@ -1,11 +1,12 @@
 ---
 last_updated: 2026-10-11
-status: 阶段1完成，等拍板 D-200~D-205
+status: ADR-001 已通过，进入任务拆分
 owner: YG
 modification_level: L3（架构 / 数据模型 / 鉴权链路承重墙）
 complexity: C 耦合（鉴权 + 存储 + 面板 + 派发，跨模块责任）
 prd: docs/prd/REQ-yg-gateway-multi-api-key-2026-10-11.md
 research: docs/reference/multi-key-competitive-notes.md
+adr: docs/adr/ADR-001-multi-api-key.md
 ---
 
 # 多 API Key 派发 — 执行计划（PLAN 级）
