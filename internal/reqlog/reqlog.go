@@ -84,6 +84,10 @@ type Event struct {
 	CacheMissTokens int64 `json:"cache_miss_tokens,omitempty"`
 	ClientIP         string    `json:"client_ip,omitempty"`
 	UserAgent        string    `json:"user_agent,omitempty"`
+	// KeyID / KeyName 鉴权命中的下游 Key 身份（多 Key 派发归因，ADR-001 F-005）。
+	// 只存短稳定 id 与展示名，不存 Key 明文、不存 Authorization 原文（R1/R2）。
+	KeyID   string `json:"key_id,omitempty"`
+	KeyName string `json:"key_name,omitempty"`
 }
 
 // Filter 用于从归档中筛选最近记录。字符串字段一律「包含」匹配（大小写不敏感），

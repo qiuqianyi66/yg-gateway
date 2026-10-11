@@ -15,6 +15,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"yg-gateway/internal/httpauth"
 	"yg-gateway/internal/logfmt"
 	"yg-gateway/internal/pool"
 	"yg-gateway/internal/reqlog"
@@ -348,6 +349,19 @@ type requestTrace struct {
 	// 调用来源，进入 handler 时一次性采集（见 ServeHTTP / captureClientInfo）。
 	clientIP  string
 	userAgent string
+	// 鉴权命中的下游 Key 身份（多 Key 派发归因，ADR-001 F-005）。
+	// 只存 id/name，不存明文（R1）。
+	keyID   string
+	keyName string
+}
+
+// setKey 记录鉴权命中的 Key 身份（不含明文）。
+func (t *requestTrace) setKey(k *httpauth.Key) {
+	if t == nil || k == nil {
+		return
+	}
+	t.keyID = k.ID
+	t.keyName = k.Name
 }
 
 // captureClientInfo 采集调用来源（客户端 IP + 截断后的 UA）。开关关闭时保持空串：
@@ -426,6 +440,8 @@ func (t *requestTrace) event(status int) reqlog.Event {
 	}
 	e.ClientIP = t.clientIP
 	e.UserAgent = t.userAgent
+	e.KeyID = t.keyID
+	e.KeyName = t.keyName
 	if e.Outcome == "" {
 		if status >= 200 && status < 300 {
 			e.Outcome = reqlog.OutcomeSuccess

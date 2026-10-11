@@ -21,6 +21,7 @@ import (
 	"yg-gateway/internal/pool"
 	"yg-gateway/internal/prompt"
 	"yg-gateway/internal/redisstore"
+	"yg-gateway/internal/reqlog"
 	"yg-gateway/internal/session"
 	"yg-gateway/internal/upstream"
 	"yg-gateway/internal/usage"
@@ -1118,6 +1119,50 @@ func TestMultiKeyAuth(t *testing.T) {
 func sha256Of(s string) []byte {
 	sum := sha256.Sum256([]byte(s))
 	return sum[:]
+}
+
+// TestKeyIdentityInRequestLog 鉴权命中的 Key 身份写入请求日志（key_id/key_name），
+// 且不泄漏 Key 明文、不泄漏 Authorization 原文（ADR-001 F-005 / R1/R2）。
+func TestKeyIdentityInRequestLog(t *testing.T) {
+	sum := sha256Of("sk-secret-key-value")
+	idx := httpauth.BuildIndex([]httpauth.Key{
+		{ID: "user-001", Name: "小明", Digest: sum},
+	})
+	live := livecfg.New(livecfg.Snapshot{AuthIndex: idx})
+	reqLog := reqlog.New(reqlog.Config{})
+	h := NewHandler(Config{
+		Pool:       testPoolWith(&auth.Auth{UID: "u1", AccessToken: "at", ExpiresAt: 9999999999}),
+		Upstream:   upstream.New(),
+		Live:       live,
+		RequestLog: reqLog,
+	})
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("POST", "/v1/chat/completions",
+		strings.NewReader(`{"model":"glm-5.2","messages":[]}`))
+	req.Header.Set("Authorization", "Bearer sk-secret-key-value")
+	h.ServeHTTP(rec, req)
+
+	snap := reqLog.Snapshot()
+	if len(snap.Recent) != 1 {
+		t.Fatalf("应记录 1 条请求，got %d", len(snap.Recent))
+	}
+	ev := snap.Recent[0]
+	if ev.KeyID != "user-001" {
+		t.Errorf("key_id=%q want user-001", ev.KeyID)
+	}
+	if ev.KeyName != "小明" {
+		t.Errorf("key_name=%q want 小明", ev.KeyName)
+	}
+	// 脱敏：归档里不得出现 Key 明文或 Authorization 原文
+	if strings.Contains(rec.Body.String(), "sk-secret-key-value") {
+		t.Error("响应不应泄漏 Key 明文")
+	}
+	// 请求日志 Event 序列化后也不得含明文（Event 只有 id/name 字段）
+	b, _ := json.Marshal(ev)
+	if strings.Contains(string(b), "sk-secret-key-value") {
+		t.Errorf("归档事件泄漏 Key 明文: %s", b)
+	}
 }
 
 func TestStatusEndpoint(t *testing.T) {
