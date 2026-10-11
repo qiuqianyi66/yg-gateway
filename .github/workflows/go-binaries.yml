@@ -49,6 +49,21 @@ jobs:
           go install golang.org/x/vuln/cmd/govulncheck@latest
           "$(go env GOPATH)/bin/govulncheck" ./...
 
+  # 竞态检测：Linux runner 自带 gcc，启用 CGO 跑 -race（Windows 本地开发环境无 gcc，
+  # 无法跑 -race，故数据竞争检测放到 CI）。独立 job 与 test 并行，不污染普通测试的
+  # CGO_ENABLED=0 口径（普通测试不依赖 cgo，race 需要 cgo 的 race runtime）。
+  race:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: 竞态检测（-race）
+        env:
+          CGO_ENABLED: "1"
+        run: go test -race ./...
+
   build:
     needs: test
     runs-on: ubuntu-latest
