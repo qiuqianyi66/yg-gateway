@@ -116,6 +116,11 @@ func digest(s string) []byte {
 //     非空 = 用 VerifyBearer 校验单 Key。
 //   - 单 Key 命中返回一个合成 Key（ID="single"，不携带明文）。
 //
+// 前置条件：index 非空时，调用方应已把 singleKey 作为合成条目（ID="single"）纳入
+// index（见 cmd/server/main.go 的 buildAuthSnapshot）。本函数在 index 未命中且
+// singleKey 非空时**额外兜底**一次 VerifyBearer——这只在调用方漏纳单 Key 时才触发，
+// 正常路径零开销（index 命中即返回）。
+//
 // 返回 (nil, false) = 鉴权失败（调用方回 401）；(nil, true) = 未启用鉴权（放行）。
 // 返回 (key, true) = 命中某把 Key（key 不含明文，只含 id/name/约束）。
 func Authenticate(r *http.Request, index *Index, singleKey string) (*Key, bool) {
@@ -123,8 +128,11 @@ func Authenticate(r *http.Request, index *Index, singleKey string) (*Key, bool) 
 		if k, ok := index.Match(r); ok {
 			return k, true
 		}
-		// 多 Key 索引存在但未命中：不再回退单 Key（单 Key 也应纳入索引）。
-		// 这里返回失败，由调用方回 401。
+		// index 未命中：兜底单 Key（若调用方漏纳单 Key 到索引）。正常路径 index
+		// 已含单 Key，这里只在异常装配下触发一次额外的 VerifyBearer（零分配）。
+		if singleKey != "" && VerifyBearer(r, singleKey) {
+			return &Key{ID: "single", Digest: digest(singleKey)}, true
+		}
 		return nil, false
 	}
 	// 无多 Key：单 Key 兼容路径。

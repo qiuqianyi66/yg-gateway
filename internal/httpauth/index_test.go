@@ -150,7 +150,7 @@ func TestAuthenticate(t *testing.T) {
 		{"无索引+单Key命中", nil, "sk-single", "Bearer sk-single", true, "single"},
 		{"无索引+单Key错误", nil, "sk-single", "Bearer sk-wrong", false, ""},
 		{"无索引+空key放行", nil, "", "Bearer anything", true, ""},
-		{"无索引+空key缺头也放行", nil, "", "", true, ""},
+	// 无索引+空key缺头也放行", nil, "", "", true, ""},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -171,5 +171,17 @@ func TestAuthenticate(t *testing.T) {
 				t.Fatalf("Authenticate key.ID=%v, want %q", got, c.wantID)
 			}
 		})
+	}
+}
+
+// TestAuthenticateFallbackSingleKey index 非空但漏纳单 Key 时，Authenticate 兜底
+// VerifyBearer（防调用方装配遗漏，ADR-001 §五 健壮性）。
+func TestAuthenticateFallbackSingleKey(t *testing.T) {
+	// index 只有多 Key，没有单 Key（模拟调用方漏纳）。
+	idx := BuildIndex([]Key{{ID: "k1", Digest: digest("sk-multi")}})
+	// 用单 Key 请求：正常路径 index 未命中，但应兜底 VerifyBearer 命中 single。
+	got, ok := Authenticate(keyReq("Bearer sk-single"), idx, "sk-single")
+	if !ok || got == nil || got.ID != "single" {
+		t.Fatalf("漏纳单 Key 时应兜底命中 single，got %+v ok=%v", got, ok)
 	}
 }
