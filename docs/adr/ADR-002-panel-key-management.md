@@ -1,7 +1,7 @@
 # ADR-002：面板 Key 管理页架构决策
 
 > 日期：2026-10-11
-> 状态：已决策
+> 状态：已交付（卡片+弹窗风格，已合并 main）
 > 依赖：ADR-001（多 API Key 鉴权，一期已交付）
 > PRD：`docs/prd/REQ-yg-gateway-panel-key-management-2026-10-11.md`
 

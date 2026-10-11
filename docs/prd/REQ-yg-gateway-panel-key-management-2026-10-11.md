@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-10-11
-status: 待确认
+status: 已完成（卡片+弹窗风格，已合并 main）
 owner: YG
 modification_level: L1（前端 + go:embed 重编译，零后端新增接口）
 complexity: A 耦合（仅面板前端，复用一期后端能力）
