@@ -12,7 +12,7 @@ import (
 func TestCheckKeyConstraintsNilKey(t *testing.T) {
 	h := &Handler{}
 	// nil key = 未启用鉴权，无约束，恒放行。
-	if code, _ := h.checkKeyConstraints(nil, "any", "cn", "any"); code != "" {
+	if code, _ := h.checkKeyConstraints(nil, "any", "cn", "any", "string"); code != "" {
 		t.Fatalf("nil key 应放行，got code=%q", code)
 	}
 }
@@ -20,10 +20,10 @@ func TestCheckKeyConstraintsNilKey(t *testing.T) {
 func TestCheckKeyConstraintsRealm(t *testing.T) {
 	h := &Handler{}
 	cases := []struct {
-		name      string
-		keyRealm  string
-		reqRealm  string
-		wantCode  string
+		name     string
+		keyRealm string
+		reqRealm string
+		wantCode string
 	}{
 		{"空 realm 不限", "", "cn", ""},
 		{"cn key + cn 请求", "cn", "cn", ""},
@@ -34,7 +34,7 @@ func TestCheckKeyConstraintsRealm(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			key := &httpauth.Key{Realm: c.keyRealm}
-			code, msg := h.checkKeyConstraints(key, "m", c.reqRealm, "m")
+			code, msg := h.checkKeyConstraints(key, "m", c.reqRealm, "m", "string")
 			if code != c.wantCode {
 				t.Fatalf("code=%q want %q (msg=%q)", code, c.wantCode, msg)
 			}
@@ -64,7 +64,7 @@ func TestCheckKeyConstraintsModels(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			key := &httpauth.Key{Models: c.models}
-			code, msg := h.checkKeyConstraints(key, c.reqModel, "cn", c.bare)
+			code, msg := h.checkKeyConstraints(key, c.reqModel, "cn", c.bare, "string")
 			if code != c.wantCode {
 				t.Fatalf("code=%q want %q (msg=%q)", code, c.wantCode, msg)
 			}
@@ -77,16 +77,45 @@ func TestCheckKeyConstraintsRealmAndModels(t *testing.T) {
 	h := &Handler{}
 	key := &httpauth.Key{Realm: "cn", Models: []string{"m"}}
 	// realm 对 + models 对 → 放行
-	if code, _ := h.checkKeyConstraints(key, "m", "cn", "m"); code != "" {
+	if code, _ := h.checkKeyConstraints(key, "m", "cn", "m", "string"); code != "" {
 		t.Fatalf("两者都满足应放行，got %q", code)
 	}
 	// realm 对 + models 错 → model_not_allowed
-	if code, _ := h.checkKeyConstraints(key, "other", "cn", "other"); code != "model_not_allowed" {
+	if code, _ := h.checkKeyConstraints(key, "other", "cn", "other", "string"); code != "model_not_allowed" {
 		t.Fatalf("models 错应 model_not_allowed，got %q", code)
 	}
 	// realm 错 + models 对 → realm_mismatch（realm 先判）
-	if code, _ := h.checkKeyConstraints(key, "m", "global", "m"); code != "realm_mismatch" {
+	if code, _ := h.checkKeyConstraints(key, "m", "global", "m", "string"); code != "realm_mismatch" {
 		t.Fatalf("realm 错应 realm_mismatch，got %q", code)
+	}
+}
+
+// TestCheckKeyConstraintsModelKind 白名单启用时，model 字段的 JSON 类型判定：
+// missing/null/空串 = 缺 model；other（数字/对象等）= 类型非法；string = 正常比对。
+func TestCheckKeyConstraintsModelKind(t *testing.T) {
+	h := &Handler{}
+	key := &httpauth.Key{Models: []string{"allowed"}}
+
+	cases := []struct {
+		name      string
+		reqModel  string
+		modelKind string
+		wantCode  string
+	}{
+		{"字符串命中", "allowed", "string", ""},
+		{"字符串未命中", "other", "string", "model_not_allowed"},
+		{"缺 model（missing）", "", "missing", "model_not_allowed"},
+		{"缺 model（null）", "", "null", "model_not_allowed"},
+		{"缺 model（空串）", "", "string", "model_not_allowed"},
+		{"类型非法（数字）", "", "other", "model_not_allowed"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			code, msg := h.checkKeyConstraints(key, c.reqModel, "cn", c.reqModel, c.modelKind)
+			if code != c.wantCode {
+				t.Fatalf("code=%q want %q (msg=%q)", code, c.wantCode, msg)
+			}
+		})
 	}
 }
 

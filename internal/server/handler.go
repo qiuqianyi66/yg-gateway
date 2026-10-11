@@ -231,11 +231,32 @@ func (h *Handler) authenticate(r *http.Request) (*httpauth.Key, bool) {
 	return httpauth.Authenticate(r, live.AuthIndex, live.APIKey)
 }
 
+// modelKindOf 判定 model 字段的 JSON 类型，用于约束校验时区分「缺 model」与「model 类型非法」。
+// 返回：missing（字段缺失）/ null / string / other（数字、布尔、对象、数组等非字符串）。
+func modelKindOf(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return "missing"
+	}
+	b := raw[0]
+	switch b {
+	case 'n':
+		return "null"
+	case '"':
+		return "string"
+	default:
+		return "other"
+	}
+}
+
 // checkKeyConstraints 校验命中的 Key 的 realm / models 约束（ADR-001 §五）。
 //
 // 在鉴权后、选号前执行：被拒请求零上游消耗。返回空串 = 放行；非空 = 错误码
 // （realm_mismatch / model_not_allowed）。错误不泄漏 Key 身份（防探测存活 Key）。
-func (h *Handler) checkKeyConstraints(key *httpauth.Key, reqModel, realm, bareModel string) (code, msg string) {
+//
+// modelKind 区分 model 字段的 JSON 类型（missing/null/string/other），用于白名单启用时
+// 精确报错：缺失/空串报「缺 model」，数字/对象等报「model 类型非法」，避免把类型错误
+// 误报成缺 model（T6 收尾）。
+func (h *Handler) checkKeyConstraints(key *httpauth.Key, reqModel, realm, bareModel, modelKind string) (code, msg string) {
 	if key == nil {
 		return "", "" // 未启用鉴权，无约束
 	}
@@ -259,8 +280,11 @@ func (h *Handler) checkKeyConstraints(key *httpauth.Key, reqModel, realm, bareMo
 	if len(key.Models) == 0 {
 		return "model_not_allowed", "该密钥未开放任何模型"
 	}
-	// 请求缺 model / 非字符串 / 空：若配了白名单，不能因缺 model 跳过检查（对齐 manager）。
-	if reqModel == "" {
+	// 白名单启用时，model 必须是合法字符串（缺 model / 类型非法都不能跳过检查，对齐 manager）。
+	if modelKind == "other" {
+		return "model_not_allowed", "model 字段类型非法（必须是字符串）"
+	}
+	if modelKind == "missing" || modelKind == "null" || reqModel == "" {
 		return "model_not_allowed", "该密钥启用了模型白名单，请求必须指定 model"
 	}
 	for _, m := range key.Models {
@@ -654,6 +678,15 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = json.Unmarshal(body, &peek)
 
+	// model 字段的原始类型判定（T6 收尾，ADR-001 §五）。json.Unmarshal 会把非字符串
+	// model（数字/布尔/对象/数组）静默置为 ""（零值），与「显式 null/缺失」无法区分。
+	// 这里用 RawMessage 单独捕获原始字节，区分四种情况：缺失、null、字符串、其他类型。
+	var modelRaw struct {
+		Model json.RawMessage `json:"model"`
+	}
+	_ = json.Unmarshal(body, &modelRaw)
+	modelKind := modelKindOf(modelRaw.Model) // "missing" / "null" / "string" / "other"
+
 	// 工具名名单：上游在没有 tools 的请求里会把工具调用吐成原生标记文本
 	// （见 upstream/dsml.go），修复层用它做严格判定。名单来自「本请求声明的 tools」
 	// 与「会话历史里出现过的工具名」两个来源——实测 tools 声明会在中转环节丢失，
@@ -673,7 +706,7 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	// 多 Key 约束校验（T6）：鉴权命中的 Key 的 realm / models 白名单，在选号/出站
 	// 之前执行（ADR-001 §五）。不符合即 400，零上游消耗。
 	if key := authKeyFrom(r); key != nil {
-		if code, msg := h.checkKeyConstraints(key, peek.Model, realm, bareModel); code != "" {
+		if code, msg := h.checkKeyConstraints(key, peek.Model, realm, bareModel, modelKind); code != "" {
 			writeOpenAIError(w, http.StatusBadRequest, code, msg)
 			return
 		}

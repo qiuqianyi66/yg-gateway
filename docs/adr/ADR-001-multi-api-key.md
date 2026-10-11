@@ -114,6 +114,16 @@ YG Gateway 2.0.0 是单 `api_key` 鉴权：`httpauth.VerifyBearer(r, key string)
    请求缺 model 且 Key 配了 models → 400（不能因缺 model 跳过白名单）。
 5. **上下文**：请求上下文只存 `key_id`/`key_name`，不存 Key 明文。
 
+### 身份传递不变量（设计约束，后续改动必须遵守）
+
+- **`authKeyKey`（handler.go 的 context 键）是 realm/models 约束校验的唯一身份来源**。
+- **`requestTrace`（logging.go）只负责请求日志归因**，只存 `keyID`/`keyName` 两个字段，
+  **不持有完整 `*httpauth.Key`**（避免重复持有含摘要的对象）。
+- **两者必须来自 `withAuth` 中同一次 `authenticate(r)` 的返回值**，禁止在约束校验或
+  归因处重新调用 `authenticate`/`Match`。
+- 后续若调整鉴权链路，必须保持「授权身份」与「日志归因」一致；任何新增身份来源
+  都必须回到同一次匹配结果，禁止引入第二次匹配。
+
 ---
 
 ## 六、并发与热更新契约
