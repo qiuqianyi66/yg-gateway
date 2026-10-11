@@ -1,8 +1,6 @@
 # YG Gateway
 
-自托管的 **OpenAI 兼容反向代理网关**：把腾讯 CodeBuddy 账号池包装成统一的 `/v1/chat/completions` 服务，附带 Web 管理面板与全自动养号。
-
-本项目从 [linguo2625469/workbuddy2api-panel](https://github.com/linguo2625469/workbuddy2api-panel) v1.13.0 独立而来，此后自行演进、不再跟随上游。原始项目链：`Sliverkiss/workbuddy2api`（已删库）→ `linguo2625469/workbuddy2api-panel` → 本仓库。MIT 协议，版权声明见 [LICENSE](LICENSE)。
+自托管的 **OpenAI 兼容反向代理网关**：把腾讯 CodeBuddy 账号池包装成统一的 `/v1/chat/completions` 服务，附带 Web 管理面板与全自动养号。MIT 协议，版权声明见 [LICENSE](LICENSE)。
 
 ---
 
@@ -21,30 +19,7 @@
 
 ---
 
-## 与上游的关系
-
-| | 说明 |
-|---|---|
-| **继承了什么** | 全部底层能力：账号池调度、错误分类、提示词体系、出站指纹、成长任务逆向、面板本体 |
-| **改了什么** | module 名、产品身份标识、版本号起点、构建工具链、部署命名 |
-| **没改什么** | 上游协议数据（`wb2api-<ms>` 形式的 conversationId、`chatcmpl-wb2api` 哨兵）——它们是发给上游的报文内容，改名无收益且有风控风险 |
-| **是否同步上游** | 不再自动同步。上游有价值的修复会手工挑选合入 |
-
-### 独立化改动清单
-
-| 类别 | 改前 | 改后 |
-|---|---|---|
-| Go module | `github.com/linguo2625469/workbuddy2api-panel` | `yg-gateway` |
-| `/healthz` service 字段 · `X-Service` 头 | `workbuddy2api` | `yg-gateway` |
-| 启动日志前缀 | `workbuddy2api listening on ...` | `yg-gateway listening on ...` |
-| 面板标题 / 品牌 | `WorkBuddy2API · 控制台` | `YG Gateway · 控制台` |
-| 版本号起点 | `1.13.0-panel` | `2.0.0` |
-| 二进制名 | `wb2api[.exe]` | `yg-gateway[.exe]` |
-| 容器名 | `workbuddy2api` | `yg-gateway` |
-| Redis key 前缀 | `wb2api:` | `yg-gateway:` |
-| 面板 localStorage key | `wb2api.key` / `wb2api.theme` | `yg-gateway.key` / `yg-gateway.theme` |
-| Go 构建版本 | 1.22.5（含 9 个标准库漏洞） | **1.27.2**（`govulncheck` 零告警） |
-| 到期提醒卡片 | 初始 `hidden` + 仅点「检查」才渲染 → 死锁不可达 | 默认可见 + overview 快照即时渲染（零上游请求） |
+## 构建要求
 
 > **Go 版本不是小事**：1.27.0 及更早带 9 个标准库漏洞（GO-2026-6603/6605/6607/6608/6610-6613/6617，覆盖 `net/http`、HTTP/2 实现与 `crypto/tls`），修复版本正是 1.27.2。对一个整天发 HTTPS 出站请求的网关，这处在最要害的位置。**构建必须 ≥1.27.2。**
 
@@ -162,7 +137,7 @@ go run golang.org/x/vuln/cmd/govulncheck@latest ./...
 | 成长任务 | 17/18 个任务纯 API 一键完成，新号一轮约 +1950 积分 +78 能量 |
 | 积分保底 | `pool.credit_floor` 防止收费模型把余额打穿 |
 | 提示词体系 | 网关提示词替换客户端 system，从源头消灭内容审核误报；`passthrough` 遇拦截自动降级重试 |
-| 原生工具调用还原 | DeepSeek 系标记文本还原为结构化 `tool_calls`（上游 PR #123） |
+| 原生工具调用还原 | DeepSeek 系标记文本还原为结构化 `tool_calls` |
 | 面板 | 七视图：账号池 / 用量 / 积分构成 / 任务中心 / 模型档位 / 配置（热生效）/ 运行日志 |
 
 ---

@@ -13,7 +13,6 @@ GitHub 上「把腾讯 WorkBuddy / CodeBuddy 账号变成 OpenAI 兼容 API」�
 |---|---|---|---|---|
 | [ithtelab/workbuddy-manager](https://github.com/ithtelab/workbuddy-manager) | Python + Next.js | 486 commits / 83 tags / 2124 测试 | **B 端生产级派发平台** | 多上游级联、密钥分组、IP/模型白名单、SQLite、签名一键更新、五语种 i18n |
 | [ardeyouxipianyi/workbuddy2api-hub](https://github.com/ardeyouxipianyi/workbuddy2api-hub) | Python | 526 commits / 54 tags / 119 测试套件 | **功能密度最高的网关** | OpenRouter 费率折算、增量用量聚合、keepalive 池、剩余用量优先调度 |
-| [linguo2625469/workbuddy2api-panel](https://github.com/linguo2625469/workbuddy2api-panel) | Go | 205 commits / 31 tags | **YG Gateway 的直接上游** | 账号池调度 + 面板 + 成长任务一键完成 |
 | [KaiXuanSama/ARP](https://github.com/KaiXuanSama/ARP) | Java (Spring Boot) | 119 commits / 6 tags | 轻量网关 | OpenAI + Anthropic 双协议、扫码登录、GPLv3 |
 | [motiful/cc-gateway](https://github.com/motiful/cc-gateway) | Go | — | Anthropic 身份网关（Claude 生态） | 多机共享单身份、OAuth 自动刷新 |
 | **YG Gateway（本项目）** | **Go** | 起步 | 单机自用 → 开源 | 见下文 |
