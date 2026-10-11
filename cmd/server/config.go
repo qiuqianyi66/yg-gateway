@@ -713,7 +713,7 @@ func (c *Config) normalizeAPIKeys() error {
 		return fmt.Errorf("api_keys: 显式空数组；要关闭多 Key 请删除该键（回到单 api_key），而不是配空数组")
 	}
 	seenID := map[string]bool{}
-	seenKey := map[string]string{} // 明文 key → id（重复检测）
+	seenKey := map[string]string{}                      // 明文 key → id（重复检测）
 	filtered := make([]APIKeyConfig, 0, len(c.APIKeys)) // 新切片：append 不污染 c.APIKeys 底层数组
 	for _, k := range c.APIKeys {
 		key := strings.TrimSpace(k.Key)

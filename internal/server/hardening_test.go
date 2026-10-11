@@ -136,7 +136,7 @@ func TestReadOnlyRateLimitResetsAfterWindow(t *testing.T) {
 func TestHealthzNotRateLimited(t *testing.T) {
 	p := testPoolWith(&auth.Auth{UID: "u1", AccessToken: "at1", ExpiresAt: 9999999999})
 	h := NewHandler(Config{
-		Pool: p,
+		Pool:              p,
 		ReadOnlyRateLimit: &ReadOnlyRateLimit{Limit: 1, Window: time.Minute},
 	})
 	for i := 0; i < 5; i++ {

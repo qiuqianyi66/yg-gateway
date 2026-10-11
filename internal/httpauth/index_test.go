@@ -150,7 +150,7 @@ func TestAuthenticate(t *testing.T) {
 		{"无索引+单Key命中", nil, "sk-single", "Bearer sk-single", true, "single"},
 		{"无索引+单Key错误", nil, "sk-single", "Bearer sk-wrong", false, ""},
 		{"无索引+空key放行", nil, "", "Bearer anything", true, ""},
-	// 无索引+空key缺头也放行", nil, "", "", true, ""},
+		// 无索引+空key缺头也放行", nil, "", "", true, ""},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
