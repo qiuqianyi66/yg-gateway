@@ -7,6 +7,10 @@ import (
 	"strings"
 )
 
+// SingleKeyID 单 Key（api_key 兼容）合成条目的身份 ID。
+// buildAuthSnapshot 与 Authenticate 兜底路径都用它，保持身份一致（不散落魔数）。
+const SingleKeyID = "single"
+
 // Key 多 Key 鉴权的一把密钥（运行时形态，不含明文）。
 //
 // 明文只在 config.json 的 api_keys[].key 里，BuildIndex 时转成 Digest 摘要；
@@ -131,7 +135,7 @@ func Authenticate(r *http.Request, index *Index, singleKey string) (*Key, bool) 
 		// index 未命中：兜底单 Key（若调用方漏纳单 Key 到索引）。正常路径 index
 		// 已含单 Key，这里只在异常装配下触发一次额外的 VerifyBearer（零分配）。
 		if singleKey != "" && VerifyBearer(r, singleKey) {
-			return &Key{ID: "single", Digest: digest(singleKey)}, true
+			return &Key{ID: SingleKeyID, Digest: digest(singleKey)}, true
 		}
 		return nil, false
 	}
@@ -140,7 +144,7 @@ func Authenticate(r *http.Request, index *Index, singleKey string) (*Key, bool) 
 		return nil, true // 未启用鉴权，放行
 	}
 	if VerifyBearer(r, singleKey) {
-		return &Key{ID: "single", Digest: digest(singleKey)}, true
+		return &Key{ID: SingleKeyID, Digest: digest(singleKey)}, true
 	}
 	return nil, false
 }
