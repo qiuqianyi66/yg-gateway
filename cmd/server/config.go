@@ -18,9 +18,14 @@ import (
 // Config 顶层配置。
 type Config struct {
 	Listen    string `json:"listen"`     // ":7863"
-	APIKey    string `json:"api_key"`    // 空 = 不鉴权
+	APIKey    string `json:"api_key"`    // 空 = 不鉴权（单 Key 兼容）
 	AuthDir   string `json:"auth_dir"`   // ./auths
 	StateFile string `json:"state_file"` // ./data/state.json
+
+	// APIKeys 多 Key 鉴权（ADR-001）。nil = 键缺失/null（旧版兼容，单 Key 语义）；
+	// 非 nil 空切片 = 显式空数组（配置错误，normalize fail fast）。
+	// 每个条目的 Key 明文只在配置源；运行时索引只存摘要（见 httpauth.Index）。
+	APIKeys []APIKeyConfig `json:"api_keys"`
 
 	Panel struct {
 		// PackageDetailLimit 积分构成页单账号默认展示的最近到期包数；<=0 回落 5。
@@ -192,7 +197,6 @@ type Config struct {
 
 	// PromptText 解析后的系统提示词文本（custom/append 模式使用）。
 	PromptText string `json:"-"`
-
 	Upstash struct {
 		URL   string `json:"url"`   // 空 = 纯内存模式；支持完整 rediss:// URL 或 https://xxx.upstash.io host
 		Token string `json:"token"` // url 非完整连接串时用于组装 rediss://default:<token>@<host>:6379
@@ -259,6 +263,22 @@ type Config struct {
 	// MaxBodyBytesEffective 解析后的 body 上限（F-001）：nil（未配置）回落默认 64MB，
 	// 显式 0 = 不限（0 传给 handler 表示关闭 MaxBytesReader）。
 	MaxBodyBytesEffective int64 `json:"-"`
+}
+
+// APIKeyConfig 一把多 Key 的配置形态（ADR-001 §三）。
+//
+// Key 是明文（配置源手填）；运行时转摘要（httpauth.BuildIndex）。Models 三态
+// 语义靠 Go slice 的 nil 区分（见 PRD v2 §三）：
+//
+//	nil（键缺失/null）      = 不限
+//	非 nil 空切片（显式 []） = 全拒
+//	非空                     = 白名单
+type APIKeyConfig struct {
+	ID     string   `json:"id"`     // 稳定身份标识，必填，[A-Za-z0-9_-] ≤64，不重复
+	Key    string   `json:"key"`    // 明文 Key；空条目 normalize 忽略
+	Name   string   `json:"name"`   // 展示名（可空）
+	Models []string `json:"models"` // 三态模型白名单
+	Realm  string   `json:"realm"`  // cn/global/空=不限；其他值 fail fast
 }
 
 // Default 默认配置。
@@ -484,6 +504,9 @@ func applyEnv(c *Config) {
 
 func (c *Config) normalize() error {
 	var err error
+	if err := c.normalizeAPIKeys(); err != nil {
+		return err
+	}
 	if c.Panel.PackageDetailLimit <= 0 {
 		c.Panel.PackageDetailLimit = 5
 	}
@@ -650,6 +673,66 @@ func (c *Config) normalize() error {
 		return err
 	}
 	return c.normalizePrompt()
+}
+
+// normalizeAPIKeys 校验并归一化多 Key 配置（ADR-001 §四 空值语义 + §五 约束）。
+//
+// 空值语义（靠 Go slice 的 nil 区分，无需自定义反序列化）：
+//
+//	APIKeys == nil          → 键缺失/null（旧版兼容，跳过校验）
+//	APIKeys != nil && len 0 → 显式 []，配置错误 fail fast
+//	过滤空 key 条目后为 0     → 全空条目，配置错误 fail fast
+func (c *Config) normalizeAPIKeys() error {
+	if c.APIKeys == nil {
+		return nil // 键缺失/null：旧版兼容，无多 Key
+	}
+	if len(c.APIKeys) == 0 {
+		return fmt.Errorf("api_keys: 显式空数组；要关闭多 Key 请删除该键（回到单 api_key），而不是配空数组")
+	}
+	seenID := map[string]bool{}
+	filtered := c.APIKeys[:0:0] // 新切片，避免复用底层数组影响原始输入
+	for _, k := range c.APIKeys {
+		if strings.TrimSpace(k.Key) == "" {
+			continue // 空 key 条目忽略
+		}
+		id := strings.TrimSpace(k.ID)
+		if id == "" {
+			return fmt.Errorf("api_keys[%s]: id 不能为空", k.ID)
+		}
+		if !validKeyID(id) {
+			return fmt.Errorf("api_keys[%s]: id 仅允许 [A-Za-z0-9_-] 且 ≤64 字符", id)
+		}
+		if seenID[id] {
+			return fmt.Errorf("api_keys: id %q 重复（id 是稳定归因键，必须唯一）", id)
+		}
+		seenID[id] = true
+		if r := strings.ToLower(strings.TrimSpace(k.Realm)); r != "" && r != "cn" && r != "global" {
+			return fmt.Errorf("api_keys[%s]: realm %q 不是合法值（cn / global / 空）", id, k.Realm)
+		}
+		k.ID = id
+		k.Realm = strings.ToLower(strings.TrimSpace(k.Realm))
+		filtered = append(filtered, k)
+	}
+	if len(filtered) == 0 {
+		return fmt.Errorf("api_keys: 没有有效条目（key 全为空）；要么提供至少一把有效 Key，要么删除该键")
+	}
+	c.APIKeys = filtered
+	return nil
+}
+
+// validKeyID 校验 id 白名单（R4）：[A-Za-z0-9_-] 且 ≤64。
+func validKeyID(id string) bool {
+	if len(id) == 0 || len(id) > 64 {
+		return false
+	}
+	for i := 0; i < len(id); i++ {
+		b := id[i]
+		if (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9') || b == '_' || b == '-' {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 // normalizePrompt 校验 prompt.mode 并按 file 加载提示词文本（custom/append 模式）。
