@@ -302,20 +302,22 @@ func main() {
 	server.SetChatLogOutput(io.MultiWriter(os.Stdout, pn.Logs()))
 
 	h := server.NewHandler(server.Config{
-		Pool:         p,
-		Upstream:     up,
-		APIKey:       cfg.APIKey,
-		Session:      sessRouter,
-		StickyCount:  sessCount,
-		RedisMode:    redisMode,
-		SoftCooldown: cfg.SoftRateDur,
-		Panel:        pn,
-		Live:         live,
-		Usage:        rec,
-		Latency:      latencyReg,
-		RequestLog:   requestLog,
-		PromptMode:   cfg.Prompt.Mode,
-		PromptText:   cfg.PromptText,
+		Pool:     p,
+		Upstream: up,
+		APIKey:   cfg.APIKey,
+		Session:  sessRouter,
+		// 内容派生会话键开关（ADR-004）：关闭后只有显式会话标识才粘性。
+		DisableSessionDerive: !cfg.SessionStickyDerive,
+		StickyCount:          sessCount,
+		RedisMode:            redisMode,
+		SoftCooldown:         cfg.SoftRateDur,
+		Panel:                pn,
+		Live:                 live,
+		Usage:                rec,
+		Latency:              latencyReg,
+		RequestLog:           requestLog,
+		PromptMode:           cfg.Prompt.Mode,
+		PromptText:           cfg.PromptText,
 		// 来源记录开关经 livecfg 热生效；此处同时填静态字段，供 Live 为 nil 的
 		// 裸用/测试路径拿到同一缺省值。
 		RecordClientInfo: cfg.Logging.RequestClientInfo,
@@ -646,6 +648,14 @@ func restartRequiredFields(c *Config) []string {
 		out = append(out, "upstash")
 	}
 	out = append(out, "session_sticky.ttl", "session_sticky.gc_interval")
+	// session_sticky.enabled 同样是装配期字段：sessRouter 只在启动时按它创建
+	// （见 main 的 session.New），运行期改它不会生效。此前漏列 → 面板保存后显示
+	// "已保存并立即生效"却不生效，用户以为开着粘性其实没开（R11 违反）。
+	out = append(out, "session_sticky.enabled")
+	// session_sticky.derive 同理：handler 在 NewHandler 时把开关复制进自己的 cfg
+	// （DisableSessionDerive），而 saveConfig 不重建 handler（只热改 live/pool/
+	// upstream/scheduler），故运行期改它不生效。
+	out = append(out, "session_sticky.derive")
 	out = append(out, "logging.request_archive_enabled", "logging.request_retention_days", "logging.request_archive_max_mb")
 	out = append(out, "server.read_timeout", "server.max_body_bytes")
 	// 入站边界加固字段在装配期被固化进 handler（body 上限 / 受信任代理匹配器 /

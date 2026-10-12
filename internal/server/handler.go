@@ -37,6 +37,12 @@ type Config struct {
 	MaxRotate int    // 单请求最多换号次数，默认 3
 	// Session 会话粘性路由器（可选；nil = 关闭粘性，纯 Pick 轮换）。
 	Session *session.Router
+	// DisableSessionDerive 关闭「内容派生会话键」回退（默认 false = 开启派生，
+	// 保持既有行为）。开启派生时，无显式会话标识的请求按
+	// SHA-256(system + 首条 user) 归组——固定 system + 短开场会把无关对话
+	// 误判为同一会话、全量钉到同一个账号（详见 session.ExtractKeyOpt）。
+	// 反向命名（Disable… 而非 Enable…）见使用处注释：保证零值不改变既有语义。
+	DisableSessionDerive bool
 	// StickyCount 返回当前粘性会话绑定数（供 /status）；nil 时报告 0。
 	StickyCount func() int
 	// RedisMode 观测字段（"upstash" / "noop"），供 /status 透出。
@@ -832,7 +838,11 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	// 会话粘性：从请求体提取会话键并解析绑定号（找不到/无效则 stickyUID 为空，走普通轮换）。
 	// ExtractKey 与粘性开关解耦（issue #35 侧）：关闭粘性时会话头族的聚合主键仍按
 	// 会话级（RequestIDForKey(sessKey)），不悄悄退化成轮级——提取本身与粘性无关。
-	sessKey := session.ExtractKey(body)
+	// extractKey 会话键：DisableSessionDerive 控制是否关闭「内容派生」回退
+	// （见 session.ExtractKeyOpt）。反向命名是为了零值安全——本包的单测大量用
+	// Config{...} 部分字面量构造，正向命名（SessionDerive bool）会因零值 false
+	// 静默关掉派生、改变既有语义。
+	sessKey := session.ExtractKeyOpt(body, !h.cfg.DisableSessionDerive)
 	stickyUID := ""
 	if h.cfg.Session != nil && sessKey != "" {
 		// 按模型解析：绑定号在**当前模型**被 6004 限额时视为不可用 → 重新分配，

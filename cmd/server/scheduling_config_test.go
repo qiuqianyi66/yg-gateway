@@ -77,3 +77,58 @@ func TestGlobalMaxInFlightConfig(t *testing.T) {
 		t.Errorf("global_max_in_flight 应为 50，got %d", c.Pool.GlobalMaxInFlight)
 	}
 }
+
+// TestSessionStickyDeriveTriState 内容派生会话键的三态（ADR-004）：
+//   - 键缺失（nil）  → true（保持既有行为，零回归）
+//   - 显式 true      → true
+//   - 显式 false     → false（关闭派生）
+//
+// 牙齿：把 normalize 改成 `c.SessionStickyDerive = c.SessionSticky.Derive != nil`
+// → 「键缺失」用例 FAIL（会变成 false，静默关闭所有部署的派生）。
+func TestSessionStickyDeriveTriState(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+		want bool
+	}{
+		{"键缺失 → 默认开", `{"api_key":"k"}`, true},
+		{"session_sticky 存在但无 derive → 默认开", `{"api_key":"k","session_sticky":{"enabled":true}}`, true},
+		{"显式 true", `{"api_key":"k","session_sticky":{"derive":true}}`, true},
+		{"显式 false", `{"api_key":"k","session_sticky":{"derive":false}}`, false},
+	}
+	for _, c := range cases {
+		cfg, err := loadWith(c.body, t)
+		if err != nil {
+			t.Fatalf("%s: 加载失败 %v", c.name, err)
+		}
+		if cfg.SessionStickyDerive != c.want {
+			t.Errorf("%s: SessionStickyDerive = %v, want %v", c.name, cfg.SessionStickyDerive, c.want)
+		}
+	}
+}
+
+// TestSessionStickyEnabledIsRestartRequired session_sticky 的装配期字段必须列入
+// 重启项（R11：热生效字段要标注清楚）。
+//
+// 背景：sessRouter 只在启动时按 enabled 创建（main 的 session.New）；derive 则在
+// NewHandler 时被复制进 handler 的 cfg，而 saveConfig 不重建 handler。两者运行期
+// 改都不生效。此前只列了 ttl/gc_interval → 面板保存后显示"已立即生效"却不生效
+// （用户以为开着粘性，其实没开）。
+func TestSessionStickyEnabledIsRestartRequired(t *testing.T) {
+	c := &Config{Listen: ":7863", AuthDir: "./auths", StateFile: "./data/state.json"}
+	fields := restartRequiredFields(c)
+	have := map[string]bool{}
+	for _, f := range fields {
+		have[f] = true
+	}
+	for _, want := range []string{
+		"session_sticky.enabled",
+		"session_sticky.derive",
+		"session_sticky.ttl",
+		"session_sticky.gc_interval",
+	} {
+		if !have[want] {
+			t.Errorf("%s 应在重启项清单里，got %v", want, fields)
+		}
+	}
+}

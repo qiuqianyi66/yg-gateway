@@ -333,6 +333,29 @@ func hashIndex(key string, n int) int {
 // 此闸，只发 user_id 的请求会借内容哈希重新获得粘性，使该契约在 fallback 路径失效
 // （上游 #169 同款回归修正）。这类客户端回落加权轮换。
 func ExtractKey(body []byte) string {
+	return ExtractKeyOpt(body, true)
+}
+
+// ExtractKeyOpt 同 ExtractKey，但可关闭「内容派生」回退（allowDerive=false）。
+//
+// 为什么需要这个开关（anti-monopoly 契约从 user_id 扩展到内容派生键）：
+// 派生键 = SHA-256(system 文本 + 首条 user 文本)。它的前提是"不同对话的
+// system + 首条 user 不重复"——但很多客户端发**固定 system 提示词**，首条 user
+// 又是短开场（"hi" / "你好" / "继续"），于是**互不相关的对话算出同一个键**，
+// 被当成"同一会话"钉到同一个账号上。
+//
+// 后果（实测复现）：
+//   - 相同 system + 相同开头连发 4 笔 → 4/4 全落同一个号（其余号空转）；
+//   - 该号若被实测为收费（成本分层 tier 2），仍会因粘性被持续选中，
+//     而「优先免费/未知」的分层逻辑在粘性路径上根本不生效——
+//     等于把池子的成本优化整个绕过。
+//
+// 关掉派生（allowDerive=false）后：只有客户端**显式**给出会话标识
+// （conversation_id / conversationId / prompt_cache_key）才粘性——那是客户端的
+// 明确声明，可信；无标识的请求回落纯加权轮换（真正打散流量）。
+// 代价：无会话标识的多轮对话失去上游 prompt 缓存复用（该客户端本就在
+// "被误判为同一会话"和"没有缓存复用"之间，后者更安全）。
+func ExtractKeyOpt(body []byte, allowDerive bool) string {
 	if len(body) == 0 {
 		return ""
 	}
@@ -361,6 +384,10 @@ func ExtractKey(body []byte) string {
 	}
 	// 派生回退闸：带 user 维度标识的请求不派生（契约见上）。
 	if hasUserIDKey(obj) {
+		return ""
+	}
+	// 内容派生总开关（见 ExtractKeyOpt 注释）：关掉后无显式会话标识即不粘性。
+	if !allowDerive {
 		return ""
 	}
 	return deriveKey(obj)
