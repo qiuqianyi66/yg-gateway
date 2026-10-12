@@ -785,6 +785,34 @@ async function loadOverview(quiet) {
   const totSum = (d.accounts || []).reduce((a, s) => a + (s.credits_total || 0), 0);
   $('sCredits').textContent = totSum > 0 ? remSum + ' / ' + totSum : remSum;
     $('sSticky').textContent = d.sticky_sessions;
+    // 粘性会话详情列表：join accounts 数据显示昵称 + 成本层级。
+    const sl = d.sticky_list || [];
+    const stickyBox = $('stickyBox'), stickyList = $('stickyList');
+    if (stickyBox && stickyList) {
+      if (!sl.length) { stickyBox.hidden = true; }
+      else {
+        stickyBox.hidden = false;
+        const accMap = {};
+        (d.accounts || []).forEach(a => { accMap[a.uid || a.UID] = a; });
+        stickyList.innerHTML = sl.map(b => {
+          const a = accMap[b.uid] || {};
+          const nick = a.nickname || a.Nickname || b.uid;
+          // cost_tier: 0=免费(绿), 1=未知(灰), 2=收费(红)。accounts 里可能没有 cost_tier 字段，默认灰。
+          const tier = a.cost_tier != null ? a.cost_tier : 1;
+          const tierColor = tier === 0 ? 'var(--ok)' : tier === 2 ? 'var(--bad)' : 'var(--ink-3)';
+          const tierLabel = tier === 0 ? '免费' : tier === 2 ? '收费' : '未知';
+          const when = b.last_active ? new Date(b.last_active).toLocaleString('zh-CN', { hour12: false }) : '—';
+          return `<div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--line-soft)">
+            <i style="width:8px;height:8px;border-radius:50%;background:${tierColor};flex:none"></i>
+            <span style="font-weight:550">${esc(nick)}</span>
+            <span style="color:var(--ink-3);font-size:12px">(${esc(b.uid)})</span>
+            <span style="background:${tierColor}22;color:${tierColor};padding:2px 8px;border-radius:4px;font-size:11px">${tierLabel}</span>
+            <span style="flex:1"></span>
+            <span style="color:var(--ink-3);font-size:11px;font-family:var(--mono)">${when}</span>
+          </div>`;
+        }).join('');
+      }
+    }
     $('navSub').textContent = 'v' + d.version;
     $('navVer').textContent = 'v' + d.version;
     $('navRedis').textContent = d.redis_mode === 'upstash' ? 'Redis 镜像' : '本地内存';
