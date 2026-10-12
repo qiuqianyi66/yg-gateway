@@ -4097,3 +4097,49 @@ if ($('btnPk')) $('btnPk').onclick = () => loadPackages(true);
 
 // 初始化通知中心
 initNotifCenter();
+
+/* ── 命令面板（Ctrl+K） ─────────────────────────────────────────── */
+const CMD_ITEMS = [
+  { cat: '跳转', label: '账号池', action: () => switchView('accounts') },
+  { cat: '跳转', label: '用量', action: () => switchView('usage') },
+  { cat: '跳转', label: '运行日志', action: () => switchView('logs') },
+  { cat: '跳转', label: '配置', action: () => switchView('config') },
+  { cat: '跳转', label: '积分构成', action: () => switchView('packages') },
+  { cat: '操作', label: '刷新当前页', action: () => $('btnRefresh') && $('btnRefresh').click() },
+  { cat: '操作', label: '导出请求 CSV', action: () => $('btnReqExport') && $('btnReqExport').click() },
+  { cat: '操作', label: '清空通知', action: () => { setNotifs([]); renderNotifList(); renderNotifBadge(); } },
+  { cat: '操作', label: '切换明暗主题', action: () => $('btnTheme') && $('btnTheme').click() },
+];
+let cmdFiltered = [], cmdActive = 0;
+function openCmd() { $('cmdOverlay').hidden = false; $('cmdInput').value = ''; renderCmdList(''); setTimeout(() => $('cmdInput').focus(), 10); }
+function closeCmd() { $('cmdOverlay').hidden = true; }
+function renderCmdList(q) {
+  q = (q || '').toLowerCase().trim();
+  cmdFiltered = q ? CMD_ITEMS.filter(x => x.label.toLowerCase().includes(q) || x.cat.toLowerCase().includes(q)) : CMD_ITEMS.slice();
+  cmdActive = 0;
+  $('cmdList').innerHTML = cmdFiltered.length ? cmdFiltered.map((x, i) =>
+    `<div class="cmd-item ${i === 0 ? 'active' : ''}" data-i="${i}"><span class="cmd-cat">${x.cat}</span><span>${x.label}</span></div>`
+  ).join('') : '<div style="padding:20px;text-align:center;color:var(--ink-3);font-size:13px">无匹配命令</div>';
+}
+function initCmdPalette() {
+  document.addEventListener('keydown', (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key === 'k') { e.preventDefault(); $('cmdOverlay').hidden ? openCmd() : closeCmd(); }
+    if (e.key === 'Escape' && !$('cmdOverlay').hidden) closeCmd();
+    if ($('cmdOverlay').hidden) return;
+    if (e.key === 'ArrowDown') { e.preventDefault(); cmdActive = Math.min(cmdActive + 1, cmdFiltered.length - 1); updateCmdActive(); }
+    if (e.key === 'ArrowUp') { e.preventDefault(); cmdActive = Math.max(cmdActive - 1, 0); updateCmdActive(); }
+    if (e.key === 'Enter' && cmdFiltered[cmdActive]) { e.preventDefault(); const item = cmdFiltered[cmdActive]; closeCmd(); item.action(); }
+  });
+  $('cmdInput').addEventListener('input', () => renderCmdList($('cmdInput').value));
+  $('cmdList').addEventListener('click', (e) => {
+    const el = e.target.closest('.cmd-item'); if (!el) return;
+    const i = Number(el.dataset.i); const item = cmdFiltered[i]; if (!item) return;
+    closeCmd(); item.action();
+  });
+  $('cmdOverlay').addEventListener('click', (e) => { if (e.target === $('cmdOverlay')) closeCmd(); });
+}
+function updateCmdActive() {
+  document.querySelectorAll('.cmd-item').forEach((el, i) => el.classList.toggle('active', i === cmdActive));
+  const active = document.querySelector('.cmd-item.active'); if (active) active.scrollIntoView({ block: 'nearest' });
+}
+initCmdPalette();

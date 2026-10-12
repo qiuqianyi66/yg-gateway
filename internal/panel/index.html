@@ -1627,6 +1627,25 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
      无 aria-live 时读屏用户完全感知不到结果。polite 不打断当前朗读。 -->
 <div id="toasts" role="status" aria-live="polite" aria-atomic="false"></div>
 
+<!-- 命令面板（Ctrl+K） -->
+<div class="cmd-overlay" id="cmdOverlay" hidden>
+  <div class="cmd-box">
+    <input type="text" id="cmdInput" placeholder="输入命令或搜索…（↑↓ 选择，回车执行，Esc 关闭）" autocomplete="off">
+    <div class="cmd-list" id="cmdList"></div>
+  </div>
+</div>
+
+<style>
+.cmd-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.35); z-index: 500; display: flex; align-items: flex-start; justify-content: center; padding-top: 12vh; }
+.cmd-box { width: 560px; max-width: 90vw; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 16px 48px rgba(0,0,0,.2); overflow: hidden; }
+.cmd-box input { width: 100%; padding: 14px 16px; border: none; border-bottom: 1px solid var(--line-soft); font: inherit; font-size: 15px; background: transparent; color: var(--ink); outline: none; box-sizing: border-box; }
+.cmd-list { max-height: 320px; overflow-y: auto; }
+.cmd-item { padding: 10px 16px; cursor: pointer; font-size: 13.5px; display: flex; align-items: center; gap: 8px; }
+.cmd-item:hover, .cmd-item.active { background: var(--surface-2); }
+.cmd-item .cmd-cat { font-size: 11px; color: var(--ink-3); background: var(--surface-2); padding: 2px 6px; border-radius: 4px; flex: none; }
+.cmd-item.active .cmd-cat { background: var(--accent-soft); color: var(--accent); }
+</style>
+
 <script src="app.js"></script>
 </body>
 </html>
