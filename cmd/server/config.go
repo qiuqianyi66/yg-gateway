@@ -74,6 +74,13 @@ type Config struct {
 		RequestClientInfo bool `json:"request_client_info"`
 	} `json:"logging"`
 
+	Usage struct {
+		// CreditCNYRate 积分兑人民币汇率：1 积分 = 多少元。
+		// 0 = 不折算（前端不显示 ¥ 列）。默认 0.01（1 积分 ≈ ¥0.01）。
+		// 纯展示层配置：不改选号/计费，只在面板用量页把积分旁折成人民币。
+		CreditCNYRate float64 `json:"credit_cny_rate"`
+	} `json:"usage"`
+
 	Server struct {
 		// ReadTimeout 入站请求读取（含 body 上传）总时长上限（issue #100）。
 		// http.Server 的 ReadTimeout 覆盖整个请求读取：大上下文/文件块请求经
@@ -345,6 +352,8 @@ func Default() *Config {
 	c.Logging.RequestArchiveEnabled = true
 	c.Logging.RequestRetentionDays = 7
 	c.Logging.RequestArchiveMaxMB = 100
+	// 积分兑人民币默认汇率 1 积分 ≈ ¥0.01（纯展示层，不改选号）。
+	c.Usage.CreditCNYRate = 0.01
 	// 缺省 true 靠显式赋值实现（同 Schedule 开关）：JSON 里键缺席时字段保留此值，
 	// 只有显式 false 才关闭来源记录。
 	c.Logging.RequestClientInfo = true

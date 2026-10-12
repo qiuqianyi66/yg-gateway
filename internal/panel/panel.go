@@ -58,6 +58,9 @@ type Config struct {
 
 	// Usage 逐请求用量记录器（nil = 用量接口返回 501）。
 	Usage *usage.Recorder
+	// CreditCNYRate 积分兑人民币汇率（1 积分 = 多少元）。纯展示层：
+	// 用量页积分旁折成人民币。0 = 不折算（前端不显示 ¥）。
+	CreditCNYRate float64
 	// RequestLog 请求指标与归档（nil = 对应接口返回 501）。
 	RequestLog *reqlog.Recorder
 
@@ -794,7 +797,12 @@ func (p *Panel) usage(w http.ResponseWriter, r *http.Request) {
 	if p.cfg.Upstream != nil {
 		currentRate = p.cfg.Upstream.ModelRate
 	}
-	writeJSON(w, http.StatusOK, p.cfg.Usage.SnapshotWindow(win, nicks, keyNames, currentRate))
+	writeJSON(w, http.StatusOK, struct {
+		usage.Snapshot
+		// CNYRate 积分兑人民币汇率（1 积分 = 多少元）。嵌入 Snapshot 后前端
+		// 原有字段不变，只多一个 cny_rate 供折算显示。
+		CNYRate float64 `json:"cny_rate"`
+	}{p.cfg.Usage.SnapshotWindow(win, nicks, keyNames, currentRate), p.cfg.CreditCNYRate})
 }
 
 // keyNameMap 当前生效的下游 Key ID→展示名映射（livecfg 快照，无明文）。

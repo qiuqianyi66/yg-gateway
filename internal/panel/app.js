@@ -2982,8 +2982,13 @@ function renderUsage(d) {
   $('usNote').title = note; // 窄屏单行截断时靠悬停看全
 
   // 积分扣除的四张卡片与说明。
+  // cny_rate > 0 时在「扣除积分」卡副标题折算人民币（1 积分 = rate 元）。
+  const cnyRate = Number(usageData.cny_rate || 0);
+  const cnyText = (cnyRate > 0 && Number.isFinite(Number(t.credits)))
+    ? '≈ ¥' + (Number(t.credits) * cnyRate).toFixed(2) + '（按 1 积分 = ¥' + cnyRate + '）'
+    : '按上游 usage.credit 累计';
   $('usCreditStats').innerHTML =
-    usKpi(fmtCredit(t.credits), '扣除积分', 'c-accent', '按上游 usage.credit 累计') +
+    usKpi(fmtCredit(t.credits), '扣除积分', 'c-accent', cnyText) +
     usKpi(fmtTok(t.credit_tokens), '匹配 Token', 'c-mute', '与积分同时观测到的 Token') +
     usKpi(fmtCreditRatio(t.credits_per_1m_tokens, t.credit_samples, t.credit_tokens),
       '平均积分 / 1M Token', 'c-ok', '越低越划算') +
