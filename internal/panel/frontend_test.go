@@ -1118,3 +1118,41 @@ process.stdout.write(JSON.stringify({
 			strings.TrimSpace(string(out)), want)
 	}
 }
+
+// TestAppJSKeyDialogValueNotEscaped（缺陷修复 + 牙齿）：
+// Key 编辑弹窗把值填进 input 时**不得**过 esc()。
+//
+// esc() 是 HTML 转义（& < > " ' 五字符），而 input.value 是纯文本赋值——误用会让
+// 名字含 & 的 Key 在弹窗里显示成 A&amp;B，保存后写回 A&amp;B，再编辑再转义成
+// A&amp;amp;B（越改越脏）。kfId 参与鉴权匹配，破坏性更大。
+//
+// 牙齿：把 $('kfName').value / $('kfId').value 改回 esc(...) → 本测试 FAIL。
+// 这里用源码断言而非 vm 执行：openKeyDialog 依赖完整 DOM 与模块闭包，切片求值
+// 会踩 frontend_test.go 既有切片契约；源码断言能精确钉住"赋值右侧不含 esc("。
+func TestAppJSKeyDialogValueNotEscaped(t *testing.T) {
+	raw, err := os.ReadFile("app.js")
+	if err != nil {
+		t.Fatalf("read app.js: %v", err)
+	}
+	src := string(raw)
+	// 只检查弹窗赋值这两行（kfName / kfId 是唯一进 input.value 的 Key 字段）。
+	var bad []string
+	for _, line := range strings.Split(src, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if !strings.HasPrefix(trimmed, "$('kfName').value") &&
+			!strings.HasPrefix(trimmed, "$('kfId').value") {
+			continue
+		}
+		if strings.Contains(trimmed, "esc(") {
+			bad = append(bad, trimmed)
+		}
+	}
+	if len(bad) > 0 {
+		t.Fatalf("input.value 是纯文本赋值，不得过 esc()（会把 & 转成 &amp; 并写坏配置）：\n  %s",
+			strings.Join(bad, "\n  "))
+	}
+	// 反向确认这两行确实存在（防止改函数名后测试空转）
+	if !strings.Contains(src, "$('kfName').value") || !strings.Contains(src, "$('kfId').value") {
+		t.Fatal("kfName/kfId 赋值语句未找到，测试可能已失效")
+	}
+}

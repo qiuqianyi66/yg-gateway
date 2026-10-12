@@ -1106,8 +1106,12 @@ function openKeyDialog(id) {
 
   $('keyDlgTitle').textContent = k ? '编辑 Key' : '新增 Key';
   $('keyDlgHint').textContent = k ? `编辑 Key「${k.name || k.id}」` : '配置一条新的 API Key';
-  $('kfName').value = k ? esc(k.name || '') : '';
-  $('kfId').value = k ? esc(k.id || '') : '';
+  // 注意：input.value 是**纯文本**赋值，不能再过 esc()（HTML 转义）——
+  // 曾在这里误用 esc()，导致名字含 & 的 Key 显示成 A&amp;B，保存写回后被二次
+  // 转义成 A&amp;amp;B（越改越脏）；kfId 参与鉴权匹配，破坏性更大。
+  // 拼进 innerHTML 的字符串（如卡片渲染）才需要 esc，见 keyCardHTML。
+  $('kfName').value = k ? (k.name || '') : '';
+  $('kfId').value = k ? (k.id || '') : '';
   $('kfId').disabled = !!k; // 编辑时 ID 不可改
   $('kfKey').value = '';
   $('kfKey').type = 'password';
