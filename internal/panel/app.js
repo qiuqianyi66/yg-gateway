@@ -634,11 +634,11 @@ function renderAccounts(list) {
 }
 function renderAccountsUnsafe(list) {
   const tb = $('accBody');
+  if (!tb) return;
   if (!list.length) {
-    tb.innerHTML = '<tr><td colspan="9"><div class="empty"><div class="big">账号池是空的</div>点击右上角「添加账号」，用浏览器登录一个 WorkBuddy 账号</div></td></tr>';
+    tb.innerHTML = '<div class="empty" style="grid-column:1/-1"><div class="big">账号池是空的</div>点击右上角「添加账号」，用浏览器登录一个 WorkBuddy 账号</div>';
     return;
   }
-  // 有总额度（credits_total）→ 进度条按自身 剩余/总额 百分比；旧数据无总额 → 退回池内最高=100%
   const maxCred = Math.max(1, ...list.map(s => s.credits || 0));
   tb.innerHTML = list.map(s => {
     const bl = (new Date(s.breaker_until || 0) - Date.now()) / 1000;
@@ -646,18 +646,14 @@ function renderAccountsUnsafe(list) {
     const cool = Math.max(s.cool_remaining_sec || 0, bl > 0 ? bl : 0, dg > 0 ? dg : 0);
     let cls = '', tag;
     if (s.disabled) { cls = 'off'; tag = '<span class="tag bad">已禁用</span>'; }
-    else if (s.paused) { cls = 'off'; tag = '<span class="tag warn">已暂停选号</span>'; }
+    else if (s.paused) { cls = 'off'; tag = '<span class="tag warn">已暂停</span>'; }
     else if (cool > 0) {
-      cls = 'cool';
+      cls = 'off';
       const kind = bl > Math.max(s.cool_remaining_sec || 0, dg > 0 ? dg : 0) ? '熔断'
         : (dg > (s.cool_remaining_sec || 0) ? '连败降权' : (s.cool_kind === 'hard_credit' ? '积分冷却' : '限流冷却'));
-      tag = '<span class="tag warn">' + kind + ' · ' + dur(cool) + '</span>';
-    } else tag = '<span class="tag ok">可用</span>' + (s.in_flight ? '' : '');
-    const note = s.reason ? '<div class="hint" style="font-size:11.5px;color:var(--ink-3);margin-top:3px">' + esc(s.reason) + '</div>' : '';
-    const rateLimits = rateLimitRowsHtml(s.rate_limited_models, Date.now());
+      tag = '<span class="tag warn">' + kind + ' ' + dur(cool) + '</span>';
+    } else tag = '<span class="tag ok">可用</span>';
     const short = s.uid.length > 16 ? s.uid.slice(0, 16) + '…' : s.uid;
-    // 企业版不限量：上游 limitNum == -1，网关以 credits_total=-1 透出（见 upstream
-    // enterpriseUnlimitedTotal）。此时剩余额度不参与展示，直接标「不限」。
     const unlimited = s.credits_total === -1;
     const cred = unlimited ? '不限'
       : (s.credits == null ? '—' : (s.credits_total > 0 ? s.credits + '<span class="of">/' + s.credits_total + '</span>' : String(s.credits)));
@@ -665,56 +661,39 @@ function renderAccountsUnsafe(list) {
       : (s.credits_total > 0
         ? Math.min(100, Math.round((s.credits || 0) / s.credits_total * 100))
         : Math.round((s.credits || 0) / maxCred * 100));
-    // 成本台账 tooltip（model_costs）：每模型实测单价（≤0 = 实测免费），运维据此
-    // 看「为什么总选它」——免费号垄断 / 单价排序一眼可见。
-    let credTip;
-    if (unlimited) credTip = '企业版不限量（上游 limitNum=-1）';
-    else if (s.credits_total > 0) {
-      credTip = (s.enterprise ? '企业版剩余额度 ' : '剩余 ')
-        + s.credits + ' / ' + (s.enterprise ? '分配 ' : '总额 ') + s.credits_total + '（' + pct + '%）';
-    } else credTip = '积分（相对池内最高）';
-    const costs = (s.model_costs || []).filter(c => c.model);
-    if (costs.length) {
-      credTip += '\n实测单价（credits/1K）：\n' + costs.map(c =>
-        '  ' + c.model + '：' + (c.cost_per_1k <= 0 ? '免费' : c.cost_per_1k)).join('\n');
-    }
     const frozen = s.disabled || cool > 0;
     const tu = s.token_usage || {};
     const req = tu.request_count || 0;
     const totalTok = formatTokenCount(tu.total_tokens);
-    const totalTokUnit = totalTok === '—' ? '' : '<em>tok</em>';
     const latency = formatLatency(tu.last_latency_ms);
     const rate = formatRate(tu.last_tokens_per_second);
-    const usageTitle = '最近一次：' + req + ' 次 / ' + totalTok + ' / 延迟 ' + latency + ' / ' + rate;
-    return '<tr class="' + cls + '" title="uid: ' + esc(s.uid) + '">' +
-      '<td class="mark" aria-hidden="true"><i></i></td>' +
-      '<td class="who"><div class="nm">' + (s.nickname ? esc(s.nickname) : '<span style="color:var(--ink-3)">未命名</span>') + (s.realm === 'global' ? ' <span class="realm-tag">国际版</span>' : '') + (s.enterprise ? ' <span class="realm-tag">企业版</span>' : '') + '</div><div class="id">' + esc(short) + '</div></td>' +
-      '<td>' + tag + note + rateLimits + '</td>' +
-      '<td class="cred" title="' + esc(credTip) + '"><div class="n">' + cred + '</div><div class="bar"><i style="width:' + pct + '%"></i></div></td>' +
-      '<td class="num">' + (s.success_count || 0) + ' <span style="color:var(--ink-3)">/</span> <span style="color:var(--bad)">' + (s.err_total || 0) + '</span></td>' +
-      '<td class="num">' + (s.in_flight || 0) + '</td>' +
-      '<td class="num usage-cell" title="' + esc(usageTitle) + '"><span class="usage-line" aria-label="' + esc(usageTitle) + '">' +
-        '<span class="usage-item usage-count"><b>' + req + '</b><em>次</em></span>' +
-        '<span class="usage-item usage-total"><b>' + totalTok + '</b>' + totalTokUnit + '</span>' +
-        '<span class="usage-item usage-latency"><b>' + latency + '</b></span>' +
-        '<span class="usage-item usage-rate"><b>' + rate + '</b></span>' +
-      '</span></td>' +
-      '<td class="num" style="color:var(--ink-3)">' + ago(s.last_success) + '</td>' +
-      '<td class="acts">' +
-        // 企业版无个人成长体系（签到 400「企业账号不支持该操作」/ 成长任务 403）：
-        // 不渲染「签到」「任务」按钮，只留「额度」——点它走 /balance，企业额度由
-        // upstream 的 get-enterprise-user-usage 口径填充。
-        (s.enterprise ? '' :
-          '<button class="xs ghost" data-a="checkin" data-u="' + esc(s.uid) + '"' + (s.checkin_done ? ' title="今日已签到；点击可重新签到并刷新余额"' : '') + '>' + (s.checkin_done ? '已签' : '签到') + '</button>') +
-        '<button class="xs ghost" data-a="balance" data-u="' + esc(s.uid) + '"' + (s.enterprise ? ' title="刷新企业版已分配额度（上游 get-enterprise-user-usage）"' : '') + '>' + (s.enterprise ? '额度' : '余额') + '</button>' +
-        (s.enterprise ? '' :
-          '<button class="xs ghost" data-a="tasks" data-u="' + esc(s.uid) + '">任务</button>') +
+    const avatar = (s.nickname || '?').charAt(0).toUpperCase();
+    const realmTag = s.realm === 'global' ? '<span class="realm-tag">国际</span>' : (s.enterprise ? '<span class="realm-tag">企业</span>' : '');
+    return '<div class="acc-card ' + cls + '" title="uid: ' + esc(s.uid) + '">' +
+      '<div class="acc-card-head">' +
+        '<div class="acc-avatar">' + esc(avatar) + '</div>' +
+        '<div><div class="acc-name">' + (s.nickname ? esc(s.nickname) : '<span style="color:var(--ink-3)">未命名</span>') + ' ' + realmTag + '</div>' +
+        '<div class="acc-uid">' + esc(short) + '</div></div>' +
+        '<div class="acc-status">' + tag + '</div>' +
+      '</div>' +
+      '<div class="acc-cred"><div class="n">' + cred + '</div><div class="bar"><i style="width:' + pct + '%"></i></div></div>' +
+      '<div class="acc-stats">' +
+        '<div class="acc-stat"><div class="v">' + (s.success_count || 0) + '/' + (s.err_total || 0) + '</div><div class="k">成功/失败</div></div>' +
+        '<div class="acc-stat"><div class="v">' + (s.in_flight || 0) + '</div><div class="k">在途</div></div>' +
+        '<div class="acc-stat"><div class="v">' + req + '</div><div class="k">次数</div></div>' +
+        '<div class="acc-stat"><div class="v">' + totalTok + '</div><div class="k">Token</div></div>' +
+      '</div>' +
+      '<div class="acc-acts">' +
+        (s.enterprise ? '' : '<button class="xs ghost" data-a="checkin" data-u="' + esc(s.uid) + '">' + (s.checkin_done ? '已签' : '签到') + '</button>') +
+        '<button class="xs ghost" data-a="balance" data-u="' + esc(s.uid) + '">' + (s.enterprise ? '额度' : '余额') + '</button>' +
+        (s.enterprise ? '' : '<button class="xs ghost" data-a="tasks" data-u="' + esc(s.uid) + '">任务</button>') +
         (frozen ? '<button class="xs primary" data-a="revive" data-u="' + esc(s.uid) + '">解冻</button>'
-                : (s.paused ? '<button class="xs primary" data-a="resume" data-u="' + esc(s.uid) + '">恢复选号</button>'
-                            : '<button class="xs ghost" data-a="pause" data-u="' + esc(s.uid) + '" title="' + (s.enterprise ? '退出选号，但照常保活 / 刷新额度' : '退出选号，但照常签到 / 活跃上报 / 保活 / 刷新余额') + '">暂停选号</button>')) +
+                : (s.paused ? '<button class="xs primary" data-a="resume" data-u="' + esc(s.uid) + '">恢复</button>'
+                            : '<button class="xs ghost" data-a="pause" data-u="' + esc(s.uid) + '">暂停</button>')) +
         (s.disabled ? '' : '<button class="xs ghost" data-a="disable" data-u="' + esc(s.uid) + '">禁用</button>') +
         '<button class="xs ghost danger" data-a="remove" data-u="' + esc(s.uid) + '">移除</button>' +
-      '</td></tr>';
+      '</div>' +
+    '</div>';
   }).join('');
 }
 
