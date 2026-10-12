@@ -41,6 +41,44 @@ body {
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
 
+/* ── 骨架屏（loading skeleton）───────────────────────────────────────
+   加载态此前是纯文本（"正在向上游查询…"），空白期长（逐账号查上游可能几十秒）
+   时看起来像卡死。骨架屏给出"正在加载且大致是这个形状"的预期。
+   动画在 prefers-reduced-motion 下由上面那条全局规则关闭。 */
+.skel {
+  background: linear-gradient(90deg, var(--surface-2) 25%, var(--raise) 50%, var(--surface-2) 75%);
+  background-size: 200% 100%;
+  animation: skel-shimmer 1.2s ease-in-out infinite;
+  border-radius: 5px;
+}
+@keyframes skel-shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+.skel-row { display: flex; gap: 10px; align-items: center; padding: 12px 4px; }
+.skel-row .skel { height: 12px; }
+.skel-row .w-1 { width: 18%; } .skel-row .w-2 { width: 26%; }
+.skel-row .w-3 { width: 14%; } .skel-row .w-4 { width: 22%; }
+.skel-card { padding: 14px 16px; border: 1px solid var(--line-soft); border-radius: 10px; background: var(--surface-2); }
+.skel-card .skel { height: 12px; margin-bottom: 9px; }
+.skel-card .skel:last-child { margin-bottom: 0; }
+.skel-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px; padding: 14px 17px; }
+.skel-kpi { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 10px; padding: 14px 17px 2px; }
+@media (max-width: 1180px) { .skel-kpi { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+.skel-kpi > div { height: 74px; border-radius: 10px; }
+.skel-msg { display: flex; align-items: center; gap: 9px; color: var(--ink-3); font-size: 12.5px; }
+.skel-msg .spinner {
+  width: 13px; height: 13px; border: 2px solid var(--line); border-top-color: var(--accent);
+  border-radius: 50%; animation: skel-spin .7s linear infinite; flex: none;
+}
+@keyframes skel-spin { to { transform: rotate(360deg); } }
+
+/* ── 错误态（就地重试）───────────────────────────────────────────────
+   失败时给出「原因 + 就地重试按钮」，不要求用户滚回顶部找刷新。
+   结构对齐 Key 页既有的 .key-load-error（全站做得最好的一处）。 */
+.load-error {
+  padding: 28px 20px; text-align: center; color: var(--bad);
+}
+.load-error .big { font-size: 14px; margin-bottom: 6px; }
+.load-error .detail { font-size: 12.5px; color: var(--ink-3); margin-bottom: 12px; word-break: break-word; }
+
 /* ── 壳层：左侧导航 + 主区 ─────────────────────────────────────────── */
 .shell { display: grid; grid-template-columns: 208px 1fr; min-height: 100vh; }
 .nav {
@@ -872,6 +910,8 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
           </svg>
           <div class="t">还没有扫描过</div>
           <div class="d">扫描所有账号的成长任务与开学季待办，把没做的排成一列，一键执行。</div>
+          <!-- 空态给 CTA：此前只有文案，用户得自己找到 header 的按钮 -->
+          <button class="primary" id="btnScanAllEmpty" style="margin-top:14px">立即扫描待办</button>
         </div>
         <div id="qcList"></div>
       </div>

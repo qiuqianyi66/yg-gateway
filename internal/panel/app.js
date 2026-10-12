@@ -116,6 +116,43 @@ function exportStamp() {
   return d.getFullYear() + p(d.getMonth() + 1) + p(d.getDate()) + '-' + p(d.getHours()) + p(d.getMinutes());
 }
 
+/* ── 骨架屏 / 加载态 / 就地错误态 ────────────────────────────────────
+   与 index.html 的 .skel / .load-error 样式配套。
+   动机：加载态此前是纯文本（"正在向上游查询…"），而逐账号查上游可能几十秒——
+   纯文本空白期看起来像卡死；失败时又只有一行字，要重试还得滚回顶部找刷新按钮。 */
+function skelRows(n, cols) {
+  let out = '';
+  for (let i = 0; i < n; i++) {
+    let cells = '';
+    for (let c = 0; c < cols; c++) cells += '<span class="skel w-' + ((c % 4) + 1) + '"></span>';
+    out += '<div class="skel-row">' + cells + '</div>';
+  }
+  return out;
+}
+function skelCards(n) {
+  let out = '';
+  for (let i = 0; i < n; i++) {
+    out += '<div class="skel-card"><div class="skel"></div><div class="skel"></div>' +
+      '<div class="skel" style="width:60%"></div></div>';
+  }
+  return '<div class="skel-grid">' + out + '</div>';
+}
+function skelKpis(n) {
+  let out = '';
+  for (let i = 0; i < n; i++) out += '<div class="skel"></div>';
+  return '<div class="skel-kpi">' + out + '</div>';
+}
+/* 带转圈的加载提示（比裸文本多一个 spinner，明确"在动"）。 */
+function loadingMsg(text) {
+  return '<div class="skel-msg"><span class="spinner"></span><span>' + esc(text) + '</span></div>';
+}
+/* 就地错误块：原因 + 重试按钮（data-retry 由各视图的委托监听处理）。 */
+function loadErrorHTML(title, detail, retryLabel) {
+  return '<div class="load-error"><div class="big">' + esc(title) + '</div>' +
+    (detail ? '<div class="detail">' + esc(detail) + '</div>' : '') +
+    '<button class="xs" data-retry="1">' + esc(retryLabel || '重试') + '</button></div>';
+}
+
 // esc 文本/属性双安全转义。不能只用 div.innerHTML（它转义 <>& 但不转义引号），
 // 否则字符串拼进 HTML 属性（如 title="uid: ..."）时引号可闭合属性并注入事件处理器。
 // 显式替换 5 个字符：& < > " '（& 必须最先，避免二次转义）。
@@ -644,6 +681,11 @@ function renderModelLocksUnsafe(rows) {
 }
 
 async function loadOverview(quiet) {
+  // 首屏加载骨架：账号表给行骨架，统计卡保持 HTML 里的「-」但补一条加载提示。
+  if (!overviewData) {
+    const tb = $('accBody');
+    if (tb && !tb.children.length) tb.innerHTML = '<tr><td colspan="9">' + skelRows(5, 7) + '</td></tr>';
+  }
   try {
     const d = await api('overview');
     overviewData = d;
@@ -671,7 +713,21 @@ async function loadOverview(quiet) {
     // 到期卡片跟随首页统计同步刷新（用同一份响应里的到期快照，不额外发请求）。
     // 已有逐包明细缓存时不再覆盖——明细信息量更大，别把它降级成快照。
     if ($('expBox') && !lastPackages) renderExpirySnapshot(d);
-  } catch (e) { if (!quiet) toast(e.message, 'err'); }
+  } catch (e) {
+    // 首屏失败此前完全静默（quiet=true 时一个字都不提示），7 个统计卡永远停在
+    // HTML 里的「-」、账号表空白，用户只能猜。这里区分首次与轮询：
+    //   首次（还没拿到过数据）→ 表内插持久化错误条 + 就地重试；
+    //   轮询失败 → 保持安静（避免每 5 秒弹一次 toast 刷屏）。
+    if (!overviewData) {
+      const tb = $('accBody');
+      if (tb) {
+        tb.innerHTML = '<tr><td colspan="9">' +
+          loadErrorHTML('读取账号池失败', e.message, '重试') + '</td></tr>';
+        bindRetry(tb, () => loadOverview(false));
+      }
+    }
+    if (!quiet) toast(e.message, 'err');
+  }
 }
 
 $('accBody').addEventListener('click', async ev => {
@@ -963,7 +1019,13 @@ async function loadLogs() {
     $('logNote').textContent = logCh === 'all'
       ? '任务 ' + (counts.task || 0) + ' · 对话 ' + (counts.chat || 0) + ' · 系统 ' + (counts.sys || 0)
       : (logCh === 'task' ? '任务' : logCh === 'chat' ? '对话' : '系统') + ' ' + entries.length + ' 行';
-  } catch (e) { /* 概览已提示 */ }
+  } catch (e) {
+    // 此前是 `catch (e) { /* 概览已提示 */ }` —— 但概览的 toast 只在非 quiet 时弹，
+    // 且可能早已消失，日志页失败就变成"旧内容一直挂着"。改为在日志区就地提示 + 重试。
+    const boxEl = $('logBox');
+    if (boxEl) boxEl.innerHTML = loadErrorHTML('读取日志失败', e.message, '重试');
+    if (boxEl) bindRetry(boxEl, loadLogs);
+  }
 }
 
 function renderRequestMetrics(m, entries) {
@@ -2268,17 +2330,25 @@ $('btnVcRefresh').onclick = loadSchoolVouchers;
    队列状态覆盖。 */
 let queueTimer = null, lastQueueSeq = 0;
 const GROWTH_TITLES = {}; // code → 展示名（扫描时从任务列表带出）
-$('btnScanAll').onclick = async () => {
-  const b = $('btnScanAll');
+async function runScanAll(btn) {
   // 停掉队列轮询：显式扫描 = 切到待办视图。否则在途队列的下一 tick 会把扫描
   // 结果冲掉重渲染回队列视图（服务端执行不受影响，只是不再实时回写本视图）。
   if (queueTimer) { clearInterval(queueTimer); queueTimer = null; }
+  const b = btn || $('btnScanAll');
   b.disabled = true; b.textContent = '扫描中…';
   try {
     const d = await api('tasks/scan_all', { method: 'POST' });
     renderQueue(groupItems(d), null, '没有待办任务 🎉', '全部账号的成长任务与开学季活动都已完成，明日再来。');
   } catch (e) { toast(e.message, 'err'); }
   finally { b.disabled = false; b.textContent = '扫描待办'; }
+}
+$('btnScanAll').onclick = () => runScanAll($('btnScanAll'));
+// 空态 CTA：与 header 的「扫描待办」共用同一实现，文案保持不变。
+if ($('btnScanAllEmpty')) $('btnScanAllEmpty').onclick = () => {
+  const b = $('btnScanAllEmpty');
+  const orig = b.textContent;
+  b.textContent = '扫描中…'; b.disabled = true;
+  runScanAll(b).finally(() => { b.disabled = false; b.textContent = orig; });
 };
 $('btnRunQueue').onclick = async () => {
   const conc = Number($('qcConc').value) || 1;
@@ -2936,6 +3006,12 @@ async function warmUsageModelRates() {
 
 async function loadUsage() {
   const q = trangeQuery('usRange', true);
+  // 加载骨架：首次进入（还没有数据）时给出 KPI + 图表的形状，避免空白期像卡死。
+  if (!usageData) {
+    $('usStats').innerHTML = skelKpis(6);
+    $('usCreditStats').innerHTML = skelKpis(4);
+    $('usChart').innerHTML = loadingMsg('正在读取用量…');
+  }
   try {
     await warmUsageModelRates();
     const d = await api('usage?' + q.toString());
@@ -2943,7 +3019,8 @@ async function loadUsage() {
   } catch (e) {
     // 失败时三块都要清干净：只改图表会留下上一次窗口的数字，看起来像"刷新成功"。
     usageData = null;
-    $('usChart').innerHTML = '<div class="us-empty">读取用量失败：' + esc(e.message) + '</div>';
+    // 错误态就地给出重试入口（此前只有一行字，重试要滚回顶部找「刷新」）。
+    $('usChart').innerHTML = loadErrorHTML('读取用量失败', e.message, '重试');
     $('usChartNote').textContent = '—';
     $('usStats').innerHTML = '';
     $('usCreditStats').innerHTML = '';
@@ -2956,7 +3033,16 @@ async function loadUsage() {
     $('usCreditTabs').innerHTML = usTabsHtml(US_CREDIT_TABS, usCreditDim, null);
     $('usDimBody').innerHTML = '<tr><td colspan="10" class="empty">读取用量失败</td></tr>';
     $('usCreditBody').innerHTML = '<tr><td colspan="7" class="empty">读取用量失败</td></tr>';
+    bindRetry($('usChart'), loadUsage);
   }
+}
+
+/* bindRetry 给「就地重试」按钮挂回调（容器内 [data-retry] 按钮）。
+   每个视图的加载函数在错误分支调一次；按钮是一次性的（重建即重新绑定）。 */
+function bindRetry(host, fn) {
+  if (!host) return;
+  const b = host.querySelector('[data-retry]');
+  if (b) b.onclick = () => fn();
 }
 
 if ($('btnUsage')) $('btnUsage').onclick = loadUsage;
@@ -3444,9 +3530,10 @@ async function loadPackages(force) {
     if (ageMin > 0) $('pkNote').textContent = lastPackages.accounts.length + ' 个账号 · ' + ageMin + ' 分钟前的数据，点「刷新」更新';
     return;
   }
-  $('pkSummary').innerHTML = '<div class="empty">查询中…（逐账号向上游实时查询）</div>';
+  // 加载骨架：逐账号查上游可能几十秒，卡片骨架比一行字更能表达"在加载"。
+  $('pkSummary').innerHTML = skelCards(4);
+  $('pkExpiry').innerHTML = loadingMsg('正在逐账号查询上游积分…');
   $('pkDetail').innerHTML = '';
-  $('pkExpiry').innerHTML = '<div class="pk-expiry-empty">查询中…</div>';
   try {
     const [d, c] = await Promise.all([
       api('packages'),
@@ -3457,8 +3544,10 @@ async function loadPackages(force) {
     lastDetailLimit = pkDetailLimit(c && c.config);
     renderPackages(d, lastDetailLimit);
   } catch (e) {
-    $('pkSummary').innerHTML = '<div class="empty">读取失败：' + esc(e.message) + '</div>';
-    $('pkExpiry').innerHTML = '<div class="pk-expiry-empty">读取失败：' + esc(e.message) + '</div>';
+    // 就地重试（此前只有一行字，重试要滚回顶部找「刷新」）。
+    $('pkSummary').innerHTML = loadErrorHTML('读取积分构成失败', e.message, '重试');
+    $('pkExpiry').innerHTML = '<div class="pk-expiry-empty">读取失败</div>';
+    bindRetry($('pkSummary'), () => loadPackages(true));
   }
 }
 
