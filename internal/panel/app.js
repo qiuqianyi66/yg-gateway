@@ -74,6 +74,48 @@ function toast(msg, cls) {
   while (host.children.length > 5) host.firstChild.remove();
   setTimeout(() => el.remove(), cls === 'err' ? 8000 : 3600);
 }
+/* ── CSV / JSON 导出 ─────────────────────────────────────────────────
+   运维面板的常见诉求：把这张表导出去对账（进 Excel 做透视、按 Key 拆账、
+   留档）。此前面板完全没有导出能力（无 Blob、无 download）。
+   实现要点：
+     · BOM（\ufeff）必须加——否则 Excel 打开中文列名会乱码（GBK 环境）；
+     · 字段值统一走 csvCell 转义（含逗号/引号/换行时用双引号包裹并把内部 " 翻倍，
+       对齐 RFC 4180）；
+     · URL.revokeObjectURL 延迟回收，避免大文件下载被提前取消。 */
+function csvCell(v) {
+  const s = v == null ? '' : String(v);
+  // RFC 4180：含逗号、双引号、CR/LF 时用双引号包裹，内部引号翻倍。
+  if (/[",\r\n]/.test(s)) return '"' + s.replace(/"/g, '""') + '"';
+  return s;
+}
+function exportCSV(headers, rows, filename) {
+  const lines = [headers.map(csvCell).join(',')];
+  for (const r of rows) lines.push(r.map(csvCell).join(','));
+  // BOM 让 Excel 正确识别 UTF-8 中文
+  const blob = new Blob(['\ufeff' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8' });
+  downloadBlob(blob, filename);
+}
+function exportJSON(obj, filename) {
+  const blob = new Blob([JSON.stringify(obj, null, 2)], { type: 'application/json;charset=utf-8' });
+  downloadBlob(blob, filename);
+}
+function downloadBlob(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  // 延迟回收：立即 revoke 会让部分浏览器取消下载。
+  setTimeout(() => URL.revokeObjectURL(url), 4000);
+}
+// 导出文件名带时间戳，多次导出不互相覆盖。
+function exportStamp() {
+  const d = new Date(), p = n => String(n).padStart(2, '0');
+  return d.getFullYear() + p(d.getMonth() + 1) + p(d.getDate()) + '-' + p(d.getHours()) + p(d.getMinutes());
+}
+
 // esc 文本/属性双安全转义。不能只用 div.innerHTML（它转义 <>& 但不转义引号），
 // 否则字符串拼进 HTML 属性（如 title="uid: ..."）时引号可闭合属性并注入事件处理器。
 // 显式替换 5 个字符：& < > " '（& 必须最先，避免二次转义）。
@@ -1028,6 +1070,29 @@ if ($('reqOutcome')) $('reqOutcome').onchange = () => {
 };
 if ($('reqLimit')) $('reqLimit').onchange = loadLogs;
 if ($('btnReqReload')) $('btnReqReload').onclick = loadLogs;
+/* 请求记录导出：导出**当前筛选后**的行（与屏幕所见一致），不是全部 1000 条。
+   列口径与表格一致（时间/结果/模型/账号/来源IP/UA/耗时/Token/积分/请求ID）。 */
+if ($('btnReqExport')) $('btnReqExport').onclick = () => {
+  const list = reqEntries.filter(e => reqMatch(e));
+  if (!list.length) { toast('当前没有可导出的请求记录', 'err'); return; }
+  const headers = ['时间', '结果', '状态码', '模型', '账号', '来源IP', 'User-Agent', '耗时ms', 'Token', '积分', '请求ID'];
+  const rows = list.map(e => {
+    const total = Number(e && e.total_tokens || 0) ||
+      (Number(e && e.prompt_tokens || 0) + Number(e && e.completion_tokens || 0));
+    const credit = e && e.credit_known && Number.isFinite(Number(e.credit))
+      ? trimFixed(Number(e.credit).toFixed(2)) : '';
+    return [
+      e && e.time ? new Date(e.time).toLocaleString('zh-CN', { hour12: false }) : '',
+      ({ success: '成功', http_error: 'HTTP 错误', stream_error: '流错误', interrupted: '中断' })[e && e.outcome] || (e && e.outcome) || '',
+      e && e.status != null ? e.status : '',
+      e && e.model || '', e && e.account || '', e && e.client_ip || '', e && e.user_agent || '',
+      e && e.duration_ms != null ? e.duration_ms : '', total || '',
+      credit, e && e.request_id || '',
+    ];
+  });
+  exportCSV(headers, rows, 'requests-' + exportStamp() + '.csv');
+  toast('已导出 ' + rows.length + ' 条请求记录', 'ok');
+};
 // 时间范围：默认「全部历史」——请求记录页的历史行为就是"取最近 N 条"，
 // 加一个默认收窄的区间会让打开页面时看到的条数凭空变少。
 if ($('reqRange')) trangeBind('reqRange', loadLogs, '0');
@@ -2895,6 +2960,60 @@ async function loadUsage() {
 }
 
 if ($('btnUsage')) $('btnUsage').onclick = loadUsage;
+// 用量明细导出：与屏幕同口径（当前维度 + 当前排序）。
+if ($('btnUsExport')) $('btnUsExport').onclick = () => {
+  const d = usageData || {};
+  const m = US_DIMS[usDim] || US_DIMS.account;
+  const rows = usSortRows(d[m.key] || [], usSort);
+  if (!rows.length) { toast('当前维度没有可导出的数据', 'err'); return; }
+  const headers = ['维度', m.title, '域', '请求', '失败', 'Prompt', 'Completion', '合计Token', '均延迟ms', '均速率tok/s'];
+  const dimLabel = { account: '账号', model: '模型', realm: '域', key: 'API Key' }[usDim] || usDim;
+  const out = rows.map(x => [
+    dimLabel,
+    usDim === 'account' ? String(x.key || '').slice(0, 8) : (x.key || ''),
+    x.realm || '', x.requests || 0, x.errors || 0,
+    x.prompt_tokens || 0, x.completion_tokens || 0, x.total_tokens || 0,
+    Math.round(x.avg_latency_ms || 0), (x.avg_tokens_per_second || 0).toFixed(1),
+  ]);
+  exportCSV(headers, out, 'usage-' + dimLabel + '-' + exportStamp() + '.csv');
+  toast('已导出 ' + out.length + ' 行用量明细', 'ok');
+};
+// 积分扣除导出：与屏幕同口径（当前维度）。
+if ($('btnCreditExport')) $('btnCreditExport').onclick = () => {
+  const d = usageData || {};
+  let headers, out, dimLabel;
+  if (usCreditDim === 'model') {
+    dimLabel = '按模型';
+    headers = ['模型', '积分倍率', '请求', '扣除积分', '有效样本Token', '积分/1M Token', '缓存命中率%'];
+    out = (d.credit_by_model || []).map(r => [
+      r.key || '', fmtModelRate(r.rate), r.requests || 0, r.credits || 0,
+      r.credit_tokens || 0,
+      r.credit_samples ? Number(r.credits_per_1m_tokens || 0).toFixed(4) : '',
+      (r.cache_hit_tokens + r.cache_miss_tokens) ? cacheRateText(r.cache_hit_tokens, r.cache_miss_tokens).replace('%', '') : '',
+    ]);
+  } else if (usCreditDim === 'key') {
+    dimLabel = '按Key';
+    headers = ['API Key', '名称', '请求', '扣除积分', '有效样本Token', '积分/1M Token', '缓存命中率%'];
+    out = (d.credit_by_key || []).map(r => [
+      r.key || '', r.nickname || '', r.requests || 0, r.credits || 0,
+      r.credit_tokens || 0,
+      r.credit_samples ? Number(r.credits_per_1m_tokens || 0).toFixed(4) : '',
+      (r.cache_hit_tokens + r.cache_miss_tokens) ? cacheRateText(r.cache_hit_tokens, r.cache_miss_tokens).replace('%', '') : '',
+    ]);
+  } else {
+    dimLabel = '按账号';
+    headers = ['账号', '昵称', '域', '请求', '扣除积分', '有效样本Token', '积分/1M Token', '缓存命中率%'];
+    out = (d.credit_by_account || []).map(r => [
+      String(r.key || '').slice(0, 8), r.nickname || '', r.realm || '', r.requests || 0,
+      r.credits || 0, r.credit_tokens || 0,
+      r.credit_samples ? Number(r.credits_per_1m_tokens || 0).toFixed(4) : '',
+      (r.cache_hit_tokens + r.cache_miss_tokens) ? cacheRateText(r.cache_hit_tokens, r.cache_miss_tokens).replace('%', '') : '',
+    ]);
+  }
+  if (!out.length) { toast('当前维度没有可导出的积分记录', 'err'); return; }
+  exportCSV(headers, out, 'credits-' + dimLabel + '-' + exportStamp() + '.csv');
+  toast('已导出 ' + out.length + ' 行积分记录', 'ok');
+};
 // 时间范围控件绑定：任何改动（预设切换 / 自定义起止）都重新拉一次用量。
 if ($('usRange')) trangeBind('usRange', loadUsage);
 
