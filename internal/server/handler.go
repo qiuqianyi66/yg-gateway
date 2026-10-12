@@ -172,6 +172,7 @@ func NewHandler(cfg Config) *Handler {
 	h := &Handler{cfg: cfg, mux: http.NewServeMux()}
 	h.readonlyRL = cfg.ReadOnlyRateLimit.build()
 	h.mux.HandleFunc("POST /v1/chat/completions", h.withAuth(h.chatCompletions))
+	h.mux.HandleFunc("POST /v1/messages", h.withAuth(h.anthropicMessages))
 	h.mux.HandleFunc("GET /v1/models", h.withAuth(h.rateLimited(h.models)))
 	h.mux.HandleFunc("GET /status", h.withAuth(h.rateLimited(h.status)))
 	h.mux.HandleFunc("GET /healthz", h.healthz)
