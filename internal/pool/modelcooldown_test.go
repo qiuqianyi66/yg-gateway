@@ -203,7 +203,9 @@ func TestModelCooldownsSurviveRevive(t *testing.T) {
 	}
 }
 
-// TestModelCooldownsLazyCleanup 已过期的模型冷却在 pick（写锁路径）时被惰性清理。
+// TestModelCooldownsLazyCleanup 过期模型冷却不拦截选号（read 路径按 TTL 跳过）；
+// 内存条目由落盘点统一清理（ADR-005 D-500：pick 改读锁后不能再在热路径删 map，
+// prune 移入 saveLocked 的 pruneAllLocked）。
 func TestModelCooldownsLazyCleanup(t *testing.T) {
 	p := New("")
 	p.Add(&auth.Auth{UID: "u1"})
@@ -220,8 +222,18 @@ func TestModelCooldownsLazyCleanup(t *testing.T) {
 	p.mu.RLock()
 	_, still := e.modelCooldowns["old"]
 	p.mu.RUnlock()
+	if !still {
+		t.Fatal("pick 不再清理台账（ADR-005 D-500），过期条目应保留到落盘点清理")
+	}
+	// 落盘点（saveLocked 顶部 pruneAllLocked）清理：过期条目被真正删除，内存不滞留。
+	p.mu.Lock()
+	p.saveLocked()
+	p.mu.Unlock()
+	p.mu.RLock()
+	_, still = e.modelCooldowns["old"]
+	p.mu.RUnlock()
 	if still {
-		t.Error("过期模型冷却条目应在 pick 时被清理")
+		t.Error("过期模型冷却条目应在 saveLocked 时被清理")
 	}
 }
 

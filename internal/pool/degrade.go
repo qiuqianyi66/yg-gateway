@@ -25,6 +25,7 @@ func (p *Pool) NoteFailures(uid string) {
 		return
 	}
 	e.consecutiveFails++
+	e.noteEwmaFailure(p.ewmaAlpha) // ADR-005 D-502：未知原因失败同样压低成功率信号
 	if e.consecutiveFails < p.degradeThreshold {
 		p.dirty.Store(true)
 		return

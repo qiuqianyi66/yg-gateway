@@ -117,6 +117,11 @@ type Status struct {
 	InFlight     int       `json:"in_flight"`
 	BreakerFails int       `json:"breaker_fails"`
 	BreakerUntil time.Time `json:"breaker_until,omitempty"`
+	// EWMA 表现信号（ADR-005 D-502）：仅 ewma 开启且样本 > 0 时透出（指针 = 有值）。
+	// EwmaSamples 为成功率事件样本数（成功/失败各 +1；延迟样本数独立不在此透出）。
+	EwmaSuccess   *float64 `json:"ewma_success,omitempty"`    // 成功率 EWMA（0~1）
+	EwmaLatencyMs *float64 `json:"ewma_latency_ms,omitempty"` // 延迟 EWMA（毫秒，保留 1 位小数）
+	EwmaSamples   int64    `json:"ewma_samples,omitempty"`    // 成功率事件样本数
 }
 
 // ModelCostStatus 单个 (账号, 模型) 的成本台账行（P1-anti-monopoly 可观测性）。
@@ -204,14 +209,18 @@ type entry struct {
 	// paused 暂停选号：与 disabled 正交。置位后退出选号候选（healthy 判否），
 	// 但保号任务遍历只按 Disabled 过滤，故 paused 号天然继续参与签到 / 活跃上报 /
 	// 保活 / 余额刷新。持久化（state.json），跨重启不丢。
-	paused   bool
-	reason   string
-	lastUsed time.Time // 最近被选中时刻（防并发撞号）
+	paused bool
+	reason string
+	// lastUsed 最近被选中时刻（防并发撞号）。atomic（unixnano，0=从未使用）：
+	// pick 改读锁后（ADR-005 D-500）选中写回不再持写锁，普通字段在读锁下写入
+	// 会成数据竞争；原子化后读锁路径可直接 Load/Store。运行态，不持久化。
+	lastUsed atomic.Int64
 	// usedSeq 单调递增的选中序号：每次被 pick 选中时取 p.pickSeq 自增值。
 	// Windows 等平台 time.Now() 精度有限（~0.5ms），高并发/快速连续选号时多个
 	// 账号 lastUsed 完全相等，基于 wall-clock 的 LRU/防惊群判定失效。
 	// usedSeq 提供严格全序，与时间精度无关。运行态，不持久化。
-	usedSeq uint64
+	// atomic（同 lastUsed 口径，ADR-005 D-500）。
+	usedSeq atomic.Uint64
 	// breakerUntil / fails / retryCount 为熔断器运行态（不持久化）。
 	// fails 是唯一的"连续失败"计数器：任何错误喂入，达到 breakerThreshold 触发熔断（指数退避），
 	// 跨入口累计，成功/熔断/统一复活时清零（保留 retryCount 驱动退避指数）。
@@ -221,8 +230,8 @@ type entry struct {
 	// breakerProbeAt 最近一次 half-open 试探时刻（ADR-003 D-400）。
 	// 熔断到期后不再一次性全量放回，而是每 breakerProbeGap 至多 1 次试探；
 	// 本字段记录上次试探，供限速判定。运行态，不持久化（重启后首次到期即试探，
-	// 语义安全：最坏多探一次）。
-	breakerProbeAt time.Time
+	// 语义安全：最坏多探一次）。atomic（unixnano，0=无试探），同 lastUsed 口径。
+	breakerProbeAt atomic.Int64
 	// lastPrune 上次清理模型级台账（modelCost / modelCooldowns）的时刻
 	// （ADR-003 D-402）。pick 的写锁内每轮对全池每个 entry 扫这两个 map，
 	// 实测占 pick 耗时 ~85%；改为按 pruneInterval 时间节流后，绝大多数 pick
@@ -265,6 +274,101 @@ type entry struct {
 	modelCost map[string]modelCostEntry
 	// inFlight 单账号在途请求数（运行态，不持久化）。用 atomic 避免 Pick 热路径拿写锁。
 	inFlight atomic.Int64
+
+	// EWMA 成功率/延迟信号（ADR-005 D-502）：把「最近表现」回灌选号权重，
+	// 替代被删的终身累计成功率因子（errTotal 只增不减，早期出错会永久压权）。
+	// 运行态，不持久化（重启回中性）；仅在 p.ewmaEnabled 且样本达
+	// p.ewmaMinSamples 后参与加权（冷启动中性，不饿死新号）。
+	// 全部在 p.mu 写锁路径（NoteSuccess/NoteError/NoteFailures/RecordTokenUsage）
+	// 更新，pick 读锁路径只读，普通字段即可。
+	ewmaSuccess        float64 // 成功率 EWMA：1=全成、0=全败（懒初始化 1.0：首个事件前视同从未失败；样本不足不参与）
+	ewmaSuccessSamples int64   // 成功率事件样本数（成功/失败各 +1）
+	ewmaLatencyMs      float64 // 每请求延迟 EWMA（毫秒；首个观测直接赋值）
+	ewmaLatencySamples int64   // 延迟样本数
+}
+
+// EWMA 表现回灌的默认参数与因子边界（ADR-005 D-502）。
+// 默认关闭（零回归）：需 config pool.ewma.enabled=true 才参与加权。
+// cmd/server/config.go 里的 defaultEwmaAlpha/defaultEwmaMinSamples 必须与本组一致。
+const (
+	defaultEwmaAlpha      = 0.1 // 平滑系数：约 30~40 次观测收敛到稳态
+	defaultEwmaMinSamples = 5   // 每账号样本下限：少于该值因子恒 1（冷启动中性）
+	// 成功率因子边界：sr 高于基线加分、低于基线减分，线性映射并钳制在
+	// [1-successPenaltyMax, 1+successBoostMax]——不可能把账号权重清零（饿死防护），
+	// 也只温和拉开档位，不颠覆 credits/闲置/快过期的主导地位。
+	ewmaSuccessBaseline   = 0.95
+	ewmaSuccessBoostMax   = 0.15
+	ewmaSuccessPenaltyMax = 0.15
+	// 延迟因子边界：仅惩罚显著慢于池中位数的账号（> 中位数 × slowFactor），
+	// 超阈值部分线性升到封顶；低于阈值不罚（对噪声稳健，快账号不额外加分，
+	// 避免振荡与「快号越用越多」的正反馈）。
+	ewmaLatencySlowFactor = 1.5
+	ewmaLatencyPenaltyMax = 0.3
+)
+
+// lastUsedTime 最近选中时刻（0=从未使用 → 零值 time.Time）。
+func (e *entry) lastUsedTime() time.Time {
+	n := e.lastUsed.Load()
+	if n == 0 {
+		return time.Time{}
+	}
+	return time.Unix(0, n)
+}
+
+// setLastUsed 记录最近选中时刻（原子写，pick 读锁路径与粘性路径共用）。
+func (e *entry) setLastUsed(t time.Time) { e.lastUsed.Store(t.UnixNano()) }
+
+// clearLastUsed 清空最近选中时刻（测试/复位用）。
+func (e *entry) clearLastUsed() { e.lastUsed.Store(0) }
+
+// probeAtTime 最近 half-open 试探时刻（0=无试探 → 零值 time.Time）。
+func (e *entry) probeAtTime() time.Time {
+	n := e.breakerProbeAt.Load()
+	if n == 0 {
+		return time.Time{}
+	}
+	return time.Unix(0, n)
+}
+
+// setProbeAt 记录 half-open 试探时刻（原子写）。
+func (e *entry) setProbeAt(t time.Time) { e.breakerProbeAt.Store(t.UnixNano()) }
+
+// clearProbeAt 清空试探记录（NoteSuccess/Revive 随恢复清零）。
+func (e *entry) clearProbeAt() { e.breakerProbeAt.Store(0) }
+
+// noteEwmaSuccess 喂一次成功事件：sr 向 1 收敛（alpha 平滑）。
+// 首个事件前懒初始化 sr=1.0（乐观初值）：健康新号从样本 1 起就保持满分，
+// 不会被「从 0 慢速爬升」误罚（否则 minSamples 门槛内外的头几十个样本
+// 都会低于基线 0.95 而被持续减权）。
+// 调用方必须已持有 p.mu 写锁。
+func (e *entry) noteEwmaSuccess(alpha float64) {
+	if e.ewmaSuccessSamples == 0 {
+		e.ewmaSuccess = 1.0
+	}
+	e.ewmaSuccess += alpha * (1 - e.ewmaSuccess)
+	e.ewmaSuccessSamples++
+}
+
+// noteEwmaFailure 喂一次失败事件（NoteError/NoteFailures）：sr 向 0 收敛。
+// 首个事件前同样懒初始化 sr=1.0（从未观测过 = 从未失败，乐观但可被后续失败
+// 迅速拉低：1 次失败即 0.9、5 次 ≈0.59）。调用方必须已持有 p.mu 写锁。
+func (e *entry) noteEwmaFailure(alpha float64) {
+	if e.ewmaSuccessSamples == 0 {
+		e.ewmaSuccess = 1.0
+	}
+	e.ewmaSuccess -= alpha * e.ewmaSuccess
+	e.ewmaSuccessSamples++
+}
+
+// noteEwmaLatency 喂一次请求延迟观测（毫秒）。首个观测直接赋值（避免从 0 慢速
+// 爬升）。调用方必须已持有 p.mu 写锁。
+func (e *entry) noteEwmaLatency(alpha float64, ms int64) {
+	if e.ewmaLatencySamples == 0 {
+		e.ewmaLatencyMs = float64(ms)
+	} else {
+		e.ewmaLatencyMs += alpha * (float64(ms) - e.ewmaLatencyMs)
+	}
+	e.ewmaLatencySamples++
 }
 
 // modelCostOf 返回该账号在指定 model 上的有效成本观测；无观测或观测过期返回 ok=false。

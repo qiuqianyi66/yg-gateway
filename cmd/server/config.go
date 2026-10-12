@@ -21,6 +21,22 @@ import (
 // 30s：坏号被重新熔断前的最大暴露窗口，同时给"已恢复的好号"足够快的回归速度。
 const defaultBreakerProbeGap = "30s"
 
+// defaultEwmaAlpha / defaultEwmaMinSamples pool.ewma 缺省值（ADR-005 D-502）。
+// 必须与 internal/pool entry.go 的 defaultEwmaAlpha / defaultEwmaMinSamples 一致。
+const (
+	defaultEwmaAlpha      = 0.1
+	defaultEwmaMinSamples = 5
+)
+
+// EwmaConfig pool.ewma 配置段（ADR-005 D-502）。
+// 默认全关/回落默认：键缺席时 Enabled=false、Alpha/MinSamples 回落默认，
+// 与「未配置 = 现状行为」逐位一致。
+type EwmaConfig struct {
+	Enabled    bool    `json:"enabled"`     // true = 成功率/延迟信号参与选号加权；默认 false
+	Alpha      float64 `json:"alpha"`       // EWMA 平滑系数 (0,1]；0 = 回落默认 0.1
+	MinSamples int     `json:"min_samples"` // 每账号样本下限；<=0 = 回落默认 5
+}
+
 type Config struct {
 	Listen    string `json:"listen"`     // ":7863"
 	APIKey    string `json:"api_key"`    // 空 = 不鉴权（单 Key 兼容）
@@ -253,6 +269,10 @@ type Config struct {
 		// tier 0（免费）/ tier 1（无观测）不受限；签到回血越过 floor 自动恢复。
 		// 默认 0 = 关闭；负值钳 0。
 		CreditFloor int64 `json:"credit_floor"`
+		// Ewma 成功率/延迟 EWMA 表现回灌（ADR-005 D-502）：把「最近表现」参与
+		// 选号加权。默认关闭（零回归）；开启后因子被钳制在温和区间，不会把账号
+		// 权重清零（饿死防护）。字段均热生效（SetEwma），改配置无需重启。
+		Ewma EwmaConfig `json:"ewma"`
 	} `json:"pool"`
 
 	SessionSticky struct {
@@ -375,6 +395,9 @@ func Default() *Config {
 	c.Pool.ExpiringSoon = "168h" // 快过期窗口默认 7 天：官方活动奖励积分多在两周内过期
 	// costTier 探索默认 30m（issue #136：垄断破除 + 搭车改道零新增请求）；"0" 关停。
 	c.Pool.CostExploreInterval = "30m"
+	// EWMA 表现回灌默认关闭（ADR-005 D-502）：不改变既有行为；Alpha/MinSamples
+	// 默认值必须与 internal/pool entry.go 的 defaultEwma* 一致。
+	c.Pool.Ewma = EwmaConfig{Enabled: false, Alpha: defaultEwmaAlpha, MinSamples: defaultEwmaMinSamples}
 	c.SessionSticky.Enabled = true
 	c.SessionSticky.TTL = "30m"
 	c.SessionSticky.GCInterval = "5m"
@@ -659,6 +682,17 @@ func (c *Config) normalize() error {
 	// 积分保底：负值钳 0（= 关闭）。0 是合法默认（关闭），无需空值回落。
 	if c.Pool.CreditFloor < 0 {
 		c.Pool.CreditFloor = 0
+	}
+	// pool.ewma 归一（ADR-005 D-502）：alpha 0/负值回落默认、>1 报错；min_samples
+	// <=0 回落默认。enabled 无归一（bool 无非法态）。
+	if c.Pool.Ewma.Alpha <= 0 {
+		c.Pool.Ewma.Alpha = defaultEwmaAlpha
+	}
+	if c.Pool.Ewma.Alpha > 1 {
+		return fmt.Errorf("pool.ewma.alpha: 必须在 (0,1]，got %v", c.Pool.Ewma.Alpha)
+	}
+	if c.Pool.Ewma.MinSamples <= 0 {
+		c.Pool.Ewma.MinSamples = defaultEwmaMinSamples
 	}
 	if c.Pool.BreakerThreshold <= 0 {
 		c.Pool.BreakerThreshold = 3

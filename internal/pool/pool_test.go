@@ -194,7 +194,7 @@ func TestPickTopFiveByIdleNotCredits(t *testing.T) {
 	// a1..a5 全部"刚被用过"，闲置补偿归零；a6 从未使用 → 闲置满分。
 	p.mu.Lock()
 	for _, u := range []string{"a1", "a2", "a3", "a4", "a5"} {
-		p.byUID[u].lastUsed = now
+		p.byUID[u].setLastUsed(now)
 	}
 	p.mu.Unlock()
 
@@ -281,7 +281,7 @@ func TestPickLRUFallbackWhenTopAllRecentlyUsed(t *testing.T) {
 	order := []string{"a4", "a3", "a2", "a1", "a0"}
 	p.mu.Lock()
 	for i, uid := range order {
-		p.byUID[uid].lastUsed = time.Now().Add(-time.Duration(len(order)-i) * time.Second) // a4 最旧
+		p.byUID[uid].setLastUsed(time.Now().Add(-time.Duration(len(order)-i) * time.Second)) // a4 最旧
 	}
 	p.mu.Unlock()
 
@@ -1368,7 +1368,7 @@ func TestWeightIdleCompensation(t *testing.T) {
 	p.SetCredits("idle", 100, 0)
 	// used 1 小时前被选中过、idle 从未使用 → idle 权重更高（闲置补偿）。
 	p.mu.Lock()
-	p.byUID["used"].lastUsed = time.Now().Add(-1 * time.Hour)
+	p.byUID["used"].setLastUsed(time.Now().Add(-1 * time.Hour))
 	p.mu.Unlock()
 	wUsed, wIdle := p.entryWeight("used"), p.entryWeight("idle")
 	if wIdle <= wUsed {
@@ -1383,7 +1383,7 @@ func TestWeightAllZeroCreditsStillWeighted(t *testing.T) {
 	p.Add(&auth.Auth{UID: "bursty"})
 	// idle 从未使用、bursty 半分钟前刚用过 → idle 权重更高。
 	p.mu.Lock()
-	p.byUID["bursty"].lastUsed = time.Now().Add(-30 * time.Second)
+	p.byUID["bursty"].setLastUsed(time.Now().Add(-30 * time.Second))
 	p.mu.Unlock()
 	wIdle, wBursty := p.entryWeight("idle"), p.entryWeight("bursty")
 	if wIdle <= wBursty {
@@ -1402,8 +1402,8 @@ func TestWeightTopFiveSelectionChanges(t *testing.T) {
 	p.SetCredits("a", 90, 0) // a credits 略低，但久置
 	p.SetCredits("b", 100, 0)
 	p.mu.Lock()
-	p.byUID["b"].lastUsed = time.Now()
-	p.byUID["a"].lastUsed = time.Now().Add(-48 * time.Hour)
+	p.byUID["b"].setLastUsed(time.Now())
+	p.byUID["a"].setLastUsed(time.Now().Add(-48 * time.Hour))
 	p.mu.Unlock()
 	if wA, wB := p.entryWeight("a"), p.entryWeight("b"); wA <= wB {
 		t.Errorf("idle a should outweigh busy higher-credit b: a=%v b=%v", wA, wB)
@@ -1796,8 +1796,8 @@ func TestPreferExpiringDisabledRestoresWeight(t *testing.T) {
 	p.SetCreditsDetailed("b", 100, 100, 0, time.Time{}, 0)
 
 	p.mu.Lock()
-	we := p.routingWeightOf(p.byUID["a"], 100, now)
-	wn := p.routingWeightOf(p.byUID["b"], 100, now)
+	we := p.routingWeightOf(p.byUID["a"], 100, now, 0)
+	wn := p.routingWeightOf(p.byUID["b"], 100, now, 0)
 	p.mu.Unlock()
 	if we != wn*expiringVirtualSlots {
 		t.Fatalf("enabled expiring weight=%v want %v", we, wn*expiringVirtualSlots)
@@ -1806,8 +1806,8 @@ func TestPreferExpiringDisabledRestoresWeight(t *testing.T) {
 	p.SetPreferExpiring(false)
 
 	p.mu.Lock()
-	wa := p.routingWeightOf(p.byUID["a"], 100, now)
-	wb := p.routingWeightOf(p.byUID["b"], 100, now)
+	wa := p.routingWeightOf(p.byUID["a"], 100, now, 0)
+	wb := p.routingWeightOf(p.byUID["b"], 100, now, 0)
 	p.mu.Unlock()
 	if wa != wb {
 		t.Fatalf("disabled expiring weights differ: %v/%v", wa, wb)

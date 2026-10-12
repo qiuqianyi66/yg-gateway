@@ -96,6 +96,10 @@ func (p *Pool) startFlusher() {
 			select {
 			case <-t.C:
 				p.mu.Lock()
+				// 静默期兜底清理（ADR-005 D-500）：即使无脏数据（没有 saveLocked），
+				// 也周期性清理过期模型级台账——之前由 pick 热路径承担，移出后不能
+				// 让「无流量时段」成为内存滞留窗口。
+				p.pruneAllLocked(time.Now())
 				if p.dirty.Swap(false) {
 					p.saveLocked()
 				}
@@ -105,6 +109,16 @@ func (p *Pool) startFlusher() {
 			}
 		}
 	}()
+}
+
+// pruneAllLocked 全池清理过期模型级台账（modelCost/modelCooldowns）。
+// 调用方必须已持有 p.mu 写锁。仅做内存卫生，不置 dirty（过期条目落盘本就
+// 被 stateOverviewLocked 过滤，删除不改变持久化内容）。
+func (p *Pool) pruneAllLocked(now time.Time) {
+	for _, e := range p.byUID {
+		e.pruneExpiredModelCosts(now)
+		e.pruneExpiredModelCooldowns(now)
+	}
 }
 
 // Flush 同步把内存状态落盘（幂等：无变更不写盘）。供进程退出前调用。
@@ -229,6 +243,12 @@ func (p *Pool) applySnapshotLocked(s snapshot) {
 	p.applyAccountsLocked(s.Accounts)
 }
 func (p *Pool) saveLocked() {
+	// 过期模型级台账清理移入落盘点（ADR-005 D-500）：pick 改读锁后不能在热路径
+	// 删 map。落盘本就持写锁并全池遍历，prune 顺路完成内存卫生（时间节流
+	// pruneInterval 10s/entry，读路径按 TTL 跳过过期项，晚删零正确性影响）。
+	// 覆盖路径：flusher（dirty）、Flush、Remove、SyncToDir。无 stateFp 的池
+	// （测试/嵌入式）不落盘也不清理——其生命周期短且模型名集合有界，见 ADR-005。
+	p.pruneAllLocked(time.Now())
 	if p.stateFp == "" {
 		return
 	}

@@ -35,8 +35,12 @@ type Pool struct {
 	// 运行态（不持久化，同 lastUsed/usedSeq 口径）：重启归零 → 每个仍冻结的
 	// (域, 模型) 多至 1 次即时重探；已毕业号经 ModelCosts 恢复 tier，学费不重付。
 	// 只在探索事件时写入（tier 1 枯竭期间停走，陈旧无害）；不做对称清理。
+	// exploreMu（ADR-005 D-500）：pick 改读锁后 map 不能在读锁下写；且「窗口
+	// 判定 + 置位」必须原子（否则并发 pick 重复探索），独立小锁避免把写锁拉回
+	// 热路径。读侧（CostExploreStatus）同样走 exploreMu。
+	exploreMu   sync.Mutex
 	exploreLast map[string]time.Time
-	// costExploreEvents 累计探索事件数（/status 透出；pick 写锁内 ++，无需 atomic）。
+	// costExploreEvents 累计探索事件数（/status 透出；exploreMu 保护）。
 	costExploreEvents int64
 	// degradeThreshold / degradeCooldown / degradeCooldownMax 连败降权参数
 	// （SetDegrade 注入；默认值见 defaultDegrade*，issue #114）。
@@ -61,6 +65,12 @@ type Pool struct {
 	// preferExpiring 最早到期优先路由开关（默认 true）。开启且快过期窗口内存在有效
 	// 批次时，选号在成本层内先按最早到期排序；关闭后只使用普通加权路由。
 	preferExpiring bool
+	// ewmaEnabled / ewmaAlpha / ewmaMinSamples EWMA 表现回灌参数（ADR-005 D-502，
+	// SetEwma 注入；默认关闭 = 零回归）。ewmaEnabled 为 false 时权重因子恒 1，
+	// 与现状逐位一致；alpha/minSamples 见 entry.go defaultEwma*。
+	ewmaEnabled    bool
+	ewmaAlpha      float64
+	ewmaMinSamples int64
 	// maxInFlight 单账号最大在途请求数；0 = 不限（租约关闭）。
 	maxInFlight int
 	// maxInFlightGlobal global 域单账号在途上限分档（WAF 403 修复 P1-1：global 域
@@ -84,8 +94,9 @@ type Pool struct {
 	persistFails int
 	// pickSeq 单调递增的选号序号：每次 pick 选中账号时自增并记到 entry.usedSeq，
 	// 为 LRU 兜底/防惊群提供与 time.Now() 精度无关的严格全序（Windows ~0.5ms 精度下
-	// lastUsed 墙钟会全等）。仅 pick 写锁路径读写，无需 atomic。
-	pickSeq uint64
+	// lastUsed 墙钟会全等）。atomic（ADR-005 D-500）：pick 改读锁后由读锁路径
+	// Add(1) 分配序号，普通字段跨读锁写会成数据竞争。
+	pickSeq atomic.Uint64
 	// stopCh 关闭信号：Close 关闭它使 startFlusher 的后台 goroutine 退出。
 	// nil = 未启动 flusher（stateFp 为空时 New 不起 flusher）。
 	stopCh chan struct{}
@@ -104,6 +115,10 @@ func New(stateFp string) *Pool {
 		idleWeightPerHour:  defaultIdleWeightPerHour,
 		idleWeightMax:      defaultIdleWeightMax,
 		preferExpiring:     true,
+		// EWMA 表现回灌（ADR-005 D-502）：默认关闭（零回归），SetEwma 从 config
+		// 注入后生效；alpha/minSamples 的默认值供未注入（测试/嵌入式）场景兜底。
+		ewmaAlpha:          defaultEwmaAlpha,
+		ewmaMinSamples:     defaultEwmaMinSamples,
 		degradeThreshold:   defaultDegradeThreshold,
 		degradeCooldown:    defaultDegradeCooldown,
 		degradeCooldownMax: defaultDegradeCooldownMax,
@@ -144,6 +159,21 @@ func (p *Pool) SetBreaker(threshold int, cooldown, cooldownMax time.Duration) {
 	}
 	if cooldownMax > 0 {
 		p.breakerCooldownMax = cooldownMax
+	}
+}
+
+// SetEwma 注入 EWMA 表现回灌参数（ADR-005 D-502，main 从 config 解析后调用）。
+// enabled=false 时权重因子恒 1（完全回到现状行为）；alpha 非 (0,1] 保留默认；
+// minSamples<=0 保留默认。热生效（与 pool.* 其余 Set* 同口径）。
+func (p *Pool) SetEwma(enabled bool, alpha float64, minSamples int) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.ewmaEnabled = enabled
+	if alpha > 0 && alpha <= 1 {
+		p.ewmaAlpha = alpha
+	}
+	if minSamples > 0 {
+		p.ewmaMinSamples = int64(minSamples)
 	}
 }
 
@@ -236,8 +266,8 @@ func (p *Pool) SetCostExploreInterval(d time.Duration) {
 // 「探索→毕业」全链路）。RLock 只读遍历；map 大小受「服务过的 (域, 模型)」集合
 // 约束（与 modelCost 同界，天然有界）。
 func (p *Pool) CostExploreStatus() (events int64, last map[string]time.Time) {
-	p.mu.RLock()
-	defer p.mu.RUnlock()
+	p.exploreMu.Lock()
+	defer p.exploreMu.Unlock()
 	last = make(map[string]time.Time, len(p.exploreLast))
 	for k, ts := range p.exploreLast {
 		// 键 realm+"\x1f"+model → 输出 "|"（JSON 安全可读；\x1f 不可打印）。
