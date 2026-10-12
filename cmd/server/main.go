@@ -366,12 +366,23 @@ func main() {
 	go func() {
 		<-ctx.Done()
 		p.Flush() // 信号触发：先落盘再做优雅停机
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		// 排水窗口：给在途 SSE 请求时间完成。原 5s 太短——流式生成合法时长
+		// 可达数分钟，5s 一到进程强退、在途请求被硬掐（客户端收到半截流/连接
+		// 重置）。提到 30s：绝大多数请求（含典型 SSE）能正常完成；仍超时则
+		// 强退（记录日志，运维能看到"有在途请求被中断"）。
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		_ = srv.Shutdown(shutdownCtx)
+		if err := srv.Shutdown(shutdownCtx); err != nil {
+			log.Printf("[shutdown] 30s 排水窗口超时（在途请求被中断）: %v", err)
+		} else {
+			log.Printf("[shutdown] 在途请求全部完成，进程退出")
+		}
 	}()
 
 	log.Printf("yg-gateway listening on %s (api_key=%v)，管理面板 http://127.0.0.1%s/panel/", cfg.Listen, cfg.APIKey != "", panelListenPath(cfg.Listen))
+	// http.ErrServerClosed 是优雅停机的正常信号（signal → ctx 取消 → Shutdown
+	// 把 ListenAndServe 踢出来）——走正常返回路径，所有 defer（usage 落盘、
+	// requestLog.Close）执行。真实错误（端口占用等）才 Fatalf（os.Exit 会跳过 defer）。
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatalf("http: %v", err)
 	}
