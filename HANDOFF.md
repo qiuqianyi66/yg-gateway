@@ -25,21 +25,53 @@
 ## 三、构建与测试（关键环境）
 
 ```powershell
-# Go 工具链在临时目录（不是系统 PATH 里的 go）
-$go = "$env:TEMP\go\bin\go.exe"          # Go 1.27.2
-$env:GOFLAGS = '-mod=mod'
-$env:GOTOOLCHAIN = 'local'
+# Go 工具链不在系统 PATH（注意：不是 $env:TEMP\go，那是旧记录）
+$go = "C:\Program Files\Go\bin\go.exe"     # Go 1.27.2
 $env:GOPROXY = 'https://goproxy.cn,direct'   # proxy.golang.org 本机不通
 $env:CGO_ENABLED = '0'
 
 & $go build -trimpath -ldflags="-s -w" -o yg-gateway.exe ./cmd/server
 & $go vet ./...
 & $go test ./...                          # 19 包，全绿
+& $go fmt -l ./cmd ./internal             # 应为空（CI 门禁）
 node --check internal/panel/app.js        # 前端语法（go:embed 不查内容）
 ```
 
 - 全量测试：15 个有测试的包 ok + 4 个 no test files = 19 包。
-- 部署踩坑：**构建+swap+启动必须放同一条命令**（跨命令间新 exe 会被实时防护删除）。
+
+### 部署踩坑：新 exe 被实时防护删除（火绒）
+
+**现象**：`Copy-Item` 到 `D:\yg-gateway\yg-gateway.exe` 后，隔一段时间文件消失，只剩
+`.bak`；下次启动报「不是可运行程序」或启动即退出（退出码 -1）。
+
+**原因**：火绒等实时防护把**新建的可执行文件**判为可疑并隔离/删除。刚复制完还能跑，
+防护扫描完一轮才删——所以「复制成功 + 启动成功」不代表安全，跨会话回来才发现没了。
+
+**处置（按优先级）**：
+1. **本机构建场景**：火绒加白名单（防护 → 信任区/白名单），把 `D:\yg-gateway\` 目录
+   和构建输出目录加进去。这是根治办法。
+2. **临时场景**：关掉火绒的文件实时监控，再执行构建+部署。
+3. **无论如何都要做**：构建 + 复制 + 启动**放同一条命令**里（跨命令的空档正是防护
+   下手时机）：
+
+```powershell
+cd C:\Users\yanha\Desktop\yg-gateway
+& "C:\Program Files\Go\bin\go.exe" build -trimpath -ldflags="-s -w" -o yg-gateway.exe ./cmd/server
+Copy-Item -Path ".\yg-gateway.exe" -Destination "D:\yg-gateway\yg-gateway.exe" -Force
+$start = Start-Process -FilePath "D:\yg-gateway\yg-gateway.exe" `
+    -ArgumentList "--config D:\\yg-gateway\\config.json" -WorkingDirectory "D:\yg-gateway" `
+    -WindowStyle Hidden -PassThru
+Start-Sleep -Seconds 4
+if ($start.HasExited) { "进程退出 码=" + $start.ExitCode } else { "PID: " + $start.Id }
+```
+
+4. **验证要落地**：别只看「复制成功」，启动后用这条确认服务真在响应：
+   `Invoke-WebRequest -Uri "http://127.0.0.1:7863/panel/"` 应返回 200；
+   并用 `Get-ChildItem D:\yg-gateway -Filter "yg-gateway*"` 确认 exe 还在。
+5. **替换前先备份**（R15）：`Copy-Item` 到 `.v{版本}.bak`，被删了也能秒回。
+
+**当前状态（2026-10-12）**：火绒已由 YG 关闭，二进制部署正常（PID 26272）。若后续
+重新开启火绒，按第 1 条加白名单。
 
 ## 四、已完成的工作（按时间线）
 
