@@ -259,6 +259,12 @@ type Config struct {
 		Enabled    bool   `json:"enabled"`     // 默认 true
 		TTL        string `json:"ttl"`         // 会话绑定 TTL，默认 "30m"
 		GCInterval string `json:"gc_interval"` // 会话 GC 周期，默认 "5m"
+		// Derive 内容派生会话键开关（默认 true = 保持既有行为）。
+		// 用 *bool 三态：nil（键缺失）= 默认 true，显式 false = 关闭派生。
+		// 关闭后只有客户端显式给 conversation_id/conversationId/prompt_cache_key
+		// 才粘性；其余回落纯加权轮换（防"固定 system + 短开场"把无关对话
+		// 误判为同一会话、全量钉到同一个账号）。
+		Derive *bool `json:"derive"`
 	} `json:"session_sticky"`
 
 	// 解析后
@@ -267,11 +273,13 @@ type Config struct {
 	BreakerCooldownDur  time.Duration `json:"-"`
 	BreakerCooldownMaxD time.Duration `json:"-"`
 	// BreakerProbeGapDur 解析后的 half-open 试探间隔（ADR-003 D-400）；0 = 关闭。
-	BreakerProbeGapDur     time.Duration `json:"-"`
-	DegradeCooldownDur     time.Duration `json:"-"`
-	DegradeCooldownMaxD    time.Duration `json:"-"`
-	SessionTTL             time.Duration `json:"-"`
-	SessionGCInterval      time.Duration `json:"-"`
+	BreakerProbeGapDur  time.Duration `json:"-"`
+	DegradeCooldownDur  time.Duration `json:"-"`
+	DegradeCooldownMaxD time.Duration `json:"-"`
+	SessionTTL          time.Duration `json:"-"`
+	SessionGCInterval   time.Duration `json:"-"`
+	// SessionStickyDerive 解析后的内容派生会话键开关（默认 true）。
+	SessionStickyDerive    bool          `json:"-"`
 	BalanceRefreshInterval time.Duration `json:"-"` // 0 = 不启动（enabled=false）
 	ExpiringSoonDur        time.Duration `json:"-"`
 	// CostExploreIntervalDur 解析后的 costTier 探索窗口（issue #136）；0 = 关停。
@@ -623,6 +631,9 @@ func (c *Config) normalize() error {
 	if c.SessionGCInterval, err = time.ParseDuration(c.SessionSticky.GCInterval); err != nil {
 		return fmt.Errorf("session_sticky.gc_interval: %w", err)
 	}
+	// 派生会话键三态（ADR-004）：键缺失/显式 true → 开（保持既有行为）；
+	// 显式 false → 关。nil 与 false 必须区分，故用 *bool。
+	c.SessionStickyDerive = c.SessionSticky.Derive == nil || *c.SessionSticky.Derive
 	// 快过期窗口：空 = 禁用（ExpiringSoonDur 0）；非空必须可解析（拼写错误 fail fast）。
 	if c.Pool.ExpiringSoon != "" {
 		if c.ExpiringSoonDur, err = time.ParseDuration(c.Pool.ExpiringSoon); err != nil {

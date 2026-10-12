@@ -1360,6 +1360,10 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
               <input type="checkbox" name="sanitize_blacklist_fingerprints"></div>
             <div class="switch"><span class="lb">会话粘性路由</span>
               <input type="checkbox" name="session_sticky_enabled"></div>
+            <div class="switch"><span class="lb">内容派生会话键</span>
+              <input type="checkbox" name="session_sticky_derive"></div>
+            <div class="hint" style="margin-top:4px">关闭后只有客户端显式传 conversation_id / prompt_cache_key 才粘性；
+              无会话标识的请求回落加权轮换。防止「固定 system + 短开场」把无关对话误判为同一会话、流量全钉在一个号上。</div>
             <div class="hint" style="margin-top:10px">Upstash Redis 镜像、凭证目录与状态文件路径需手工编辑配置文件（判为重启项）。</div>
           </div>
         </div>
