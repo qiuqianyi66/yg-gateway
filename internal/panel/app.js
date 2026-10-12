@@ -1129,11 +1129,34 @@ function reqCreditCell(e) {
    导出不受影响），渲染只画当前页。 */
 const REQ_PAGE_SIZE = 50;
 let reqPage = 1;
+/* 排序状态：默认按时间倒序（最新在上）。点列头同 key 切换升降序，换 key 默认降序。 */
+let reqSortKey = 'time';
+let reqSortDir = -1; // 1=升序, -1=降序
 /* 当前展开详情的请求 ID（null = 收起）。按 request_id 定位：翻页/重渲染后仍记得。 */
 let reqDetailRid = null;
 
+/* reqSortValue 取排序键对应的可比值。数字列返回 Number，文字列返回字符串。 */
+function reqSortValue(e, key) {
+  if (!e) return 0;
+  switch (key) {
+    case 'time': return new Date(e.time || 0).getTime() || 0;
+    case 'duration_ms': return Number(e.duration_ms || 0);
+    case 'tokens': return Number(e.total_tokens || 0) ||
+      (Number(e.prompt_tokens || 0) + Number(e.completion_tokens || 0));
+    case 'credit': return (e.credit_known && Number.isFinite(Number(e.credit))) ? Number(e.credit) : -Infinity;
+    case 'outcome': return e.outcome || '';
+    default: return String(e[key] || '');
+  }
+}
+
 function renderRequestTable() {
-  const list = reqEntries.filter(e => reqMatch(e));
+  let list = reqEntries.filter(e => reqMatch(e));
+  // 排序：数字列数值比，文字列 localeCompare。
+  list = list.slice().sort((a, b) => {
+    const va = reqSortValue(a, reqSortKey), vb = reqSortValue(b, reqSortKey);
+    if (typeof va === 'number' && typeof vb === 'number') return (va - vb) * reqSortDir;
+    return String(va).localeCompare(String(vb)) * reqSortDir;
+  });
   const tb = $('reqBody');
   if (!tb) return;
   // 分页：筛选结果可能变化（数量/排序），把当前页钳在有效范围内。
@@ -1193,9 +1216,33 @@ function renderRequestTable() {
       (hasSource ? '' : ' · 来源未记录');
   $('reqCount').className = (filtered || !hasSource) ? 'note src-off' : 'note';
 
+  // 列头箭头：当前排序列显示 ↑/↓，其他列清除。
+  document.querySelectorAll('.acc.req thead th.sortable').forEach(th => {
+    const k = th.dataset.sort;
+    const old = th.querySelector('.arrow');
+    if (old) old.remove();
+    if (k === reqSortKey) {
+      const s = document.createElement('span');
+      s.className = 'arrow';
+      s.textContent = reqSortDir === -1 ? '▼' : '▲';
+      th.appendChild(s);
+    }
+  });
+
   // 轮询刷新后详情区跟着同步（条目可能被新数据冲掉，renderReqDetail 内部会自愈收起）。
   renderReqDetail();
 }
+
+/* thead 列头排序绑定：一次性绑定（thead 是静态 DOM，不随 renderRequestTable 重建）。 */
+document.querySelectorAll('.acc.req thead th.sortable').forEach(th => {
+  th.addEventListener('click', () => {
+    const k = th.dataset.sort;
+    if (reqSortKey === k) { reqSortDir = -reqSortDir; }
+    else { reqSortKey = k; reqSortDir = (k === 'time' || k === 'duration_ms' || k === 'tokens' || k === 'credit') ? -1 : 1; }
+    reqPage = 1;
+    renderRequestTable();
+  });
+});
 
 /* renderReqDetail 渲染请求详情抽屉。按 reqDetailRid 在全量 reqEntries 里定位
    （不是当前页切片——翻页后再切回仍能看到同一条）。找不到（被新数据冲掉）自动收起。 */
