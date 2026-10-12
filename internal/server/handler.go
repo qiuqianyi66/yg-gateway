@@ -232,6 +232,21 @@ func allowHeader(methods map[string]bool) string {
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// CORS：本机网关仅供本机客户端与浏览器内聊天网页调用。
+	// 浏览器从 https 聊天网页 fetch http://127.0.0.1:7863 会触发 preflight，
+	// 不写 CORS 头会被浏览器拦。回显 Origin（带 Authorization 头时 `*` 不被接受）。
+	if origin := r.Header.Get("Origin"); origin != "" {
+		w.Header().Set("Access-Control-Allow-Origin", origin)
+		w.Header().Add("Vary", "Origin")
+		w.Header().Set("Access-Control-Allow-Credentials", "true")
+	}
+	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Request-Id")
+	w.Header().Set("Access-Control-Allow-Private-Network", "true")
+	if r.Method == http.MethodOptions {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
 	if h.cfg.RequestLog != nil && r.Method == http.MethodPost && r.URL.Path == "/v1/chat/completions" {
 		trace := &requestTrace{id: reqlog.NewRequestID(), start: time.Now()}
 		if h.loadLive().RecordClientInfo {
