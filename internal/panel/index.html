@@ -11,7 +11,7 @@
 :root {
   --bg: #0c0e14; --surface: #14171f; --surface-2: #1a1e28; --raise: #202531;
   --line: #262c3a; --line-soft: #1e232e;
-  --ink: #e8ebf2; --ink-2: #a8b0c2; --ink-3: #6b7488;
+  --ink: #e8ebf2; --ink-2: #a8b0c2; --ink-3: #7d8699;
   --accent: #5b7cfa; --accent-ink: #ffffff; --accent-soft: rgba(91,124,250,.13);
   --ok: #3ddc97; --ok-soft: rgba(61,220,151,.12);
   --warn: #f5b544; --warn-soft: rgba(245,181,68,.12);
@@ -23,10 +23,10 @@
 [data-theme="light"] {
   --bg: #f4f5f8; --surface: #ffffff; --surface-2: #f8f9fb; --raise: #ffffff;
   --line: #e2e5ec; --line-soft: #eceef3;
-  --ink: #14171f; --ink-2: #545c6e; --ink-3: #8b93a5;
+  --ink: #14171f; --ink-2: #545c6e; --ink-3: #6b7280;
   --accent: #3d5fe0; --accent-ink: #ffffff; --accent-soft: rgba(61,95,224,.09);
-  --ok: #0f9d63; --ok-soft: rgba(15,157,99,.1);
-  --warn: #b47611; --warn-soft: rgba(180,118,17,.11);
+  --ok: #0a7a4d; --ok-soft: rgba(10,122,77,.1);
+  --warn: #96610a; --warn-soft: rgba(150,97,10,.11);
   --bad: #cf3b34; --bad-soft: rgba(207,59,52,.09);
   --shadow: 0 1px 2px rgba(16,20,32,.06), 0 8px 24px -14px rgba(16,20,32,.14);
 }
@@ -140,7 +140,7 @@ body {
   display: flex; align-items: center; gap: 14px; padding: 14px 24px;
   border-bottom: 1px solid var(--line); background: var(--surface); position: sticky; top: 0; z-index: 20;
 }
-.topbar h2 { font-size: 15.5px; font-weight: 620; letter-spacing: -.01em; }
+.topbar h2, .topbar h1 { font-size: 15.5px; font-weight: 620; letter-spacing: -.01em; }
 .topbar .sep { color: var(--ink-3); }
 .topbar .meta { color: var(--ink-3); font-size: 12px; font-family: var(--mono); }
 .topbar .grow { flex: 1; }
@@ -422,6 +422,9 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
 }
 .savebar .grow { flex: 1; }
 .restart-note { color: var(--warn); font-size: 12.5px; }
+/* 配置页未保存标记（cfgDirty 时由 app.js 加上）：与「需重启」提示同色但加粗，
+   两者可能同时出现（改了一个需重启字段），加粗保证「未保存」先被看到。 */
+.restart-note.cfg-dirty { font-weight: 650; }
 
 /* ── 弹层 ─────────────────────────────────────────────────────────── */
 .veil { position: fixed; inset: 0; background: rgba(6,8,13,.62); backdrop-filter: blur(2px); display: none; z-index: 60; }
@@ -481,7 +484,15 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
 .tst {
   background: var(--raise); border: 1px solid var(--line); border-left: 3px solid var(--ink-3);
   border-radius: 8px; padding: 10px 15px; font-size: 13px; box-shadow: var(--shadow); max-width: 380px;
+  display: flex; align-items: flex-start; gap: 10px;
 }
+.tst > span { flex: 1; min-width: 0; word-break: break-word; }
+/* toast 手动关闭：长文案/想先复制时不必等自动消失 */
+.tst .tst-x {
+  flex: none; padding: 0; width: 18px; height: 18px; line-height: 1; font-size: 15px;
+  background: transparent; border: none; color: var(--ink-3); cursor: pointer; border-radius: 4px;
+}
+.tst .tst-x:hover { color: var(--ink); background: var(--surface-2); border-color: transparent; }
 .tst.ok { border-left-color: var(--ok); } .tst.err { border-left-color: var(--bad); }
 
 @media (max-width: 760px) {
@@ -755,9 +766,9 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
     </div>
   </nav>
 
-  <div class="main">
+  <main class="main">
     <div class="topbar">
-      <h2 id="ttl">账号池</h2>
+      <h1 id="ttl">账号池</h1>
       <span class="sep">/</span>
       <span class="meta" id="subMeta">-</span>
       <div class="grow"></div>
@@ -804,13 +815,14 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
           <button class="xs" id="btnTravelAll">旅行巡检</button>
           <button class="xs" id="btnActivityAll">活跃上报</button>
           <button class="xs" id="btnKeepaliveAll">全部保活</button>
+          <button class="xs" id="btnBalanceAll" title="逐账号向上游查询余额并写回积分快照（重量级操作，会打上游）">刷新余额</button>
         </header>
         <div class="tbl-wrap">
         <table class="acc">
           <thead><tr>
-            <th class="mark" aria-hidden="true"></th>
-            <th>账号</th><th>状态</th><th>积分</th>
-            <th>成功 / 失败</th><th>在途</th><th>用量</th><th>最近成功</th><th class="c-acts"></th>
+            <th class="mark" aria-hidden="true" scope="col"></th>
+            <th scope="col">账号</th><th scope="col">状态</th><th scope="col">积分</th>
+            <th scope="col">成功 / 失败</th><th scope="col">在途</th><th scope="col">用量</th><th scope="col">最近成功</th><th class="c-acts"></th>
           </tr></thead>
           <tbody id="accBody"></tbody>
         </table>
@@ -826,8 +838,8 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
         <div class="tbl-wrap">
         <table class="acc">
           <thead><tr>
-            <th>模型</th><th>域</th><th>状态</th><th>可选 / 总数</th>
-            <th>锁定账号</th><th>最早解锁</th><th>全池解锁</th><th>原因</th>
+            <th scope="col">模型</th><th scope="col">域</th><th scope="col">状态</th><th scope="col">可选 / 总数</th>
+            <th scope="col">锁定账号</th><th scope="col">最早解锁</th><th scope="col">全池解锁</th><th scope="col">原因</th>
           </tr></thead>
           <tbody id="mlBody"></tbody>
         </table>
@@ -917,7 +929,7 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
         </div>
         <div class="tbl-wrap">
         <table class="acc md">
-          <thead><tr><th class="mark" aria-hidden="true"></th><th>模型</th><th>积分倍率</th><th>默认档</th><th>支持的思考档位</th><th>上下文长度</th><th>最大输出</th></tr></thead>
+          <thead><tr><th class="mark" aria-hidden="true" scope="col"></th><th scope="col">模型</th><th scope="col">积分倍率</th><th scope="col">默认档</th><th scope="col">支持的思考档位</th><th scope="col">上下文长度</th><th scope="col">最大输出</th></tr></thead>
           <tbody id="mdBody"></tbody>
         </table>
         </div>
@@ -1350,9 +1362,9 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
         <div class="tbl-wrap req-wrap">
           <table class="acc req">
             <thead><tr>
-              <th>时间</th><th>结果</th><th>模型</th><th>账号</th>
-              <th>来源 IP</th><th>User-Agent</th>
-              <th class="num">耗时</th><th class="num">Token</th><th class="num">积分</th><th>请求 ID</th>
+              <th scope="col">时间</th><th scope="col">结果</th><th scope="col">模型</th><th scope="col">账号</th>
+              <th scope="col">来源 IP</th><th scope="col">User-Agent</th>
+              <th class="num">耗时</th><th class="num">Token</th><th class="num">积分</th><th scope="col">请求 ID</th>
             </tr></thead>
             <tbody id="reqBody"></tbody>
           </table>
@@ -1375,7 +1387,7 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
         <pre id="logBox"></pre>
       </div>
     </section>
-  </div>
+  </main>
 </div>
 
 <!-- 积分任务 -->
@@ -1389,7 +1401,7 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
       <div class="state" id="taskState"><span class="dots">加载中</span></div>
       <div class="tbl-wrap">
         <table class="acc md" id="taskTable" hidden>
-          <thead><tr><th class="mark" aria-hidden="true"></th><th>任务</th><th>进度</th><th>奖励</th><th>状态</th><th class="c-acts"></th></tr></thead>
+          <thead><tr><th class="mark" aria-hidden="true" scope="col"></th><th scope="col">任务</th><th scope="col">进度</th><th scope="col">奖励</th><th scope="col">状态</th><th class="c-acts"></th></tr></thead>
           <tbody id="taskBody"></tbody>
         </table>
       </div>
@@ -1488,7 +1500,9 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
   </div>
 </div>
 
-<div id="toasts"></div>
+<!-- aria-live：toast 是唯一的操作结果出口（删除成功/保存失败等），
+     无 aria-live 时读屏用户完全感知不到结果。polite 不打断当前朗读。 -->
+<div id="toasts" role="status" aria-live="polite" aria-atomic="false"></div>
 
 <script src="app.js"></script>
 </body>
