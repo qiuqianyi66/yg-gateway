@@ -357,3 +357,38 @@ func TestAppJSEmptyStateCTA(t *testing.T) {
 		t.Error("扫描逻辑未提取为共用函数（header 与空态各写一份会漂移）")
 	}
 }
+
+// TestAppJSPollingHygiene 轮询三件套：防慢响应覆盖 / 页面隐藏暂停 / 主题监听收窄。
+//
+// 牙齿：分别删掉 abortable 使用、visibilitychange 监听、matchMedia 监听 → FAIL。
+func TestAppJSPollingHygiene(t *testing.T) {
+	src := readAppJS(t)
+	// ① 防慢响应覆盖：轮询路径必须用 abortable + isAbort
+	for _, want := range []string{
+		"function abortable(key)",
+		"function isAbort(e)",
+		"const ctl = abortable('overview');",
+		"const d = await api('overview', { signal: ctl.signal });",
+		"if (isAbort(e)) return;",
+		"signal: abortable('packages').signal",
+	} {
+		if !strings.Contains(src, want) {
+			t.Errorf("防慢响应覆盖缺失：未找到 %q", want)
+		}
+	}
+	// ② 页面隐藏暂停轮询
+	if !strings.Contains(src, "document.addEventListener('visibilitychange'") {
+		t.Error("缺 visibilitychange 监听：后台标签页仍在每 5 秒轮询")
+	}
+	if !strings.Contains(src, "if (!document.hidden) refTimer = setInterval(refreshVisible, 5000);") {
+		t.Error("轮询未按 document.hidden 门控")
+	}
+	// ③ 主题监听收窄到 media query（原来挂在 window 的 change 上，
+	//    页面上任何控件改动都会触发 applyTheme 重写图标 innerHTML）
+	if strings.Contains(src, "addEventListener('change', applyTheme);") {
+		t.Error("主题监听仍挂在 window change 上：任何控件改动都会重写图标")
+	}
+	if !strings.Contains(src, "matchMedia('(prefers-color-scheme: light)').addEventListener('change'") {
+		t.Error("主题监听未收窄到系统配色偏好变化")
+	}
+}
