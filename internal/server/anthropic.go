@@ -5,6 +5,9 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"strconv"
+	"strings"
+	"time"
 )
 
 // anthropicReq / anthropicResp 是 Anthropic Messages API 的最小子集。
@@ -78,6 +81,7 @@ func transformAnthropicToOpenAI(body []byte) ([]byte, error) {
 		"model":      areq.Model,
 		"messages":   msgs,
 		"max_tokens": areq.MaxTokens,
+		"stream":     areq.Stream,
 	}
 	return json.Marshal(oreq)
 }
@@ -109,9 +113,9 @@ func transformOpenAIToAnthropic(o openAICompletionResp) anthropicResp {
 	}
 }
 
-// anthropicMessages POST /v1/messages 端点（Anthropic 协议 MVP，非流式）。
-// 实现：转换 body → 内存 ResponseWriter 拦截内部 chatCompletions → 转换响应。
-// 流式（stream=true）当前返回 501，后续迭代。
+// anthropicMessages POST /v1/messages 端点（Anthropic 协议）。
+// stream=false：转换 body → 内存拦截 chatCompletions → 转换响应。
+// stream=true：逐 chunk 拦截 OpenAI SSE，实时转 Anthropic SSE 事件序列。
 func (h *Handler) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
@@ -119,16 +123,10 @@ func (h *Handler) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// stream=true 暂不支持（SSE 事件转换是另一块工作）。
 	var peek struct {
 		Stream bool `json:"stream"`
 	}
 	_ = json.Unmarshal(body, &peek)
-	if peek.Stream {
-		writeOpenAIError(w, http.StatusNotImplemented, "not_implemented",
-			"streaming not yet supported on /v1/messages; use stream=false")
-		return
-	}
 
 	openAIBody, err := transformAnthropicToOpenAI(body)
 	if err != nil {
@@ -136,19 +134,20 @@ func (h *Handler) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 构造内部请求：复用 chatCompletions 的准入/选号/上游逻辑。
-	// 用一个内存 ResponseWriter 拦截输出，再转换回 Anthropic 格式。
 	internalReq := r.Clone(r.Context())
 	internalReq.Body = io.NopCloser(bytes.NewReader(openAIBody))
 	internalReq.Header.Set("Content-Type", "application/json")
+
+	if peek.Stream {
+		h.anthropicStream(w, internalReq)
+		return
+	}
 
 	buf := &bytes.Buffer{}
 	iw := &interceptWriter{ResponseWriter: w, buf: buf}
 	h.chatCompletions(iw, internalReq)
 
 	if iw.status >= 400 {
-		// 内部错误（401/429/500 等）：原样透传，不做 Anthropic 格式转换
-		// （Anthropic 客户端能读 OpenAI 错误信封里的 message 字段）。
 		return
 	}
 
@@ -161,6 +160,115 @@ func (h *Handler) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 	aresp := transformOpenAIToAnthropic(oresp)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(aresp)
+}
+
+// anthropicStream 流式分支：把 OpenAI SSE 输出逐 chunk 转 Anthropic SSE 事件。
+func (h *Handler) anthropicStream(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+
+	// 开场事件：message_start + content_block_start。
+	flusher, _ := w.(http.Flusher)
+	writeSSEEvent(w, flusher, "message_start", map[string]any{
+		"type": "message_start",
+		"message": map[string]any{
+			"id":    "msg_" + strconv.FormatInt(time.Now().UnixNano(), 10),
+			"type":  "message",
+			"role":  "assistant",
+			"model": "",
+			"content": []any{},
+			"usage": map[string]int{"input_tokens": 0, "output_tokens": 0},
+		},
+	})
+	writeSSEEvent(w, flusher, "content_block_start", map[string]any{
+		"type":         "content_block_start",
+		"index":        0,
+		"content_block": map[string]string{"type": "text", "text": ""},
+	})
+
+	sw := &streamInterceptWriter{ResponseWriter: w, flusher: flusher}
+	h.chatCompletions(sw, r)
+
+	// 结尾事件。
+	writeSSEEvent(w, flusher, "content_block_stop", map[string]any{"type": "content_block_stop", "index": 0})
+	writeSSEEvent(w, flusher, "message_delta", map[string]any{
+		"type":  "message_delta",
+		"delta": map[string]string{"stop_reason": "end_turn"},
+		"usage": map[string]int{"output_tokens": 0},
+	})
+	writeSSEEvent(w, flusher, "message_stop", map[string]any{"type": "message_stop"})
+	if flusher != nil {
+		flusher.Flush()
+	}
+}
+
+// writeSSEEvent 写一个 Anthropic SSE 事件块（event: xxx\ndata: {...}\n\n）。
+func writeSSEEvent(w http.ResponseWriter, f http.Flusher, event string, data any) {
+	b, _ := json.Marshal(data)
+	w.Write([]byte("event: " + event + "\ndata: " + string(b) + "\n\n"))
+	if f != nil {
+		f.Flush()
+	}
+}
+
+// streamInterceptWriter 逐行拦截 OpenAI SSE，把 delta.content 转成 Anthropic content_block_delta。
+type streamInterceptWriter struct {
+	http.ResponseWriter
+	flusher  http.Flusher
+	lineBuf  bytes.Buffer
+	done     bool
+}
+
+func (sw *streamInterceptWriter) Write(b []byte) (int, error) {
+	if sw.done {
+		return len(b), nil
+	}
+	sw.lineBuf.Write(b)
+	for {
+		line, err := sw.lineBuf.ReadString('\n')
+		if err != nil {
+			// 半截行：留着等下次 Write。
+			sw.lineBuf.WriteString(line)
+			break
+		}
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "data: ") {
+			continue
+		}
+		payload := strings.TrimPrefix(line, "data: ")
+		if payload == "[DONE]" {
+			sw.done = true
+			break
+		}
+		// 解析 OpenAI delta：{"choices":[{"delta":{"content":"xxx"}}]}
+		var chunk struct {
+			Choices []struct {
+				Delta struct {
+					Content string `json:"content"`
+				} `json:"delta"`
+			} `json:"choices"`
+		}
+		if err := json.Unmarshal([]byte(payload), &chunk); err != nil {
+			continue
+		}
+		if len(chunk.Choices) > 0 && chunk.Choices[0].Delta.Content != "" {
+			writeSSEEvent(sw.ResponseWriter, sw.flusher, "content_block_delta", map[string]any{
+				"type":  "content_block_delta",
+				"index": 0,
+				"delta": map[string]string{"type": "text_delta", "text": chunk.Choices[0].Delta.Content},
+			})
+		}
+	}
+	return len(b), nil
+}
+
+func (sw *streamInterceptWriter) Header() http.Header {
+	return sw.ResponseWriter.Header()
+}
+
+func (sw *streamInterceptWriter) WriteHeader(code int) {
+	// 流式 200 已隐式发出；不覆盖。
 }
 
 // interceptWriter 拦截 ResponseWriter：记录状态码 + body 到内存，供转换后再写。
