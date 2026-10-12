@@ -733,6 +733,10 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
   .acc.req tbody tr { cursor: pointer; }
   .acc.req tbody tr:hover { background: var(--surface-2, rgba(127,127,127,.06)); }
   .acc.req tbody tr.detail-on { background: var(--surface-2, rgba(127,127,127,.1)); }
+  /* 列头排序：hover 提示可点；当前排序列显示 ↑/↓ 箭头。 */
+  .acc.req thead th.sortable { cursor: pointer; user-select: none; white-space: nowrap; }
+  .acc.req thead th.sortable:hover { color: var(--accent, #4a7); }
+  .acc.req thead th.sortable .arrow { font-size: 10px; margin-left: 3px; color: var(--accent, #4a7); }
   /* 详情抽屉：表格下方一块，栅格化字段（标签灰、值等宽）。 */
   .req-detail { margin-top: 10px; padding: 12px 14px; border: 1px solid var(--line, #ddd);
     border-left: 3px solid var(--accent, #4a7); border-radius: 6px; background: var(--surface-2, rgba(127,127,127,.04)); }
@@ -1435,9 +1439,16 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
         <div class="tbl-wrap req-wrap">
           <table class="acc req">
             <thead><tr>
-              <th scope="col">时间</th><th scope="col">结果</th><th scope="col">模型</th><th scope="col">账号</th>
-              <th scope="col">来源 IP</th><th scope="col">User-Agent</th>
-              <th class="num">耗时</th><th class="num">Token</th><th class="num">积分</th><th scope="col">请求 ID</th>
+              <th scope="col" data-sort="time" class="sortable">时间</th>
+              <th scope="col" data-sort="outcome" class="sortable">结果</th>
+              <th scope="col" data-sort="model" class="sortable">模型</th>
+              <th scope="col" data-sort="account" class="sortable">账号</th>
+              <th scope="col" data-sort="client_ip" class="sortable">来源 IP</th>
+              <th scope="col" data-sort="user_agent" class="sortable">User-Agent</th>
+              <th class="num sortable" data-sort="duration_ms">耗时</th>
+              <th class="num sortable" data-sort="tokens">Token</th>
+              <th class="num sortable" data-sort="credit">积分</th>
+              <th scope="col" data-sort="request_id" class="sortable">请求 ID</th>
             </tr></thead>
             <tbody id="reqBody"></tbody>
           </table>
