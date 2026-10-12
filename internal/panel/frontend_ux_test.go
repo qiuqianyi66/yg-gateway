@@ -279,3 +279,81 @@ process.stdout.write(JSON.stringify({
 		t.Error("CSV MIME 类型不对")
 	}
 }
+
+// TestAppJSFirstLoadErrorVisible 首屏 overview 失败必须可见且可就地重试。
+//
+// 背景：start() 调 loadOverview(true)（quiet），而 catch 是 `if (!quiet) toast(...)`
+// ——首屏失败一个字都不提示，统计卡永远停在「-」、账号表空白，用户只能猜。
+//
+// 牙齿：把 loadOverview 的 catch 改回单行 `if (!quiet) toast(...)` → FAIL。
+func TestAppJSFirstLoadErrorVisible(t *testing.T) {
+	src := readAppJS(t)
+	// 必须区分「首次（无数据）」与「轮询失败」
+	if !strings.Contains(src, "if (!overviewData) {") {
+		t.Error("loadOverview 未区分首屏失败与轮询失败")
+	}
+	if !strings.Contains(src, "loadErrorHTML('读取账号池失败'") {
+		t.Error("首屏失败未渲染可见错误块（仍是静默空白）")
+	}
+	if !strings.Contains(src, "bindRetry(tb, () => loadOverview(false))") {
+		t.Error("首屏失败错误块没有就地重试")
+	}
+	// 日志页此前 `catch (e) { /* 概览已提示 */ }` 完全吞错。
+	// 注意：新代码的注释里会**引用**这句旧代码作说明，所以不能直接搜字符串，
+	// 而要确认 catch 分支里确实渲染了错误块。
+	if !strings.Contains(src, "loadErrorHTML('读取日志失败'") {
+		t.Error("日志页失败未渲染可见错误块（仍在静默吞错）")
+	}
+}
+
+// TestAppJSSkeletonAndRetry 骨架屏与就地重试的对外契约。
+func TestAppJSSkeletonAndRetry(t *testing.T) {
+	src := readAppJS(t)
+	for _, want := range []string{
+		"function skelRows(n, cols)",
+		"function skelCards(n)",
+		"function skelKpis(n)",
+		"function loadingMsg(text)",
+		"function loadErrorHTML(title, detail, retryLabel)",
+		"function bindRetry(host, fn)",
+	} {
+		if !strings.Contains(src, want) {
+			t.Errorf("缺少 %q", want)
+		}
+	}
+	// 用量页与积分页失败必须就地重试
+	if !strings.Contains(src, "loadErrorHTML('读取用量失败', e.message, '重试')") {
+		t.Error("用量页失败缺就地重试")
+	}
+	if !strings.Contains(src, "loadErrorHTML('读取积分构成失败', e.message, '重试')") {
+		t.Error("积分构成页失败缺就地重试")
+	}
+	// 骨架屏样式必须在 index.html 里（否则 app.js 生成的 class 无样式）
+	html, err := os.ReadFile("index.html")
+	if err != nil {
+		t.Fatalf("read index.html: %v", err)
+	}
+	for _, want := range []string{".skel {", ".load-error {", "@keyframes skel-shimmer", ".skel-msg .spinner"} {
+		if !strings.Contains(string(html), want) {
+			t.Errorf("index.html 缺少骨架/错误态样式 %q", want)
+		}
+	}
+}
+
+// TestAppJSEmptyStateCTA 空态必须给出主操作按钮（不是只有文案）。
+func TestAppJSEmptyStateCTA(t *testing.T) {
+	html, err := os.ReadFile("index.html")
+	if err != nil {
+		t.Fatalf("read index.html: %v", err)
+	}
+	if !strings.Contains(string(html), `id="btnScanAllEmpty"`) {
+		t.Error("任务中心空态缺 CTA 按钮")
+	}
+	src := readAppJS(t)
+	if !strings.Contains(src, "$('btnScanAllEmpty').onclick") {
+		t.Error("空态 CTA 未绑定（点了没反应）")
+	}
+	if !strings.Contains(src, "async function runScanAll(btn)") {
+		t.Error("扫描逻辑未提取为共用函数（header 与空态各写一份会漂移）")
+	}
+}
