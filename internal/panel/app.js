@@ -328,6 +328,9 @@ $('btnKey').onclick = async () => {
   } catch (e) { $('keyErr').hidden = false; }
 };
 $('keyInput').addEventListener('keydown', e => { if (e.key === 'Enter') $('btnKey').click(); });
+// 密钥门表单回车提交：拦住默认行为（刷新页面会丢 localStorage 密钥、回到 401 循环）。
+// 原 onsubmit="return false" 内联属性被 CSP script-src 'self' 拦截失效，改为这里统一处理。
+$('keyGateForm').addEventListener('submit', e => { e.preventDefault(); $('btnKey').click(); });
 
 /* ── 路由 ─────────────────────────────────────────────────────────── */
 /* 积分包明细共享缓存：「积分构成」视图与首页「积分到期提醒」卡片共用同一份
