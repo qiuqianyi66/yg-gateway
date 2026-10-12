@@ -1465,12 +1465,15 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
           </select>
           <span class="grow"></span>
           <span class="note" id="reqCount">—</span>
+          <button class="xs ghost" id="btnReqSelExport" hidden title="导出选中行">导出选中</button>
+          <button class="xs ghost" id="btnReqSelClear" hidden title="清空选中行">清空选中</button>
           <button class="xs ghost" id="btnReqExport" title="把当前筛选后的请求记录导出为 CSV（含 BOM，Excel 直接打开）">导出 CSV</button>
           <button class="xs" id="btnReqReload">重新读取</button>
         </div>
         <div class="tbl-wrap req-wrap">
           <table class="acc req">
             <thead><tr>
+              <th class="chk" style="width:32px"><input type="checkbox" id="reqSelectAll" aria-label="全选当前页"></th>
               <th scope="col" data-sort="time" class="sortable">时间</th>
               <th scope="col" data-sort="outcome" class="sortable">结果</th>
               <th scope="col" data-sort="model" class="sortable">模型</th>

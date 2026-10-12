@@ -1193,6 +1193,27 @@ let reqSortKey = 'time';
 let reqSortDir = -1; // 1=升序, -1=降序
 /* 当前展开详情的请求 ID（null = 收起）。按 request_id 定位：翻页/重渲染后仍记得。 */
 let reqDetailRid = null;
+/* 批量选中的 request_id 集合。 */
+let selectedRids = new Set();
+
+function updateSelButtons() {
+  const n = selectedRids.size;
+  const be = $('btnReqSelExport'), bc = $('btnReqSelClear');
+  if (be) be.hidden = !n;
+  if (bc) bc.hidden = !n;
+  if (be) be.textContent = n ? '导出选中（' + n + '）' : '导出选中';
+}
+function syncSelectAll() {
+  const sa = $('reqSelectAll');
+  if (!sa) return;
+  // 当前页所有可见 rid 是否都在 selectedRids 里。
+  const rows = document.querySelectorAll('#reqBody .req-chk');
+  if (!rows.length) { sa.checked = false; sa.indeterminate = false; return; }
+  let sel = 0;
+  rows.forEach(cb => { if (selectedRids.has(cb.dataset.rid)) sel++; });
+  sa.checked = sel === rows.length;
+  sa.indeterminate = sel > 0 && sel < rows.length;
+}
 
 /* reqSortValue 取排序键对应的可比值。数字列返回 Number，文字列返回字符串。 */
 function reqSortValue(e, key) {
@@ -1231,7 +1252,9 @@ function renderRequestTable() {
     const ua = e && e.user_agent ? e.user_agent : '';
     const rid = e && e.request_id ? e.request_id : '';
     const onCls = (rid && rid === reqDetailRid) ? ' detail-on' : '';
+    const chk = selectedRids.has(rid) ? ' checked' : '';
     return '<tr class="req-row' + onCls + '" data-rid="' + esc(rid) + '" title="' + esc(requestLogText(e)) + '">' +
+      '<td class="chk"><input type="checkbox" class="req-chk" data-rid="' + esc(rid) + '"' + chk + ' aria-label="选择行"></td>' +
       '<td class="num">' + esc(when) + '</td>' +
       '<td>' + reqOutcomeTag(e) + '</td>' +
       '<td>' + esc(e && e.model || '—') + '</td>' +
@@ -1243,18 +1266,44 @@ function renderRequestTable() {
       '<td class="num">' + reqCreditCell(e) + '</td>' +
       '<td>' + (rid ? '<span class="clip rid" title="' + esc(rid) + '">' + esc(rid) + '</span>' : '<span class="muted">—</span>') + '</td>' +
       '</tr>';
-  }).join('') || '<tr><td colspan="10" class="empty">' +
+  }).join('') || '<tr><td colspan="11" class="empty">' +
       (reqEntries.length ? '没有符合当前筛选条件的请求记录' : '暂无请求记录') + '</td></tr>';
 
   // 行点击：展开/收起详情。点同一行收起，点其他行切换。
   tb.querySelectorAll('tr.req-row').forEach(tr => {
-    tr.onclick = () => {
+    tr.onclick = (ev) => {
+      // 点 checkbox 不触发展开详情。
+      if (ev.target.classList.contains('req-chk')) return;
       const rid = tr.dataset.rid || '';
       reqDetailRid = (rid && rid === reqDetailRid) ? null : rid;
       renderRequestTable();
       renderReqDetail();
     };
   });
+
+  // 行 checkbox：切换选中。
+  tb.querySelectorAll('.req-chk').forEach(cb => {
+    cb.onchange = () => {
+      const rid = cb.dataset.rid || '';
+      if (cb.checked) selectedRids.add(rid); else selectedRids.delete(rid);
+      updateSelButtons();
+      syncSelectAll();
+    };
+  });
+
+  // 全选当前页。
+  const sa = $('reqSelectAll');
+  if (sa) {
+    sa.onchange = () => {
+      pageItems.forEach(e => {
+        const rid = e && e.request_id || '';
+        if (!rid) return;
+        if (sa.checked) selectedRids.add(rid); else selectedRids.delete(rid);
+      });
+      renderRequestTable();
+    };
+  }
+  syncSelectAll();
 
   // 分页器：>1 页才显示（单页时无噪音）。翻页只重画当前页，不重发请求。
   const pagerHost = $('reqPager');
@@ -1402,6 +1451,38 @@ if ($('btnReqExport')) $('btnReqExport').onclick = () => {
   });
   exportCSV(headers, rows, 'requests-' + exportStamp() + '.csv');
   toast('已导出 ' + rows.length + ' 条请求记录', 'ok');
+};
+/* 导出选中：只导 selectedRids 里的行。 */
+if ($('btnReqSelExport')) $('btnReqSelExport').onclick = () => {
+  const list = reqEntries.filter(e => e && e.request_id && selectedRids.has(e.request_id));
+  if (!list.length) { toast('没有选中行', 'err'); return; }
+  const headers = ['时间', '结果', '状态码', '模型', '账号', '来源IP', 'User-Agent', '耗时ms', 'Token', '积分', '请求ID'];
+  const rows = list.map(e => {
+    const total = Number(e && e.total_tokens || 0) ||
+      (Number(e && e.prompt_tokens || 0) + Number(e && e.completion_tokens || 0));
+    const credit = e && e.credit_known && Number.isFinite(Number(e.credit))
+      ? trimFixed(Number(e.credit).toFixed(2)) : '';
+    return [
+      e && e.time ? new Date(e.time).toLocaleString('zh-CN', { hour12: false }) : '',
+      ({ success: '成功', http_error: 'HTTP 错误', stream_error: '流错误', interrupted: '中断' })[e && e.outcome] || (e && e.outcome) || '',
+      e && e.status != null ? e.status : '',
+      e && e.model || '', e && e.account || '', e && e.client_ip || '', e && e.user_agent || '',
+      e && e.duration_ms != null ? e.duration_ms : '', total || '',
+      credit, e && e.request_id || '',
+    ];
+  });
+  exportCSV(headers, rows, 'requests-selected-' + exportStamp() + '.csv');
+  toast('已导出选中 ' + rows.length + ' 条', 'ok');
+};
+/* 清空选中：从内存移除选中行（不影响后端归档文件）。 */
+if ($('btnReqSelClear')) $('btnReqSelClear').onclick = () => {
+  const before = reqEntries.length;
+  reqEntries = reqEntries.filter(e => !(e && e.request_id && selectedRids.has(e.request_id)));
+  const removed = before - reqEntries.length;
+  selectedRids.clear();
+  renderRequestTable();
+  updateSelButtons();
+  toast('已清空 ' + removed + ' 条选中记录', 'ok');
 };
 // 时间范围：默认「全部历史」——请求记录页的历史行为就是"取最近 N 条"，
 // 加一个默认收窄的区间会让打开页面时看到的条数凭空变少。
