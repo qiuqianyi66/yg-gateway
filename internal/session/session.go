@@ -247,6 +247,24 @@ func (r *Router) Count() int {
 	return len(r.entries)
 }
 
+// SessionBinding 粘性绑定快照（供面板展示）。
+type SessionBinding struct {
+	Key       string    `json:"key"`
+	UID       string    `json:"uid"`
+	LastActive time.Time `json:"last_active"`
+}
+
+// Snapshot 返回当前所有粘性绑定（供面板展示成本层级）。
+func (r *Router) Snapshot() []SessionBinding {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	out := make([]SessionBinding, 0, len(r.entries))
+	for k, e := range r.entries {
+		out = append(out, SessionBinding{Key: k, UID: e.uid, LastActive: e.lastActive})
+	}
+	return out
+}
+
 // gcOnce 清理 TTL 过期的绑定，并镜像删除。
 func (r *Router) gcOnce(now time.Time) int {
 	r.mu.Lock()

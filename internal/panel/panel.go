@@ -27,6 +27,7 @@ import (
 	"yg-gateway/internal/pool"
 	"yg-gateway/internal/reqlog"
 	"yg-gateway/internal/scheduler"
+	"yg-gateway/internal/session"
 	"yg-gateway/internal/upstream"
 	"yg-gateway/internal/usage"
 )
@@ -55,6 +56,8 @@ type Config struct {
 
 	// StickyCount 返回粘性会话绑定数；nil 时报告 0。
 	StickyCount func() int
+	// SessionSnapshot 返回当前粘性会话详情列表（key → uid + last_active）；nil 时不返回。
+	SessionSnapshot func() []session.SessionBinding
 
 	// Usage 逐请求用量记录器（nil = 用量接口返回 501）。
 	Usage *usage.Recorder
@@ -276,8 +279,20 @@ func (p *Panel) overview(w http.ResponseWriter, r *http.Request) {
 	// 「不可用」口径），而概况卡片要分开展示（issue #125）。
 	total, healthy, cooling, disabled, paused, inFlightFull := p.cfg.Pool.CountsDetailedWithPaused()
 	sticky := 0
+	var stickyList []map[string]any
 	if p.cfg.StickyCount != nil {
 		sticky = p.cfg.StickyCount()
+	}
+	// 粘性会话详情列表：key → uid + last_active（供面板展示绑到哪个号、成本层级）。
+	if p.cfg.SessionSnapshot != nil {
+		binds := p.cfg.SessionSnapshot()
+		for _, b := range binds {
+			stickyList = append(stickyList, map[string]any{
+				"key":         b.Key,
+				"uid":         b.UID,
+				"last_active": b.LastActive,
+			})
+		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"version":         p.cfg.Version,
@@ -285,6 +300,7 @@ func (p *Panel) overview(w http.ResponseWriter, r *http.Request) {
 		"auth_required":   p.authEnabled(),
 		"redis_mode":      p.cfg.RedisMode,
 		"sticky_sessions": sticky,
+		"sticky_list":     stickyList,
 		"total":           total,
 		"healthy":         healthy,
 		"cooling":         cooling,
