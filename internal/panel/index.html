@@ -94,9 +94,14 @@ body {
 .nav a {
   display: flex; align-items: center; gap: 10px; padding: 8px 11px; margin-bottom: 2px;
   color: var(--ink-2); text-decoration: none; border-radius: 7px; font-size: 13.5px;
+  position: relative; transition: all .15s;
 }
 .nav a:hover { background: var(--surface-2); color: var(--ink); }
-.nav a.on { background: var(--accent-soft); color: var(--accent); font-weight: 550; }
+.nav a.on { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.nav a.on::before {
+  content: ''; position: absolute; left: -11px; top: 50%; transform: translateY(-50%);
+  width: 3px; height: 20px; background: var(--accent-gradient); border-radius: 0 2px 2px 0;
+}
 .nav a svg { width: 15px; height: 15px; flex: none; opacity: .85; }
 .nav .sig { padding: 12px 16px; border-top: 1px solid var(--line-soft); font-size: 11.5px; color: var(--ink-3); }
 .nav .sig .row { display: flex; align-items: center; gap: 7px; }
@@ -221,10 +226,11 @@ button.icon { padding: 7px 9px; }
 input, select {
   font: inherit; color: var(--ink); background: var(--surface-2);
   border: 1px solid var(--line); border-radius: 7px; padding: 7px 11px; width: 100%;
+  transition: border-color .15s, box-shadow .15s;
 }
-input:focus, select:focus { outline: none; border-color: var(--accent); }
+input:focus, select:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
 input.invalid { border-color: var(--bad); background: var(--bad-soft); }
-input.invalid:focus { border-color: var(--bad); }
+input.invalid:focus { border-color: var(--bad); box-shadow: 0 0 0 3px var(--bad-soft); }
 input[type=checkbox] { width: auto; accent-color: var(--accent); }
 label.fld { display: block; margin-bottom: 14px; }
 label.fld > .lb { display: block; font-size: 12.5px; color: var(--ink-2); margin-bottom: 5px; }
@@ -257,7 +263,8 @@ label.fld > .hint { display: block; font-size: 11.5px; color: var(--ink-3); marg
 .stat.minor .k { font-size: 11px; }
 
 /* ── 面板块 ───────────────────────────────────────────────────────── */
-.box { background: var(--surface); border: 1px solid var(--line); border-radius: 11px; box-shadow: var(--shadow); margin-bottom: 20px; overflow: hidden; }
+.box { background: var(--surface); border: 1px solid var(--line); border-radius: 11px; box-shadow: var(--shadow); margin-bottom: 20px; overflow: hidden; transition: box-shadow .2s, border-color .2s; }
+.box:hover { border-color: color-mix(in srgb, var(--accent) 15%, var(--line)); }
 .box > header { display: flex; align-items: center; gap: 12px; padding: 12px 17px; border-bottom: 1px solid var(--line-soft); }
 .box > header h3 { font-size: 13.5px; font-weight: 600; }
 .box > header h3 .hint { font-size: 11.5px; font-weight: 400; color: var(--ink-3); margin-left: 6px; }
@@ -333,13 +340,14 @@ label.fld > .hint { display: block; font-size: 11.5px; color: var(--ink-3); marg
 .bar { height: 3px; background: var(--line); border-radius: 2px; margin-top: 5px; overflow: hidden; max-width: 88px; }
 .bar i { display: block; height: 100%; background: var(--accent); border-radius: 2px; }
 .tag {
-  display: inline-flex; align-items: center; gap: 5px; padding: 1px 9px;
+  display: inline-flex; align-items: center; gap: 5px; padding: 2px 10px;
   border-radius: 999px; font-size: 11.5px; font-weight: 500; white-space: nowrap;
+  border: 1px solid transparent;
 }
-.tag.ok { background: var(--ok-soft); color: var(--ok); }
-.tag.warn { background: var(--warn-soft); color: var(--warn); }
-.tag.bad { background: var(--bad-soft); color: var(--bad); }
-.tag.mute { background: var(--surface-2); color: var(--ink-3); border: 1px solid var(--line); }
+.tag.ok { background: var(--ok-soft); color: var(--ok); border-color: color-mix(in srgb, var(--ok) 20%, transparent); }
+.tag.warn { background: var(--warn-soft); color: var(--warn); border-color: color-mix(in srgb, var(--warn) 20%, transparent); }
+.tag.bad { background: var(--bad-soft); color: var(--bad); border-color: color-mix(in srgb, var(--bad) 20%, transparent); }
+.tag.mute { background: var(--surface-2); color: var(--ink-3); border-color: var(--line); }
 .rate-limits { display: flex; flex-direction: column; gap: 4px; margin-top: 6px; min-width: 210px; }
 .rate-limit {
   display: flex; align-items: baseline; gap: 6px; padding: 4px 7px;
