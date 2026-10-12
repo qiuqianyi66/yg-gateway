@@ -54,6 +54,31 @@ func (p *Pool) pick(tried map[string]bool, reqModel, realm string) *auth.Auth {
 	// floorBlocked 积分保底拦截判定（实现在 floorBlockedForRealmModel，与粘性路径共用）：
 	// 触底 + 收费（本地实测台账 或 上游目录倍率）即拦；免费/未知倍率不受限。
 	floorBlocked := func(e *entry) bool { return p.floorBlockedForRealmModel(e, reqModel, realm, now) }
+	// breakerHalfOpen（ADR-003 D-400）：熔断号**刚到期**时进入 half-open 试探窗——
+	// 每 breakerProbeGap 至多放行 1 次，避免到期瞬间全量洪峰把坏号二次打挂
+	//（二次熔断会让退避翻倍，最长 6h，代价远高于限速一轮）。
+	// 返回 true = 本账号本轮应被跳过。
+	//
+	// 判定边界（为什么这样切）：
+	//   - breakerProbeGap <= 0 → 关闭，恒 false（零回归，与旧行为逐位一致）
+	//   - breakerUntil 为空 或 尚未到期 → 不受此限（未到期本来就不可选；空则从未熔断）
+	//   - retryCount == 0 → 从未熔断过或已被成功清理，无限速必要
+	//   - 距上次试探 < gap → 跳过（把机会让给别的号）
+	breakerHalfOpen := func(e *entry) bool {
+		if p.breakerProbeGap <= 0 {
+			return false
+		}
+		if e.breakerUntil.IsZero() || now.Before(e.breakerUntil) {
+			return false // 从未熔断 / 仍在熔断期（后者由 healthy 拦下）
+		}
+		if e.retryCount == 0 {
+			return false // 已成功恢复（NoteSuccess 清 retryCount）
+		}
+		if e.breakerProbeAt.IsZero() {
+			return false // 首次到期：放行一次试探
+		}
+		return now.Sub(e.breakerProbeAt) < p.breakerProbeGap
+	}
 	var cands []*entry
 	for uid, e := range p.byUID {
 		if tried != nil && tried[uid] {
@@ -65,6 +90,9 @@ func (p *Pool) pick(tried map[string]bool, reqModel, realm string) *auth.Auth {
 		e.pruneExpiredModelCosts(now)
 		if !healthyOf(e) {
 			continue
+		}
+		if breakerHalfOpen(e) {
+			continue // half-open 限速：本轮让位（见上方注释）
 		}
 		if floorBlocked(e) {
 			continue // 积分保底：触底号不接实测收费模型（tier 0/1 不受限）
@@ -110,8 +138,18 @@ func (p *Pool) pick(tried map[string]bool, reqModel, realm string) *auth.Auth {
 	bestTier := 2
 	hasTier1 := false
 	explored := false // 本次 pick 是否切了探索层（事件日志在选中号确定后打）
-	for _, e := range cands {
-		if ti, _ := costTier(e); ti < bestTier {
+	// costTier 预计算并缓存（ADR-003 D-402）：`modelCostOf` 是 map 查找 + TTL 判定，
+	// 而原实现在 bestTier 统计、hasTier1 探测、ws 构建三处各调一遍（全候选 × 3）。
+	// 这里一次算完存平行切片，后续只读缓存——零行为差异，省 2×N 次 map 查找。
+	//
+	// 索引与 cands 一一对应（下方会重建 cands，故用切片而非 map）。
+	candTier := make([]int, len(cands))
+	candCost := make([]float64, len(cands))
+	for i, e := range cands {
+		ti, ci := costTier(e)
+		candTier[i] = ti
+		candCost[i] = ci
+		if ti < bestTier {
 			bestTier = ti
 		}
 	}
@@ -126,8 +164,8 @@ func (p *Pool) pick(tried map[string]bool, reqModel, realm string) *auth.Auth {
 	//（天然防重复探索）。key = realm + "\x1f" + reqModel：同模型名可跨域，
 	// 探索节奏按 (域, 模型) 独立；realm==""（Pick 老语义）单独成键。
 	if p.costExploreInterval > 0 && bestTier == 0 && reqModel != "" {
-		for _, e := range cands {
-			if ti, _ := costTier(e); ti == 1 {
+		for i := range cands {
+			if candTier[i] == 1 {
 				hasTier1 = true
 				break
 			}
@@ -150,10 +188,9 @@ func (p *Pool) pick(tried map[string]bool, reqModel, realm string) *auth.Auth {
 		cost1k float64
 	}
 	ws := make([]weighted, 0, len(cands))
-	for _, e := range cands {
-		ti, ci := costTier(e)
-		if ti == bestTier {
-			ws = append(ws, weighted{e: e, w: p.routingWeightOf(e, maxCredits, now), tier: ti, cost1k: ci})
+	for i, e := range cands {
+		if candTier[i] == bestTier {
+			ws = append(ws, weighted{e: e, w: p.routingWeightOf(e, maxCredits, now), tier: candTier[i], cost1k: candCost[i]})
 		}
 	}
 	// 等权重洗牌：仅当存在权重相等且候选数超过 top5 时，才对 ws 做 Fisher-Yates
@@ -231,6 +268,12 @@ func (p *Pool) pick(tried map[string]bool, reqModel, realm string) *auth.Auth {
 	e.lastUsed = now // 锁内即时标记：下一个进入 pick 的 goroutine 立即看到本号已用
 	p.pickSeq++
 	e.usedSeq = p.pickSeq // 单调序号：保证 usedSeq 严格全序（防惊群/LRU 的权威依据）
+	// half-open 试探占位（ADR-003 D-400）：本号是被放行的试探（熔断刚到期且
+	// retryCount>0），记下时刻让下一个进入者按 gap 限速。成功→NoteSuccess 清
+	// retryCount（此后不再限速）；失败→重新熔断（退避加倍），两条都由既有路径承接。
+	if p.breakerProbeGap > 0 && !e.breakerUntil.IsZero() && now.After(e.breakerUntil) && e.retryCount > 0 {
+		e.breakerProbeAt = now
+	}
 	return e.a
 }
 

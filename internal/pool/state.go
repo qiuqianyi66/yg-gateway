@@ -92,6 +92,7 @@ func (p *Pool) Revive(uid string) bool {
 	e.fails = 0
 	e.retryCount = 0
 	e.breakerUntil = time.Time{}
+	e.breakerProbeAt = time.Time{} // half-open 试探记录随复活清零（ADR-003 D-400）
 	p.dirty.Store(true)
 	return true
 }
@@ -179,6 +180,7 @@ func (p *Pool) NoteSuccess(uid string) {
 		e.fails = 0
 		e.retryCount = 0
 		e.breakerUntil = time.Time{}
+		e.breakerProbeAt = time.Time{} // half-open 试探记录随恢复一并清零（ADR-003 D-400）
 		e.softStreak = 0
 		e.sessionDeadFails = 0
 		e.consecutiveFails = 0

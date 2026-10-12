@@ -20,6 +20,7 @@ import (
 	"yg-gateway/internal/httpauth"
 	"yg-gateway/internal/livecfg"
 	"yg-gateway/internal/logfmt"
+	"yg-gateway/internal/metrics"
 	"yg-gateway/internal/pool"
 	"yg-gateway/internal/prompt"
 	"yg-gateway/internal/reqlog"
@@ -66,6 +67,11 @@ type Config struct {
 	// 在 recordAttempt 这一唯一汇聚点调用，因此流式/非流式、成功/失败都会计入，
 	// 且与 pool 的每账号累计器同源，两条口径不会漂移。
 	Usage *usage.Recorder
+
+	// Latency 延迟分位数观测（ADR-003 D-403，可选；nil = 不观测）。
+	// 在 recordAttempt 汇聚点记录每次尝试的耗时，暴露到 /status 的 latency 段。
+	// 自实现固定分桶（internal/metrics），零新依赖。
+	Latency *metrics.Registry
 
 	// RequestLog 请求指标与脱敏 JSONL 归档（可选；nil = 不记录）。
 	RequestLog *reqlog.Recorder
@@ -432,7 +438,22 @@ func (h *Handler) status(w http.ResponseWriter, r *http.Request) {
 			"events_total": exploreEvents,
 			"per_model":    exploreLast,
 		},
+		// latency 延迟分位数（ADR-003 D-403）：全局 + 按模型的 p50/p90/p95/p99。
+		// 补齐"只有均值、看不见长尾"的观测缺口——均值会被大量快请求稀释，
+		// 而网关的体验痛点恰在长尾。未启用观测时为 null（零回归只增键）。
+		"latency": h.latencySnapshot(),
+		// global_in_flight 全局在途计数（ADR-003 D-401）：与 gateway.max_in_flight
+		// 对照可判断是否触顶（触顶时新请求收 429）。
+		"global_in_flight": h.cfg.Pool.GlobalInFlight(),
 	})
+}
+
+// latencySnapshot 返回延迟分位数快照；未启用观测（Latency=nil）时返回 nil。
+func (h *Handler) latencySnapshot() any {
+	if h.cfg.Latency == nil {
+		return nil
+	}
+	return h.cfg.Latency.Snapshot()
 }
 
 // countsMapFrom 把 CountsDetailed 五元组打包成 /status 的域分组建模。
@@ -702,6 +723,24 @@ func cachedModelsSnapshot() []upstream.ModelInfo {
 }
 
 func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
+	// 全局准入控制（ADR-003 D-401）：全网关在途请求总数上限，超限立即 429。
+	//
+	// 为什么放在最前面（读 body 之前）：拒绝要尽可能便宜——不读 body、不解析、
+	// 不选号、不打上游。上游慢时请求会堆积（每个都占着 goroutine + 连接等超时），
+	// 这是防雪崩的关键一环。未配置上限（默认 0）时 AcquireGlobal 恒返回 true，
+	// 行为与改动前逐位一致（零回归）。
+	//
+	// 为什么返 429 而不排队：排队会掩盖问题（客户端以为在正常等待），且队列本身
+	// 要限长/超时/处理取消，复杂度陡增；429 + Retry-After 让客户端按自己的策略
+	// 退避，语义与上游 429 一致（客户端已具备该能力）。
+	if !h.cfg.Pool.AcquireGlobal() {
+		w.Header().Set("Retry-After", "1")
+		writeOpenAIError(w, http.StatusTooManyRequests, "server_busy",
+			"gateway at capacity; retry shortly")
+		return
+	}
+	defer h.cfg.Pool.ReleaseGlobal()
+
 	// 客户端 IP 提取（F-002：按受信任代理判定；未配置受信任代理时不采信伪造的
 	// X-Forwarded-For，回落 TCP 对端）。透传与否由 upstream.PassthroughIP 决定，
 	// 但这里先保证「采信」这件事是安全的。
@@ -883,6 +922,11 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		latencyMs := latency.Milliseconds()
 		if latencyMs < 1 {
 			latencyMs = 1
+		}
+		// 延迟分位数观测（ADR-003 D-403）：与 usage 同汇聚点，全局 + 按模型。
+		// 观测完整延迟（含 TTFB），而非仅生成阶段——网关要回答的是"用户等了多久"。
+		if h.cfg.Latency != nil {
+			h.cfg.Latency.Observe(delta.Model, latency)
 		}
 		delta.HasLatencyMs = true
 		delta.LatencyMs = latencyMs

@@ -1305,6 +1305,12 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
               <label class="fld"><span class="lb">会话粘性 TTL</span>
                 <input name="ttl" placeholder="30m">
                 <span class="hint">改动需重启进程</span></label>
+              <label class="fld"><span class="lb">熔断试探间隔（half-open）</span>
+                <input name="breaker_probe_gap" placeholder="30s">
+                <span class="hint">熔断到期后每该间隔至多放行 1 次试探，成功即全量恢复；0 关闭</span></label>
+              <label class="fld"><span class="lb">全局在途上限</span>
+                <input name="global_max_in_flight" type="number" min="0" placeholder="0">
+                <span class="hint">全网关在途请求总数上限，超限立即 429（不排队）；0 = 不限</span></label>
             </div>
             <div class="switch"><span class="lb">快过期积分优先</span>
               <input type="checkbox" name="prefer_expiring"></div>

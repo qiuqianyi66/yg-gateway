@@ -17,12 +17,15 @@ import (
 )
 
 // Config 顶层配置。
+// defaultBreakerProbeGap 熔断 half-open 试探间隔缺省值（ADR-003 D-400）。
+// 30s：坏号被重新熔断前的最大暴露窗口，同时给"已恢复的好号"足够快的回归速度。
+const defaultBreakerProbeGap = "30s"
+
 type Config struct {
 	Listen    string `json:"listen"`     // ":7863"
 	APIKey    string `json:"api_key"`    // 空 = 不鉴权（单 Key 兼容）
 	AuthDir   string `json:"auth_dir"`   // ./auths
 	StateFile string `json:"state_file"` // ./data/state.json
-
 	// APIKeys 多 Key 鉴权（ADR-001）。nil = 键缺失/null（旧版兼容，单 Key 语义）；
 	// 非 nil 空切片 = 显式空数组（配置错误，normalize fail fast）。
 	// 每个条目的 Key 明文只在配置源；运行时索引只存摘要（见 httpauth.Index）。
@@ -214,6 +217,15 @@ type Config struct {
 		BreakerThreshold   int    `json:"breaker_threshold"`    // 连续失败次数触发熔断，默认 3
 		BreakerCooldown    string `json:"breaker_cooldown"`     // 基础熔断时长，默认 "30m"
 		BreakerCooldownMax string `json:"breaker_cooldown_max"` // 指数退避封顶，默认 "6h"
+		// BreakerProbeGap 熔断到期后的 half-open 试探间隔（ADR-003 D-400）。
+		// 熔断号到期后不再一次性全量放回，而是每该间隔至多放行 1 次试探；
+		// 成功即全量恢复、失败则重新熔断（退避加倍）。默认 "30s"；"0" 关闭
+		// half-open（退化为「到期即全量」，与旧行为逐位一致）。
+		BreakerProbeGap string `json:"breaker_probe_gap"`
+		// GlobalMaxInFlight 全网关在途请求总数上限（ADR-003 D-401）：超限立即
+		// 429（不排队），防上游慢时请求无限堆积。默认 0 = 不限（保持旧行为）。
+		// 建议按「账号数 × max_in_flight」的 ~1.5 倍设置。
+		GlobalMaxInFlight int `json:"global_max_in_flight"`
 		// 连败降权（issue #114）：ErrClient/传输层这类「不罚号」失败连续计数，达阈
 		// 临时出池。与冷却/熔断并存取更长者不叠加。默认 5 次 / 10m。
 		DegradeThreshold   int     `json:"degrade_threshold"`    // 连败次数触发降权，默认 5
@@ -250,10 +262,12 @@ type Config struct {
 	} `json:"session_sticky"`
 
 	// 解析后
-	SoftRateDur            time.Duration `json:"-"`
-	SoftRateMaxDur         time.Duration `json:"-"`
-	BreakerCooldownDur     time.Duration `json:"-"`
-	BreakerCooldownMaxD    time.Duration `json:"-"`
+	SoftRateDur         time.Duration `json:"-"`
+	SoftRateMaxDur      time.Duration `json:"-"`
+	BreakerCooldownDur  time.Duration `json:"-"`
+	BreakerCooldownMaxD time.Duration `json:"-"`
+	// BreakerProbeGapDur 解析后的 half-open 试探间隔（ADR-003 D-400）；0 = 关闭。
+	BreakerProbeGapDur     time.Duration `json:"-"`
 	DegradeCooldownDur     time.Duration `json:"-"`
 	DegradeCooldownMaxD    time.Duration `json:"-"`
 	SessionTTL             time.Duration `json:"-"`
@@ -339,6 +353,11 @@ func Default() *Config {
 	c.Pool.BreakerThreshold = 3
 	c.Pool.BreakerCooldown = "30m"
 	c.Pool.BreakerCooldownMax = "6h"
+	// BreakerProbeGap 缺省 "30s"（ADR-003 D-400）：熔断到期后限速试探，避免
+	// 到期瞬间全量洪峰把坏号二次打挂（二次熔断会让退避翻倍、最长 6h）。
+	c.Pool.BreakerProbeGap = defaultBreakerProbeGap
+	// GlobalMaxInFlight 缺省 0 = 不限（ADR-003 D-401）：默认不改变既有行为。
+	c.Pool.GlobalMaxInFlight = 0
 	c.Pool.DegradeThreshold = 5
 	c.Pool.DegradeCooldown = "10m"
 	c.Pool.DegradeCooldownMax = "2h"
@@ -580,6 +599,17 @@ func (c *Config) normalize() error {
 	}
 	if c.BreakerCooldownMaxD, err = time.ParseDuration(c.Pool.BreakerCooldownMax); err != nil {
 		return fmt.Errorf("pool.breaker_cooldown_max: %w", err)
+	}
+	// half-open 试探间隔（ADR-003 D-400）："0" 合法（关闭），故不能沿用
+	// ParseDuration 直接失败——空串才回落默认。
+	if c.Pool.BreakerProbeGap == "" {
+		c.Pool.BreakerProbeGap = defaultBreakerProbeGap
+	}
+	if c.BreakerProbeGapDur, err = time.ParseDuration(c.Pool.BreakerProbeGap); err != nil {
+		return fmt.Errorf("pool.breaker_probe_gap: %w", err)
+	}
+	if c.BreakerProbeGapDur < 0 {
+		return fmt.Errorf("pool.breaker_probe_gap: 负值 %s 无意义（0=关闭）", c.Pool.BreakerProbeGap)
 	}
 	if c.DegradeCooldownDur, err = time.ParseDuration(c.Pool.DegradeCooldown); err != nil {
 		return fmt.Errorf("pool.degrade_cooldown: %w", err)
