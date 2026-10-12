@@ -107,6 +107,56 @@ function toast(msg, cls) {
   // 超上限先挤掉最旧的（FIFO），避免叠满右下角。
   while (host.children.length > 5) host.firstChild.remove();
   setTimeout(() => el.remove(), cls === 'err' ? 8000 : 3600);
+  // 同步写入持久化通知中心（错误/成功才记，普通 info 不刷）。
+  if (cls === 'err' || cls === 'ok') pushNotif(msg, '', cls === 'err' ? 'error' : 'success');
+}
+
+/* ── 通知中心：localStorage 持久化，跨刷新保留 ──────────────────────── */
+const NOTIF_KEY = 'yg_notifs_v1';
+function getNotifs() { try { return JSON.parse(localStorage.getItem(NOTIF_KEY)) || []; } catch { return []; } }
+function setNotifs(n) { try { localStorage.setItem(NOTIF_KEY, JSON.stringify(n.slice(-80))); } catch {} }
+function pushNotif(title, body, type = 'info') {
+  const n = getNotifs();
+  n.unshift({ id: Date.now() + Math.random(), title, body, type, ts: Date.now(), read: false });
+  setNotifs(n);
+  renderNotifBadge();
+}
+function renderNotifBadge() {
+  const n = getNotifs();
+  const unread = n.filter(x => !x.read).length;
+  const b = $('notifBadge');
+  if (unread > 0) { b.hidden = false; b.textContent = unread > 9 ? '9+' : String(unread); }
+  else b.hidden = true;
+}
+function renderNotifList() {
+  const n = getNotifs();
+  $('notifList').innerHTML = n.length ? n.map(x => {
+    const color = x.type === 'error' ? 'var(--bad)' : x.type === 'success' ? 'var(--ok)' : 'var(--accent)';
+    return `<div class="notif-item ${x.read ? '' : 'unread'}" data-id="${x.id}">
+      <div style="display:flex;align-items:center;gap:6px"><i style="width:6px;height:6px;border-radius:50%;background:${color};flex:none"></i><span>${x.title}</span></div>
+      ${x.body ? `<div style="color:var(--ink-3);font-size:12px;margin-top:3px">${x.body}</div>` : ''}
+      <div class="notif-time">${new Date(x.ts).toLocaleString()}</div>
+    </div>`;
+  }).join('') : '<div style="padding:28px;text-align:center;color:var(--ink-3);font-size:13px">暂无通知</div>';
+}
+function initNotifCenter() {
+  renderNotifBadge();
+  $('btnNotif').onclick = () => {
+    const p = $('notifPanel');
+    p.hidden = !p.hidden;
+    if (!p.hidden) {
+      renderNotifList();
+      const n = getNotifs();
+      n.forEach(x => x.read = true);
+      setNotifs(n);
+      renderNotifBadge();
+    }
+  };
+  $('btnNotifClear').onclick = (e) => { e.stopPropagation(); setNotifs([]); renderNotifList(); renderNotifBadge(); };
+  // 点外部关闭面板。
+  document.addEventListener('click', (e) => {
+    if (!e.target.closest('#notifPanel') && !e.target.closest('#btnNotif')) $('notifPanel').hidden = true;
+  });
 }
 /* ── CSV / JSON 导出 ─────────────────────────────────────────────────
    运维面板的常见诉求：把这张表导出去对账（进 Excel 做透视、按 Key 拆账、
@@ -3963,3 +4013,6 @@ if ($('btnExp')) $('btnExp').onclick = () => loadExpiry(true);
 
 // 「刷新」始终实时查（显式 force，不依赖事件对象真值）
 if ($('btnPk')) $('btnPk').onclick = () => loadPackages(true);
+
+// 初始化通知中心
+initNotifCenter();
