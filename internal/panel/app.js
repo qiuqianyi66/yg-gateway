@@ -1129,6 +1129,8 @@ function reqCreditCell(e) {
    导出不受影响），渲染只画当前页。 */
 const REQ_PAGE_SIZE = 50;
 let reqPage = 1;
+/* 当前展开详情的请求 ID（null = 收起）。按 request_id 定位：翻页/重渲染后仍记得。 */
+let reqDetailRid = null;
 
 function renderRequestTable() {
   const list = reqEntries.filter(e => reqMatch(e));
@@ -1146,7 +1148,8 @@ function renderRequestTable() {
     const ip = e && e.client_ip ? e.client_ip : '';
     const ua = e && e.user_agent ? e.user_agent : '';
     const rid = e && e.request_id ? e.request_id : '';
-    return '<tr title="' + esc(requestLogText(e)) + '">' +
+    const onCls = (rid && rid === reqDetailRid) ? ' detail-on' : '';
+    return '<tr class="req-row' + onCls + '" data-rid="' + esc(rid) + '" title="' + esc(requestLogText(e)) + '">' +
       '<td class="num">' + esc(when) + '</td>' +
       '<td>' + reqOutcomeTag(e) + '</td>' +
       '<td>' + esc(e && e.model || '—') + '</td>' +
@@ -1160,6 +1163,16 @@ function renderRequestTable() {
       '</tr>';
   }).join('') || '<tr><td colspan="10" class="empty">' +
       (reqEntries.length ? '没有符合当前筛选条件的请求记录' : '暂无请求记录') + '</td></tr>';
+
+  // 行点击：展开/收起详情。点同一行收起，点其他行切换。
+  tb.querySelectorAll('tr.req-row').forEach(tr => {
+    tr.onclick = () => {
+      const rid = tr.dataset.rid || '';
+      reqDetailRid = (rid && rid === reqDetailRid) ? null : rid;
+      renderRequestTable();
+      renderReqDetail();
+    };
+  });
 
   // 分页器：>1 页才显示（单页时无噪音）。翻页只重画当前页，不重发请求。
   const pagerHost = $('reqPager');
@@ -1179,6 +1192,52 @@ function renderRequestTable() {
       (totalPages > 1 ? ' · 第 ' + reqPage + '/' + totalPages + ' 页（每页 ' + REQ_PAGE_SIZE + ' 条）' : '') +
       (hasSource ? '' : ' · 来源未记录');
   $('reqCount').className = (filtered || !hasSource) ? 'note src-off' : 'note';
+
+  // 轮询刷新后详情区跟着同步（条目可能被新数据冲掉，renderReqDetail 内部会自愈收起）。
+  renderReqDetail();
+}
+
+/* renderReqDetail 渲染请求详情抽屉。按 reqDetailRid 在全量 reqEntries 里定位
+   （不是当前页切片——翻页后再切回仍能看到同一条）。找不到（被新数据冲掉）自动收起。 */
+function renderReqDetail() {
+  const host = $('reqDetail');
+  if (!host) return;
+  if (!reqDetailRid) { host.hidden = true; host.innerHTML = ''; return; }
+  const e = reqEntries.find(x => x && x.request_id === reqDetailRid);
+  if (!e) { reqDetailRid = null; host.hidden = true; host.innerHTML = ''; return; }
+
+  const outcomeLabel = { success: '成功', http_error: 'HTTP 错误', stream_error: '流错误', interrupted: '中断' };
+  const promptTok = Number(e.prompt_tokens || 0);
+  const compTok = Number(e.completion_tokens || 0);
+  const totalTok = Number(e.total_tokens || 0) || (promptTok + compTok);
+  const hit = Number(e.cache_hit_tokens || 0), miss = Number(e.cache_miss_tokens || 0);
+  const cacheRate = cacheRateText(hit, miss);
+  const credit = (e && e.credit_known && Number.isFinite(Number(e.credit)))
+    ? trimFixed(Number(e.credit).toFixed(2)) + ' credit' : '—';
+  const item = (k, v) => '<div class="rd-item"><span class="rd-k">' + esc(k) + '</span>' +
+    '<span class="rd-v">' + esc(v || '—') + '</span></div>';
+
+  host.innerHTML =
+    '<div class="rd-head"><b>' + esc(e.model || '—') + '</b>' +
+    '<span class="note">' + esc((outcomeLabel[e.outcome] || e.outcome || '—') +
+      (e.status != null ? ' · ' + e.status : '')) + '</span>' +
+    '<button class="xs ghost rd-close" id="btnReqDetailClose">收起</button></div>' +
+    '<div class="rd-grid">' +
+    item('请求 ID', e.request_id) +
+    item('完整时间', e.time ? new Date(e.time).toLocaleString('zh-CN', { hour12: false }) : '—') +
+    item('账号', e.account) +
+    item('来源 IP', e.client_ip) +
+    item('User-Agent', e.user_agent) +
+    item('耗时', fmtMs(e.duration_ms)) +
+    item('Prompt tokens', String(promptTok)) +
+    item('Completion tokens', String(compTok)) +
+    item('Total tokens', String(totalTok)) +
+    item('缓存命中', hit + ' / ' + (hit + miss) + (cacheRate !== '—' ? '（' + cacheRate + '）' : '')) +
+    item('积分', credit) +
+    '</div>';
+  host.hidden = false;
+  const closeBtn = $('btnReqDetailClose');
+  if (closeBtn) closeBtn.onclick = () => { reqDetailRid = null; renderReqDetail(); renderRequestTable(); };
 }
 
 /* reqPagerHtml 生成分页器控件（首页/上一页/页码/下一页/末页）。
