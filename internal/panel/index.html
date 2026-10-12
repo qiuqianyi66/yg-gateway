@@ -205,6 +205,28 @@ body {
 .view { padding: 22px 24px 60px; max-width: 1560px; margin: 0 auto; width: 100%; }
 .view[hidden] { display: none; }
 
+/* ── 账号卡片网格（Vercel/Linear 风格） ──────────────────────────── */
+.acc-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 14px; padding: 16px; }
+.acc-card { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 16px; transition: all .15s; position: relative; }
+.acc-card:hover { border-color: color-mix(in srgb, var(--accent) 25%, var(--line)); box-shadow: 0 4px 16px -4px rgba(99,102,241,.15); }
+.acc-card.off { opacity: .65; }
+.acc-card-head { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+.acc-avatar { width: 36px; height: 36px; border-radius: 10px; background: var(--accent-gradient); color: #fff; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 14px; flex: none; }
+.acc-name { font-weight: 650; font-size: 14.5px; line-height: 1.2; }
+.acc-uid { font-size: 11px; color: var(--ink-3); font-family: var(--mono); margin-top: 2px; }
+.acc-status { margin-left: auto; flex: none; }
+.acc-cred { margin-bottom: 12px; }
+.acc-cred .n { font: 700 22px/1.2 var(--mono); color: var(--ink); }
+.acc-cred .n .of { font-size: 13px; color: var(--ink-3); font-weight: 400; }
+.acc-cred .bar { height: 4px; background: var(--surface-2); border-radius: 2px; margin-top: 6px; overflow: hidden; }
+.acc-cred .bar i { display: block; height: 100%; background: var(--accent-gradient); border-radius: 2px; }
+.acc-stats { display: flex; gap: 14px; margin-bottom: 12px; padding: 10px 0; border-top: 1px solid var(--line-soft); border-bottom: 1px solid var(--line-soft); }
+.acc-stat { flex: 1; }
+.acc-stat .v { font: 600 13px/1.2 var(--mono); color: var(--ink); }
+.acc-stat .k { font-size: 10.5px; color: var(--ink-3); margin-top: 2px; }
+.acc-acts { display: flex; gap: 6px; flex-wrap: wrap; }
+.acc-acts button { font-size: 11.5px; padding: 3px 8px; }
+
 /* ── 控件 ─────────────────────────────────────────────────────────── */
 button {
   font: inherit; color: var(--ink); background: var(--surface-2);
@@ -921,16 +943,7 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
           <button class="xs" id="btnKeepaliveAll">全部保活</button>
           <button class="xs" id="btnBalanceAll" title="逐账号向上游查询余额并写回积分快照（重量级操作，会打上游）">刷新余额</button>
         </header>
-        <div class="tbl-wrap">
-        <table class="acc">
-          <thead><tr>
-            <th class="mark" aria-hidden="true" scope="col"></th>
-            <th scope="col">账号</th><th scope="col">状态</th><th scope="col">积分</th>
-            <th scope="col">成功 / 失败</th><th scope="col">在途</th><th scope="col">用量</th><th scope="col">最近成功</th><th class="c-acts"></th>
-          </tr></thead>
-          <tbody id="accBody"></tbody>
-        </table>
-        </div>
+        <div class="acc-grid" id="accBody"></div>
       </div>
 
       <div class="box">
