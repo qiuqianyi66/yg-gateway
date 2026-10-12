@@ -1000,6 +1000,7 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
           </span>
           <span class="grow"></span>
           <span class="note" id="usDimNote">—</span>
+          <button class="xs ghost" id="btnUsExport" title="把当前维度与排序下的用量明细导出为 CSV">导出 CSV</button>
           <label class="sel-note">排序
             <select id="usSort">
               <option value="total">合计 Token</option>
@@ -1027,6 +1028,7 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
           </span>
           <span class="grow"></span>
           <span class="note" id="usCreditNote">—</span>
+          <button class="xs ghost" id="btnCreditExport" title="把当前维度下的积分扣除导出为 CSV">导出 CSV</button>
         </header>
         <div class="kpis k4" id="usCreditStats"></div>
         <div class="tbl-wrap">
@@ -1357,6 +1359,7 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
           </select>
           <span class="grow"></span>
           <span class="note" id="reqCount">—</span>
+          <button class="xs ghost" id="btnReqExport" title="把当前筛选后的请求记录导出为 CSV（含 BOM，Excel 直接打开）">导出 CSV</button>
           <button class="xs" id="btnReqReload">重新读取</button>
         </div>
         <div class="tbl-wrap req-wrap">

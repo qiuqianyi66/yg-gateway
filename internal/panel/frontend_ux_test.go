@@ -2,6 +2,7 @@ package panel
 
 import (
 	"os"
+	"os/exec"
 	"strings"
 	"testing"
 )
@@ -142,5 +143,139 @@ func TestAppJSViewScrollReset(t *testing.T) {
 	src := readAppJS(t)
 	if !strings.Contains(src, "if (!skipGuard) window.scrollTo({ top: 0 });") {
 		t.Error("go() 缺少切视图回顶（从长页面切走会停在页面中部，看起来像页面坏了）")
+	}
+}
+
+// TestAppJSToastA11yAndCap toast 必须有 aria-live（读屏）+ 堆叠上限 + 手动关闭。
+func TestAppJSToastA11yAndCap(t *testing.T) {
+	html, err := os.ReadFile("index.html")
+	if err != nil {
+		t.Fatalf("read index.html: %v", err)
+	}
+	if !strings.Contains(string(html), `aria-live="polite"`) {
+		t.Error("toast 容器缺 aria-live：读屏用户感知不到任何操作结果")
+	}
+	src := readAppJS(t)
+	for _, want := range []string{
+		"while (host.children.length > 5) host.firstChild.remove();", // 堆叠上限
+		"cls === 'err' ? 8000 : 3600",                                // 错误停留更久
+		"x.className = 'tst-x';",                                     // 手动关闭
+	} {
+		if !strings.Contains(src, want) {
+			t.Errorf("toast 改进缺失：未找到 %q", want)
+		}
+	}
+}
+
+// TestAppJSSemanticLandmarks 语义标签：<main> / <h1> / th scope。
+func TestAppJSSemanticLandmarks(t *testing.T) {
+	html, err := os.ReadFile("index.html")
+	if err != nil {
+		t.Fatalf("read index.html: %v", err)
+	}
+	s := string(html)
+	for _, want := range []string{`<main class="main">`, `<h1 id="ttl">`, `</main>`} {
+		if !strings.Contains(s, want) {
+			t.Errorf("缺少语义标签 %q（读屏无法用 landmark 跳转）", want)
+		}
+	}
+	if n := strings.Count(s, `<th scope="col">`); n < 20 {
+		t.Errorf("表格 th 的 scope 覆盖不足：只有 %d 个", n)
+	}
+}
+
+// TestAppJSModalEscAndBackdrop 六个弹窗都必须有 Esc / 遮罩关闭出口。
+//
+// 背景：此前只有 Key 的两个弹窗有出口，addVeil/taskVeil/vcVeil/keyVeil 没有——
+// 键盘用户只能摸鼠标。data-lock 的密钥门是唯一例外（必须输入密钥才能关）。
+//
+// 牙齿：把 VEIL_CLOSERS 里的任一项删掉（如 taskVeil）→ FAIL。
+func TestAppJSModalEscAndBackdrop(t *testing.T) {
+	src := readAppJS(t)
+	for _, veil := range []string{"addVeil", "taskVeil", "vcVeil", "keyEditVeil", "keyShowVeil", "keyVeil"} {
+		if !strings.Contains(src, veil+": () =>") {
+			t.Errorf("弹窗 %s 未登记关闭回调（无 Esc / 遮罩出口）", veil)
+		}
+	}
+	// Esc 必须从后往前关（一次关最上层那个），且跳过 data-lock。
+	if !strings.Contains(src, "for (let i = ids.length - 1; i >= 0; i--)") {
+		t.Error("Esc 未按层级从后往前关闭")
+	}
+	if !strings.Contains(src, "if (el.dataset.lock) continue;") {
+		t.Error("Esc 未跳过 data-lock 弹窗（密钥门可被误关）")
+	}
+}
+
+// TestAppJSExportCSVEscaping CSV 导出必须按 RFC 4180 转义 + 带 BOM。
+//
+// 牙齿：csvCell 不做引号翻倍、或漏掉 BOM → FAIL。
+// 用 node/vm 执行真实函数，验证转义结果（不是断言源码字符串）。
+func TestAppJSExportCSVEscaping(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node not installed; csv escaping test skipped")
+	}
+	script := `const fs = require('fs');
+const vm = require('vm');
+const src = fs.readFileSync(process.argv[2], 'utf8');
+const start = src.indexOf('function csvCell');
+const end = src.indexOf('function exportStamp');
+if (start < 0 || end < 0 || end < start) throw new Error('csv region not found');
+const blobs = [];
+const ctx = {
+  Blob: function (parts, opts) { this.parts = parts; this.opts = opts; blobs.push(this); },
+  URL: { createObjectURL: () => 'blob:x', revokeObjectURL: () => {} },
+  document: { createElement: () => ({ click(){}, remove(){}, style:{} }), body: { appendChild(){} } },
+  setTimeout: () => {},
+  String, RegExp, JSON, Date,
+};
+vm.createContext(ctx);
+vm.runInContext(src.slice(start, end) + '\nthis.csvCell=csvCell;this.exportCSV=exportCSV;', ctx);
+const cases = ['plain', 'a,b', 'say "hi"', 'l1\nl2', null, 42];
+const cells = cases.map(c => ctx.csvCell(c));
+ctx.exportCSV(['c1', 'c2'], [['a,b', 'x"y']], 't.csv');
+const blob = blobs[0];
+const text = blob.parts[0];
+process.stdout.write(JSON.stringify({
+  cells: cells,
+  hasBOM: text.charCodeAt(0) === 0xFEFF,
+  body: text.slice(1),
+  mime: blob.opts.type,
+}));`
+	f, err := os.CreateTemp(t.TempDir(), "csv-*.cjs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString(script); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	out, err := exec.Command(node, f.Name(), "app.js").CombinedOutput()
+	if err != nil {
+		t.Fatalf("csv node test failed: %v\n%s", err, out)
+	}
+	got := strings.TrimSpace(string(out))
+	// 期望（JSON 输出里 \n 是真实换行序列、\" 是转义引号）：
+	//   a,b      → "a,b"        （含逗号 → 包裹）
+	//   say "hi" → "say ""hi""  （含引号 → 包裹且内部翻倍）
+	//   l1\nl2   → "l1\nl2"     （含换行 → 包裹）
+	//   plain    → plain        （普通值不包裹）
+	//   null     → 空
+	for _, want := range []string{
+		`\"a,b\"`,            // 含逗号 → 包裹
+		`\"say \"\"hi\"\"\"`, // 含引号 → 包裹且翻倍
+		`\"l1\nl2\"`,         // 含换行 → 包裹
+		`"plain"`,            // 普通值不额外包裹
+		`""`,                 // null → 空
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("CSV 转义缺失 %s\n实际输出: %s", want, got)
+		}
+	}
+	if !strings.Contains(got, `"hasBOM":true`) {
+		t.Error("CSV 缺少 BOM：Excel 打开中文会乱码")
+	}
+	if !strings.Contains(got, "text/csv") {
+		t.Error("CSV MIME 类型不对")
 	}
 }
