@@ -746,6 +746,15 @@ async function loadOverview(quiet) {
     $('subMeta').textContent = '运行 ' + (up >= 86400 ? Math.floor(up / 86400) + ' 天 ' : '') + Math.floor(up % 86400 / 3600) + ' 时 ' + Math.floor(up % 3600 / 60) + ' 分';
     renderAccounts(d.accounts || []);
     renderModelLocks(d.model_locks);
+    // 今日用量 KPI：并行拉 24h 窗口 totals，更新首页两个卡。失败静默
+    // （不影响主 overview，也不弹错——这是锦上添花的旁支指标）。
+    (async () => {
+      try {
+        const u = await api('usage?hours=24');
+        if ($('sTodayReq')) $('sTodayReq').textContent = Number(u.totals && u.totals.requests || 0);
+        if ($('sTodayTok')) $('sTodayTok').textContent = fmtTok(u.totals && u.totals.total_tokens || 0);
+      } catch (_) { /* 旁支指标失败不打扰 */ }
+    })();
     // 到期卡片跟随首页统计同步刷新（用同一份响应里的到期快照，不额外发请求）。
     // 已有逐包明细缓存时不再覆盖——明细信息量更大，别把它降级成快照。
     if ($('expBox') && !lastPackages) renderExpirySnapshot(d);
