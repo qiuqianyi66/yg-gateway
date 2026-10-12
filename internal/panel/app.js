@@ -3088,19 +3088,16 @@ function renderUsage(d) {
   const okRate = reqs ? (reqs - errs) / reqs * 100 : null;
   // 构成条要的是合法 CSS 宽度，usPct 在无样本时返回 "—"，不能直接拼进 style。
   const pctW = (part) => total ? Math.max(0, Math.min(100, Number(part || 0) / total * 100)).toFixed(2) + '%' : '0%';
-  // 六张卡：主指标用强调色，completion 用成功色（与图表里的绿柱呼应），
-  // 失败/延迟只在有值时上语义色——全绿全黄的仪表盘等于没有重点。
+  // 4 张大卡：请求 / Token / 成功率 / 延迟——比 6 张散卡更聚焦。
   $('usStats').innerHTML =
     usKpi(fmtTok(reqs), '请求数', 'c-accent',
-      errs ? '其中失败 ' + errs + ' 次' : '全部成功') +
-    usKpi(fmtTok(total), '总 token', 'c-accent',
+      errs ? '失败 ' + errs + ' 次 · 成功率 ' + (okRate == null ? '—' : okRate.toFixed(1) + '%') : '全部成功') +
+    usKpi(fmtTok(total), '总 Token', 'c-accent',
       'prompt ' + usPct(pt, total) + ' · completion ' + usPct(ct, total),
       '<div class="kbar"><i style="width:' + pctW(pt) + ';background:var(--accent)"></i>' +
       '<i style="width:' + pctW(ct) + ';background:var(--ok)"></i></div>') +
-    usKpi(fmtTok(pt), 'prompt', 'c-soft', '占比 ' + usPct(pt, total)) +
-    usKpi(fmtTok(ct), 'completion', 'c-ok', '占比 ' + usPct(ct, total)) +
-    usKpi(String(errs), '失败尝试', errs ? 'c-warn' : 'c-mute',
-      okRate == null ? '—' : (errs ? '成功率 ' + okRate.toFixed(1) + '%' : '成功率 100%')) +
+    usKpi(okRate == null ? '—' : okRate.toFixed(1) + '%', '成功率', okRate != null && okRate >= 95 ? 'c-ok' : 'c-warn',
+      errs ? errs + ' 次失败' : '零失败') +
     usKpi(fmtMs(t.avg_latency_ms), '平均延迟', 'c-soft',
       t.avg_tokens_per_second ? '吐字 ' + fmtRate(t.avg_tokens_per_second) : '无速率样本');
 
