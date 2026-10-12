@@ -142,6 +142,12 @@ func main() {
 		}
 		return 0
 	}
+	sessSnapshot := func() []session.SessionBinding {
+		if sessRouter != nil {
+			return sessRouter.Snapshot()
+		}
+		return nil
+	}
 
 	up := upstream.New()
 
@@ -284,6 +290,7 @@ func main() {
 		APIKey:      cfg.APIKey,
 		RedisMode:   redisMode,
 		StickyCount: sessCount,
+		SessionSnapshot: sessSnapshot,
 		Version:     appVersion,
 		Live:        live,
 		// 模型上限探测数据（scripts/probe_max_tokens.py --panel-out 写入）：
