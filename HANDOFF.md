@@ -22,6 +22,13 @@
 - 开源仓库地址：`https://github.com/qiuqianyi66/yg-gateway`（公开）
 - 当前两边 HEAD 都已提交干净，工作区无未提交改动。
 
+**⚠️ 运行实例现状（2026-10-12 实测）**：
+- **唯一在跑的是 `D:\yg-gateway-eval\yg-gateway.exe`，监听 127.0.0.1:7864**（4 号健康，
+  面板 `http://127.0.0.1:7864/panel/`）。它的 config 指向 `auth_dir: D:/yg-gateway/auths`。
+- `D:\yg-gateway`（7863）**当前未运行**（上一轮收尾时还在跑，之后被停止，原因未记录）。
+  如需恢复：§三的构建+复制+启动同命令模板把目标路径/端口/`--config` 换掉即可。
+- 两边 config 是**独立的**：改一边不会自动同步到另一边（见 §五已应用配置清单）。
+
 ## 三、构建与测试（关键环境）
 
 ```powershell
@@ -101,6 +108,16 @@ if ($start.HasExited) { "进程退出 码=" + $start.ExitCode } else { "PID: " +
     实测对照：不同 `conversation_id` × 6 → 分散 3 号；相同 system+开头 × 4 → **4/4 单号**。
     新配置 `session_sticky.derive`（`*bool` 三态，默认开 = 零回归；**本实例已设 false**）。
     顺带修 R11：`session_sticky.enabled` / `.derive` 是装配期字段，此前漏列重启项。
+19. **ADR-005 后端选号优化（D-600 去写锁 + D-601 EWMA 回灌）**：
+    - D-600：`pick` 由写锁改 **RLock**（并发 pick 并行），lastUsed/usedSeq/breakerProbeAt
+      原子化写回，探索台账独立 `exploreMu`，过期台账修剪移出热路径（saveLocked + flusher
+      兜底）；语义放宽（同瞬间并发可能同选一号）由 handler Acquire + tried 轮换自愈。
+    - D-601：每账号 EWMA 成功率/延迟信号回灌选号权重（`pool.ewma` 段，**默认关 = 零回归**，
+      热生效 `SetEwma`）；成功率基线 0.95 ±15% 钳制、延迟仅罚 >1.5× 池中位（-30% 封顶）、
+      懒初始化 1.0、样本 <5 中性、因子 [0.595,1.15] 不饿死；`/status` 新增
+      `ewma_success/ewma_latency_ms/ewma_samples` 透出。
+    - 全量 20 包绿 + vet/gofmt 干净；D: 实例（7864）已部署并真机验证（4 号健康、
+      EWMA 字段随真实流量透出）。
 
 ## 五、当前待办（新对话从这里接）
 
@@ -111,19 +128,26 @@ if ($start.HasExited) { "进程退出 码=" + $start.ExitCode } else { "PID: " +
 - ✅ 深度优化轮（前端体验 + 后端热路径 6× + 路由兜底 + CSV 导出 + 分页）
 - ✅ ADR-003 调度可靠性四项（half-open / 全局准入 / 选号降锁 / 分位数）
 - ✅ ADR-004 会话粘性派生键开关（+ R11 重启项修正）
+- ✅ **ADR-005 后端选号优化**：选号去写锁（RLock + 原子写回 + prune 移出热路径）
+  + EWMA 成功率/延迟回灌（默认关零回归，热生效）
 - ✅ 全仓 gofmt 归零；代码规范速查清单（`.harness/rules/CODE-STANDARDS-CHECKLIST.md`）
 
-**已应用的运行配置**（D:\yg-gateway\config.json）：
+**已应用的运行配置**（D:\yg-gateway\config.json，注意：该实例当前未运行，见 §二）：
 - `pool.global_max_in_flight = 18`（4 账号 × per-account 4，留余量）
 - `pool.breaker_probe_gap` 空 = 默认 30s
 - `session_sticky.derive = false`（关掉内容派生，修「只用一个号」）
 
-**第二轮候选**（见 `.harness/changes/deep-optimization-2026-10/summary.md`）：
-1. 选号版本化快照（`pick` 写锁仍在，本轮只削了遍历开销 → 时间节流）
-2. EWMA 成功率/延迟权重回灌选号（P95 观测已有，尚未用于决策）
-3. 粘性路径的成本分层（ADR-004 §五 方案 D 被弃：与缓存复用冲突，需重新设计）
-4. 前端剩余：表头排序、请求详情抽屉、通知中心、命令面板、批量选择、虚拟滚动
-5. 竞品路线图：OpenRouter 费率折算 / 增量用量落库 / 客户端生态 / Anthropic 协议
+**已应用的运行配置**（D:\yg-gateway-eval\config.json，**当前活实例**，7864 端口）：
+- `session_sticky.derive` **未设置**（= 默认开；上一轮对「本实例」设的 false 落在
+  D:\yg-gateway\config.json，两边配置并未同步，若需关闭派生记得同步到这里）
+- `pool.ewma = {enabled:true, alpha:0.1, min_samples:5}`（ADR-005 真机验证，保守参数）
+
+**下一轮候选**：
+1. 粘性路径的成本分层（ADR-004 §五 方案 D 被弃：与缓存复用冲突，需重新设计）
+2. 前端剩余：表头排序、请求详情抽屉、通知中心、命令面板、批量选择、虚拟滚动
+3. 竞品路线图：OpenRouter 费率折算 / 增量用量落库 / 客户端生态 / Anthropic 协议
+4. 可选打磨：EWMA 参数调优观测（/status 已透出信号）、pick CAS-claim（当前由
+   Acquire+tried 兜底，仅同 tick 并发场景才需考虑）
 
 **⚠️ 环境坑（已踩，务必注意）**：
 - **写 `D:\yg-gateway\config.json` 不要用 PowerShell `Set-Content -Encoding UTF8`**
