@@ -153,6 +153,15 @@ function initNotifCenter() {
     }
   };
   $('btnNotifClear').onclick = (e) => { e.stopPropagation(); setNotifs([]); renderNotifList(); renderNotifBadge(); };
+  // 全部已读：与打开面板的自动清读同一操作，给用户一个不依赖打开面板的显式入口。
+  $('btnNotifReadAll').onclick = (e) => {
+    e.stopPropagation();
+    const n = getNotifs();
+    n.forEach(x => x.read = true);
+    setNotifs(n);
+    renderNotifList();
+    renderNotifBadge();
+  };
   // 点外部关闭面板。
   document.addEventListener('click', (e) => {
     if (!e.target.closest('#notifPanel') && !e.target.closest('#btnNotif')) $('notifPanel').hidden = true;
@@ -1260,7 +1269,9 @@ function renderRequestTable() {
     const rid = e && e.request_id ? e.request_id : '';
     const onCls = (rid && rid === reqDetailRid) ? ' detail-on' : '';
     const chk = selectedRids.has(rid) ? ' checked' : '';
-    return '<tr class="req-row' + onCls + '" data-rid="' + esc(rid) + '" title="' + esc(requestLogText(e)) + '">' +
+    return '<tr class="req-row' + onCls + '" data-rid="' + esc(rid) + '" tabindex="0"' +
+      (onCls ? ' aria-expanded="true"' : ' aria-expanded="false"') +
+      ' title="' + esc(requestLogText(e)) + '">' +
       '<td class="chk"><input type="checkbox" class="req-chk" data-rid="' + esc(rid) + '"' + chk + ' aria-label="选择行"></td>' +
       '<td class="num">' + esc(when) + '</td>' +
       '<td>' + reqOutcomeTag(e) + '</td>' +
@@ -1277,14 +1288,29 @@ function renderRequestTable() {
       (reqEntries.length ? '没有符合当前筛选条件的请求记录' : '暂无请求记录') + '</td></tr>';
 
   // 行点击：展开/收起详情。点同一行收起，点其他行切换。
+  // 键盘可达：行 tabindex="0" 后可聚焦，Enter/Space 展开（读屏/键盘用户不再只能摸鼠标）。
+  // 只有「用户主动展开」才滚动详情进视口；轮询刷新（renderRequestTable → renderReqDetail）
+  // 不滚动，避免打断阅读。
+  function toggleReqDetail(rid, scroll) {
+    reqDetailRid = (rid && rid === reqDetailRid) ? null : rid;
+    renderRequestTable();
+    renderReqDetail();
+    if (scroll && reqDetailRid) {
+      const host = $('reqDetail');
+      if (host && !host.hidden) host.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    }
+  }
   tb.querySelectorAll('tr.req-row').forEach(tr => {
     tr.onclick = (ev) => {
       // 点 checkbox 不触发展开详情。
       if (ev.target.classList.contains('req-chk')) return;
-      const rid = tr.dataset.rid || '';
-      reqDetailRid = (rid && rid === reqDetailRid) ? null : rid;
-      renderRequestTable();
-      renderReqDetail();
+      toggleReqDetail(tr.dataset.rid || '', true);
+    };
+    tr.onkeydown = (ev) => {
+      if (ev.key !== 'Enter' && ev.key !== ' ') return;
+      if (ev.target.classList.contains('req-chk')) return;
+      ev.preventDefault(); // 空格默认滚动页面，这里用来展开详情
+      toggleReqDetail(tr.dataset.rid || '', true);
     };
   });
 
@@ -1923,6 +1949,7 @@ const VEIL_CLOSERS = {
   keyEditVeil: () => closeKeyDialog(),
   keyShowVeil: () => hideVeil('keyShowVeil'),
   keyVeil: () => $('keyVeil').classList.remove('on'), // data-lock 时由下方逻辑跳过
+  pgVeil: () => { pgStop(); $('pgVeil').classList.remove('on'); },
 };
 
 // 点击遮罩关闭（事件目标就是 veil 本身 = 点在遮罩空白处，不是在 .dlg 上）
@@ -3367,8 +3394,9 @@ async function loadUsage() {
   const q = trangeQuery('usRange', true);
   // 加载骨架：首次进入（还没有数据）时给出 KPI + 图表的形状，避免空白期像卡死。
   if (!usageData) {
-    $('usStats').innerHTML = skelKpis(6);
-    $('usCreditStats').innerHTML = skelKpis(4);
+    // 骨架数量与实际渲染对齐：usStats 4 张（请求/Token/成功率/延迟），usCreditStats 5 张。
+    $('usStats').innerHTML = skelKpis(4);
+    $('usCreditStats').innerHTML = skelKpis(5);
     $('usChart').innerHTML = loadingMsg('正在读取用量…');
   }
   try {
@@ -4103,14 +4131,28 @@ if ($('btnPk')) $('btnPk').onclick = () => loadPackages(true);
 initNotifCenter();
 
 /* ── 命令面板（Ctrl+K） ─────────────────────────────────────────── */
+// 跳转命令统一走 cmdGo：与侧栏导航同路径（go() 带 cfgDirty 守卫 + hash 同步）。
+// 此前 action 直接调从未定义的 switchView 函数，点命令会抛 ReferenceError。
+function cmdGo(v) {
+  if (go(v)) history.pushState(null, '', '#' + v);
+}
 const CMD_ITEMS = [
-  { cat: '跳转', label: '账号池', action: () => switchView('accounts') },
-  { cat: '跳转', label: '用量', action: () => switchView('usage') },
-  { cat: '跳转', label: '运行日志', action: () => switchView('logs') },
-  { cat: '跳转', label: '配置', action: () => switchView('config') },
-  { cat: '跳转', label: '积分构成', action: () => switchView('packages') },
+  { cat: '跳转', label: '账号池', action: () => cmdGo('accounts') },
+  { cat: '跳转', label: '用量', action: () => cmdGo('usage') },
+  { cat: '跳转', label: '任务中心', action: () => cmdGo('taskscenter') },
+  { cat: '跳转', label: '模型与档位', action: () => cmdGo('models') },
+  { cat: '跳转', label: 'API Key 管理', action: () => cmdGo('keys') },
+  { cat: '跳转', label: '运行日志', action: () => cmdGo('logs') },
+  { cat: '跳转', label: '配置', action: () => cmdGo('config') },
+  { cat: '跳转', label: '积分构成', action: () => cmdGo('packages') },
+  { cat: '操作', label: '打开 API 调试台', action: () => openPlayground() },
+  { cat: '操作', label: '添加账号', action: () => openAdd() },
+  { cat: '操作', label: '扫描全部账号待办', action: () => $('btnScanAll') && $('btnScanAll').click() },
+  { cat: '操作', label: '查询开学季券码', action: () => $('btnSchoolVouchers') && $('btnSchoolVouchers').click() },
   { cat: '操作', label: '刷新当前页', action: () => $('btnRefresh') && $('btnRefresh').click() },
   { cat: '操作', label: '导出请求 CSV', action: () => $('btnReqExport') && $('btnReqExport').click() },
+  { cat: '操作', label: '导出用量 CSV', action: () => $('btnUsExport') && $('btnUsExport').click() },
+  { cat: '操作', label: '导出积分 CSV', action: () => $('btnCreditExport') && $('btnCreditExport').click() },
   { cat: '操作', label: '清空通知', action: () => { setNotifs([]); renderNotifList(); renderNotifBadge(); } },
   { cat: '操作', label: '切换明暗主题', action: () => $('btnTheme') && $('btnTheme').click() },
 ];
@@ -4147,3 +4189,148 @@ function updateCmdActive() {
   const active = document.querySelector('.cmd-item.active'); if (active) active.scrollIntoView({ block: 'nearest' });
 }
 initCmdPalette();
+
+/* ── API 调试台（Playground） ────────────────────────────────────────
+   对标 new-api / ARP 的在线测试：不离开面板即可验证「模型可用吗 / 鉴权对吗 /
+   流式正常吗」。直连本机 /v1/chat/completions（同源 fetch，CSP connect-src
+   'self' 放行），鉴权头复用面板 Bearer key —— 与 /v1/* 同一口径，测的就是
+   客户端实际会走的路径。 */
+
+let pgModels = null;   // 模型缓存（首次打开拉一次 /panel/api/models）
+let pgAbort = null;    // 当前请求的 AbortController（停止按钮用）
+let pgBusy = false;    // 发送中标记（防连点）
+
+function pgModelOptions() {
+  if (!Array.isArray(pgModels) || !pgModels.length) return '<option value="">模型列表为空</option>';
+  return pgModels.map(m => '<option value="' + esc(m.id) + '">' + esc(m.id) + '</option>').join('');
+}
+async function pgLoadModels() {
+  const sel = $('pgModel');
+  if (!sel) return;
+  if (pgModels) { sel.innerHTML = pgModelOptions(); return; }
+  try {
+    const d = await api('models');
+    // /panel/api/models 返回 { models: [...] }；个别版本直接返回数组，兼容两种。
+    pgModels = Array.isArray(d.models) ? d.models : (Array.isArray(d) ? d : []);
+    sel.innerHTML = pgModelOptions();
+  } catch (e) {
+    sel.innerHTML = '<option value="">模型加载失败，可重开重试</option>';
+  }
+}
+function openPlayground() {
+  $('pgVeil').classList.add('on');
+  pgLoadModels();
+  setTimeout(() => { const p = $('pgPrompt'); if (p) p.focus(); }, 60);
+}
+function pgStop() {
+  if (pgAbort) { pgAbort.abort(); pgAbort = null; }
+}
+function pgSetBusy(busy) {
+  pgBusy = busy;
+  $('btnPgSend').disabled = busy;
+  $('btnPgStop').hidden = !busy;
+  $('btnPgSend').textContent = busy ? '生成中…' : '发送';
+}
+function pgAppend(text) {
+  const out = $('pgOut');
+  out.textContent += text;
+  out.scrollTop = out.scrollHeight;
+}
+function pgSetOut(text, cls) {
+  const out = $('pgOut');
+  out.textContent = text;
+  out.className = 'pg-out' + (cls ? ' ' + cls : '');
+}
+// SSE 流式解析：fetch ReadableStream → 按行读 "data: {...}" → 逐 delta 追加。
+// data 行可能被 chunk 拆成两半，用行缓冲 buf 拼接后再逐行消费。
+async function pgStreamRead(resp, startedAt) {
+  const reader = resp.body.getReader();
+  const dec = new TextDecoder();
+  let buf = '';
+  let usage = null;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += dec.decode(value, { stream: true });
+    let nl;
+    while ((nl = buf.indexOf('\n')) >= 0) {
+      const line = buf.slice(0, nl).trim();
+      buf = buf.slice(nl + 1);
+      if (!line.startsWith('data:')) continue;
+      const payload = line.slice(5).trim();
+      if (payload === '[DONE]') continue;
+      try {
+        const obj = JSON.parse(payload);
+        const delta = obj.choices && obj.choices[0] && obj.choices[0].delta;
+        if (delta && typeof delta.content === 'string') pgAppend(delta.content);
+        if (obj.usage) usage = obj.usage;
+      } catch { /* 忽略半行 / 非 JSON 的控制行 */ }
+    }
+  }
+  const secs = ((Date.now() - startedAt) / 1000).toFixed(1);
+  $('pgMeta').textContent = '流式完成 · ' + secs + 's' +
+    (usage ? ' · prompt ' + (usage.prompt_tokens ?? '—') + ' / completion ' + (usage.completion_tokens ?? '—') : '');
+}
+async function sendPlayground() {
+  if (pgBusy) return;
+  const model = $('pgModel').value;
+  if (!model) { toast('请先选择模型', 'err'); $('pgModel').focus(); return; }
+  const prompt = $('pgPrompt').value.trim();
+  if (!prompt) { toast('用户消息不能为空', 'err'); $('pgPrompt').focus(); return; }
+  const messages = [];
+  const sys = $('pgSystem').value.trim();
+  if (sys) messages.push({ role: 'system', content: sys });
+  messages.push({ role: 'user', content: prompt });
+  const body = { model, messages, stream: $('pgStream').value === '1' };
+  const temp = Number($('pgTemp').value);
+  if (Number.isFinite(temp)) body.temperature = temp;
+  const mt = Number($('pgMaxTok').value);
+  if (Number.isFinite(mt) && mt > 0) body.max_tokens = mt;
+
+  pgStop();
+  pgAbort = new AbortController();
+  pgSetBusy(true);
+  pgSetOut('', '');
+  $('pgMeta').textContent = '等待响应…';
+  const startedAt = Date.now();
+  const headers = { 'Content-Type': 'application/json' };
+  const key = localStorage.getItem(LS_KEY);
+  if (key) headers['Authorization'] = 'Bearer ' + key;
+  try {
+    const resp = await fetch('/v1/chat/completions', {
+      method: 'POST', headers, body: JSON.stringify(body), signal: pgAbort.signal,
+    });
+    if (!resp.ok) {
+      const d = await resp.json().catch(() => ({}));
+      const msg = d.error && d.error.message ? ' · ' + d.error.message : '';
+      pgSetOut('HTTP ' + resp.status + msg, 'err');
+      $('pgMeta').textContent = '失败 · ' + ((Date.now() - startedAt) / 1000).toFixed(1) + 's';
+      toast('网关返回 ' + resp.status, 'err');
+      return;
+    }
+    if (body.stream) {
+      $('pgMeta').textContent = '流式生成中…';
+      pgSetOut('', 'streaming');
+      await pgStreamRead(resp, startedAt);
+    } else {
+      const d = await resp.json();
+      const content = d.choices && d.choices[0] && d.choices[0].message && d.choices[0].message.content;
+      pgSetOut(content || '(无内容返回)', '');
+      const secs = ((Date.now() - startedAt) / 1000).toFixed(1);
+      const u = d.usage || {};
+      $('pgMeta').textContent = '完成 · ' + secs + 's' +
+        (u.total_tokens ? ' · prompt ' + (u.prompt_tokens ?? '—') + ' → completion ' + (u.completion_tokens ?? '—') + '（共 ' + u.total_tokens + '）' : '');
+    }
+  } catch (e) {
+    if (isAbort(e)) { pgSetOut('（已停止）', 'err'); $('pgMeta').textContent = '已停止'; }
+    else { pgSetOut(e.message, 'err'); $('pgMeta').textContent = '请求失败'; }
+  } finally {
+    pgAbort = null;
+    pgSetBusy(false);
+  }
+}
+if ($('btnPlayground')) $('btnPlayground').onclick = openPlayground;
+if ($('btnPgSend')) $('btnPgSend').onclick = sendPlayground;
+if ($('btnPgStop')) $('btnPgStop').onclick = pgStop;
+if ($('btnPgClose')) $('btnPgClose').onclick = () => { pgStop(); $('pgVeil').classList.remove('on'); };
+if ($('btnPgClear')) $('btnPgClear').onclick = () => { pgSetOut('—', ''); $('pgMeta').textContent = '未发送'; };

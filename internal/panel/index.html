@@ -206,7 +206,7 @@ body {
 .view[hidden] { display: none; }
 
 /* ── 账号卡片网格（Vercel/Linear 风格） ──────────────────────────── */
-.acc-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 14px; padding: 16px; }
+.acc-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(340px, 100%), 1fr)); gap: 14px; padding: 16px; }
 .acc-card { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 16px; transition: all .15s; position: relative; }
 .acc-card:hover { border-color: color-mix(in srgb, var(--accent) 25%, var(--line)); box-shadow: 0 4px 16px -4px rgba(99,102,241,.15); }
 .acc-card.off { opacity: .65; }
@@ -880,6 +880,9 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
       <span class="sep">/</span>
       <span class="meta" id="subMeta">-</span>
       <div class="grow"></div>
+      <button class="icon ghost" id="btnPlayground" title="API 调试台（直连本机网关测试模型与鉴权）" aria-label="API 调试台">
+        <svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2.5 3.5h11v7h-7l-3 3v-3h-1z"/><path d="M5.5 6.5h5M5.5 8.5h3"/></svg>
+      </button>
       <button class="icon ghost" id="btnTheme" title="切换明暗（跟随系统 → 浅色 → 深色）" aria-label="切换主题">
         <svg id="icoTheme" viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M13.2 9.6A5.6 5.6 0 0 1 6.4 2.8a5.6 5.6 0 1 0 6.8 6.8z"/></svg>
       </button>
@@ -888,7 +891,7 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
         <span class="notif-badge" id="notifBadge" hidden>0</span>
       </button>
       <div class="notif-panel" id="notifPanel" hidden>
-        <div class="notif-head">通知<button type="button" id="btnNotifClear">清空</button></div>
+        <div class="notif-head">通知<button type="button" id="btnNotifReadAll">全部已读</button><button type="button" id="btnNotifClear">清空</button></div>
         <div class="notif-list" id="notifList"></div>
       </div>
       <button id="btnRefresh">刷新</button>
@@ -1655,6 +1658,39 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
   </div>
 </div>
 
+<!-- API 调试台（Playground）：不离开面板直连本机 /v1/chat/completions，
+     验证「模型可用吗 / 鉴权对吗 / 流式正常吗」。CSP connect-src 'self' 允许
+     同源 fetch；鉴权头复用面板 Bearer key，与 /v1/* 同一口径——测的就是
+     客户端实际会走的路径。 -->
+<div class="veil" id="pgVeil">
+  <div class="dlg pg-dlg">
+    <header>
+      <h3>API 调试台</h3>
+      <div class="hint">直连本机网关 <code>/v1/chat/completions</code> · 与客户端同鉴权口径</div>
+    </header>
+    <div class="body">
+      <div class="pg-row">
+        <label class="fld pg-model"><span class="lb">模型</span><select id="pgModel"></select></label>
+        <label class="fld pg-param"><span class="lb">temperature</span><input type="number" id="pgTemp" min="0" max="2" step="0.1" placeholder="默认"></label>
+        <label class="fld pg-param"><span class="lb">max_tokens</span><input type="number" id="pgMaxTok" min="1" placeholder="默认"></label>
+        <label class="fld pg-param"><span class="lb">流式输出</span><select id="pgStream"><option value="1" selected>开</option><option value="0">关</option></select></label>
+      </div>
+      <label class="fld"><span class="lb">系统提示词</span><textarea id="pgSystem" rows="2" placeholder="可选"></textarea></label>
+      <label class="fld"><span class="lb">用户消息 <span class="hint" style="font-weight:400">必填</span></span><textarea id="pgPrompt" rows="3" placeholder="输入要发给模型的消息…"></textarea></label>
+      <div class="pg-out-wrap">
+        <div class="pg-out-head"><span class="note" id="pgMeta">未发送</span><span class="grow"></span><button type="button" class="xs" id="btnPgClear">清空</button></div>
+        <pre class="pg-out" id="pgOut" aria-live="polite">—</pre>
+      </div>
+    </div>
+    <footer>
+      <span class="grow"></span>
+      <button type="button" id="btnPgStop" hidden>停止</button>
+      <button type="button" class="primary" id="btnPgSend">发送</button>
+      <button type="button" id="btnPgClose">关闭</button>
+    </footer>
+  </div>
+</div>
+
 <!-- aria-live：toast 是唯一的操作结果出口（删除成功/保存失败等），
      无 aria-live 时读屏用户完全感知不到结果。polite 不打断当前朗读。 -->
 <div id="toasts" role="status" aria-live="polite" aria-atomic="false"></div>
@@ -1676,6 +1712,20 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
 .cmd-item:hover, .cmd-item.active { background: var(--surface-2); }
 .cmd-item .cmd-cat { font-size: 11px; color: var(--ink-3); background: var(--surface-2); padding: 2px 6px; border-radius: 4px; flex: none; }
 .cmd-item.active .cmd-cat { background: var(--accent-soft); color: var(--accent); }
+
+/* API 调试台（Playground） */
+.pg-dlg { width: 780px; }
+.pg-row { display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-end; margin-bottom: 10px; }
+.pg-model { flex: 1 1 300px; margin-bottom: 0; }
+.pg-param { flex: 0 1 130px; margin-bottom: 0; }
+.pg-dlg textarea { width: 100%; font: 12.5px/1.55 var(--mono); resize: vertical; background: var(--surface-2); color: var(--ink); border: 1px solid var(--line); border-radius: 7px; padding: 8px 10px; box-sizing: border-box; }
+.pg-dlg textarea:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.pg-out-wrap { border: 1px solid var(--line); border-radius: 9px; overflow: hidden; margin-top: 12px; background: var(--surface-2); }
+.pg-out-head { display: flex; align-items: center; gap: 8px; padding: 7px 12px; border-bottom: 1px solid var(--line-soft); font-size: 12px; }
+.pg-out { max-height: 300px; overflow: auto; margin: 0; padding: 12px 14px; font: 12.5px/1.6 var(--mono); white-space: pre-wrap; word-break: break-word; color: var(--ink-2); }
+.pg-out.streaming { color: var(--ink); }
+.pg-out.err { color: var(--bad); }
+@media (max-width: 640px) { .pg-dlg { width: 96vw; } .pg-row { flex-direction: column; align-items: stretch; } .pg-param { flex: 1 1 auto; } }
 </style>
 
 <script src="app.js"></script>

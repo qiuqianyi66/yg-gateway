@@ -443,3 +443,161 @@ func TestAppJSRequestPagination(t *testing.T) {
 		t.Error("结果筛选未重置分页到第一页")
 	}
 }
+
+// TestAppJSPlayground API 调试台（Playground）必须完整存在：
+// 顶栏入口 + 弹窗表单 + 直连 /v1/chat/completions + 流式/非流式 + 可停止。
+//
+// 背景：此前面板只能在第三方客户端里验证网关（模型可用吗/鉴权对吗/流式正常吗），
+// 竞品（new-api / ARP）都有内置在线测试。CSP connect-src 'self' 只放行同源
+// fetch，所以必须直连本机 /v1/chat/completions（与客户端同鉴权口径）。
+//
+// 牙齿：删掉发送函数 / 去掉停止按钮 / 改调 /panel/api/* → FAIL。
+func TestAppJSPlayground(t *testing.T) {
+	html, err := os.ReadFile("index.html")
+	if err != nil {
+		t.Fatalf("read index.html: %v", err)
+	}
+	h := string(html)
+	for _, want := range []string{
+		`id="btnPlayground"`, // 顶栏入口
+		`id="pgVeil"`,        // 弹窗
+		`id="pgModel"`,       // 模型下拉
+		`id="pgPrompt"`,      // 用户消息
+		`id="pgOut"`,         // 输出区
+		`id="btnPgSend"`,
+		`id="btnPgStop"`, // 停止（流式中断）
+		`id="pgMeta"`,    // 耗时/用量
+	} {
+		if !strings.Contains(h, want) {
+			t.Errorf("Playground HTML 缺失：未找到 %q", want)
+		}
+	}
+	src := readAppJS(t)
+	for _, want := range []string{
+		"function openPlayground()",
+		"async function sendPlayground()",
+		"async function pgStreamRead(resp, startedAt)",
+		"fetch('/v1/chat/completions', {",
+		"new AbortController()",
+		"pgAbort.abort()",
+		"line.startsWith('data:')",
+		"pgVeil: () => { pgStop();", // 纳入统一 Esc/遮罩关闭
+	} {
+		if !strings.Contains(src, want) {
+			t.Errorf("Playground 逻辑缺失：未找到 %q", want)
+		}
+	}
+	// 鉴权必须复用面板 Bearer key（与 /v1/* 同口径，测的就是客户端真实路径）
+	if !strings.Contains(src, "headers['Authorization'] = 'Bearer ' + key;") {
+		t.Error("Playground 未复用面板 Bearer 鉴权头")
+	}
+	// 发送中必须禁用按钮（防连点，对齐项目提交锁约定）
+	if !strings.Contains(src, "$('btnPgSend').disabled = busy;") {
+		t.Error("Playground 发送中未禁用按钮（可连点重复请求）")
+	}
+}
+
+// TestAppJSCmdPaletteFixAndExpand 命令面板必须引用已定义的 cmdGo（而非此前
+// 未定义的 switchView），且覆盖全部 8 个视图 + 高频操作。
+//
+// 背景：CMD_ITEMS 跳转命令此前直接调 switchView('...')，该函数从未定义——
+// 点任何跳转命令都抛 ReferenceError，命令面板等于坏了 5/9。
+//
+// 牙齿：把 cmdGo 改回 switchView 调用 → FAIL。
+func TestAppJSCmdPaletteFixAndExpand(t *testing.T) {
+	src := readAppJS(t)
+	if !strings.Contains(src, "function cmdGo(v) {") {
+		t.Error("缺少 cmdGo 定义（跳转命令仍指向未定义函数）")
+	}
+	if strings.Contains(src, "switchView(") {
+		t.Error("CMD_ITEMS 仍引用未定义的 switchView：点命令会抛 ReferenceError")
+	}
+	// 8 个视图跳转必须全（此前只覆盖 5 个）
+	for _, v := range []string{"accounts", "usage", "taskscenter", "models", "keys", "logs", "config", "packages"} {
+		want := "cmdGo('" + v + "')"
+		if !strings.Contains(src, want) {
+			t.Errorf("命令面板缺少视图跳转 %s", want)
+		}
+	}
+	// 高频操作命令
+	for _, want := range []string{
+		"openPlayground()",
+		"openAdd()",
+		"$('btnScanAll') && $('btnScanAll').click()",
+		"$('btnUsExport') && $('btnUsExport').click()",
+		"$('btnCreditExport') && $('btnCreditExport').click()",
+	} {
+		if !strings.Contains(src, want) {
+			t.Errorf("命令面板缺少操作命令：未找到 %q", want)
+		}
+	}
+}
+
+// TestAppJSRequestRowKeyboard 请求记录行必须键盘可达（tabindex + Enter/Space
+// 展开详情），且只有用户主动展开才滚动详情进视口。
+//
+// 背景：行详情此前只响应 tr.onclick，键盘/读屏用户无法展开；轮询刷新时
+// renderReqDetail 也会被调，无条件 scrollIntoView 会打断阅读。
+//
+// 牙齿：去掉 tabindex / 去掉 keydown 分支 → FAIL。
+func TestAppJSRequestRowKeyboard(t *testing.T) {
+	src := readAppJS(t)
+	for _, want := range []string{
+		`tabindex="0"`,
+		`aria-expanded="true"`,
+		"tr.onkeydown = (ev) => {",
+		"ev.key !== 'Enter' && ev.key !== ' '",
+		"function toggleReqDetail(rid, scroll)",
+		"host.scrollIntoView({ block: 'nearest', behavior: 'smooth' });",
+	} {
+		if !strings.Contains(src, want) {
+			t.Errorf("请求记录键盘可达缺失：未找到 %q", want)
+		}
+	}
+	// 滚动必须由用户展开触发（scroll 参数），轮询刷新路径不滚动
+	if !strings.Contains(src, "toggleReqDetail(tr.dataset.rid || '', true);") {
+		t.Error("行点击/键盘未用 toggleReqDetail(..., true) 触发滚动")
+	}
+}
+
+// TestAppJSUsageSkeletonCounts 用量骨架数量必须与实际渲染对齐：
+// usStats 4 张（请求/Token/成功率/延迟）、usCreditStats 5 张。
+func TestAppJSUsageSkeletonCounts(t *testing.T) {
+	src := readAppJS(t)
+	if !strings.Contains(src, "$('usStats').innerHTML = skelKpis(4);") {
+		t.Error("usStats 骨架仍是旧数量（实际渲染 4 张卡，骨架 6 张会闪跳）")
+	}
+	if !strings.Contains(src, "$('usCreditStats').innerHTML = skelKpis(5);") {
+		t.Error("usCreditStats 骨架仍是旧数量（实际渲染 5 张卡，骨架 4 张）")
+	}
+}
+
+// TestAppJSNotifReadAll 通知中心必须有「全部已读」按钮且绑定生效。
+func TestAppJSNotifReadAll(t *testing.T) {
+	html, err := os.ReadFile("index.html")
+	if err != nil {
+		t.Fatalf("read index.html: %v", err)
+	}
+	if !strings.Contains(string(html), `id="btnNotifReadAll"`) {
+		t.Error("index.html 缺少「全部已读」按钮")
+	}
+	src := readAppJS(t)
+	if !strings.Contains(src, "$('btnNotifReadAll').onclick = (e) => {") {
+		t.Error("「全部已读」按钮未绑定")
+	}
+	if !strings.Contains(src, "n.forEach(x => x.read = true);") {
+		t.Error("「全部已读」未把通知全部置为已读")
+	}
+}
+
+// TestAppJSResponsiveAccGrid 账号卡片网格在窄屏必须可收缩（min(340px, 100%)），
+// 否则 320px 视口下卡片溢出横向滚动。
+func TestAppJSResponsiveAccGrid(t *testing.T) {
+	html, err := os.ReadFile("index.html")
+	if err != nil {
+		t.Fatalf("read index.html: %v", err)
+	}
+	if !strings.Contains(string(html), `minmax(min(340px, 100%), 1fr)`) {
+		t.Error(".acc-grid 未用 min(340px, 100%)：窄屏卡片会溢出")
+	}
+}
