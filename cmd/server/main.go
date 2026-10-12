@@ -274,9 +274,10 @@ func main() {
 	}
 
 	pn := panel.New(panel.Config{
-		Pool:        p,
-		Usage:       rec,
-		RequestLog:  requestLog,
+		Pool:           p,
+		Usage:          rec,
+		CreditCNYRate:  cfg.Usage.CreditCNYRate,
+		RequestLog:     requestLog,
 		Upstream:    up,
 		Scheduler:   sch,
 		AuthDir:     cfg.AuthDir,
