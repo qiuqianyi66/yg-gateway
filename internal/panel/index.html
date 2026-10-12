@@ -1390,6 +1390,15 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
         </div>
 
         <div class="box">
+          <header><h3>用量展示</h3></header>
+          <div class="pad">
+            <label class="fld"><span class="lb">积分兑人民币汇率</span>
+              <input name="usage_credit_cny_rate" type="number" step="0.001" min="0" placeholder="0.01">
+              <span class="hint">1 积分 = 多少元；0 = 不显示 ¥ 折算。需重启生效</span></label>
+          </div>
+        </div>
+
+        <div class="box">
           <header><h3>日志</h3></header>
           <div class="pad">
             <div class="switch"><span class="lb">记录调用来源（客户端 IP / User-Agent）</span>
