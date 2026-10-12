@@ -30,7 +30,14 @@ function applyTheme() {
     : '<path d="M13.2 9.6A5.6 5.6 0 0 1 6.4 2.8a5.6 5.6 0 1 0 6.8 6.8z"/>';
   $('btnTheme').title = eff === 'light' ? '切换到深色' : '切换到浅色';
 }
-addEventListener('change', applyTheme);
+/* 主题切换：只在「跟随系统」时响应系统偏好变化。
+   此前是 window 上的 `addEventListener('change', applyTheme)` —— 页面上**任何**
+   change 事件（每个下拉、每个 checkbox、每个时间输入）都会冒泡到 window 触发
+   applyTheme()，而它会重写 #icoTheme 的 innerHTML。配置页有 40+ 控件，每次改动
+   都做一次无谓的 DOM 重写。 */
+matchMedia('(prefers-color-scheme: light)').addEventListener('change', () => {
+  if (theme === 'auto') applyTheme();
+});
 $('btnTheme').onclick = () => {
   theme = effTheme() === 'light' ? 'dark' : 'light';
   localStorage.setItem(LS_THEME, theme);
@@ -39,6 +46,10 @@ $('btnTheme').onclick = () => {
 applyTheme();
 
 /* ── 请求 ─────────────────────────────────────────────────────────── */
+/* api 面板后端调用。opts 额外支持 signal（AbortSignal）——轮询场景下新一轮开始
+   时 abort 掉上一轮未完成的请求，避免「慢响应后到覆盖新响应」。
+   典型：/packages 逐账号查上游偶慢（8s），而 5s 轮询的第二轮已返回（1s）——
+   没有取消机制时，第一轮的旧数据会覆盖第二轮的新数据。 */
 async function api(path, opts = {}) {
   const h = Object.assign({}, opts.headers || {});
   const k = localStorage.getItem(LS_KEY);
@@ -49,6 +60,29 @@ async function api(path, opts = {}) {
   const d = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(d.error || ('HTTP ' + r.status));
   return d;
+}
+/* abortable 为某类请求维护「最新一轮」的 AbortController：
+   调用返回 {signal, done()}，下次同 key 调用会先 abort 上一次。
+   用法：
+     const ctl = abortable('overview');
+     try { const d = await api('overview', { signal: ctl.signal }); ... }
+     finally { ctl.done(); }
+   注意：被 abort 的请求会抛 AbortError —— 调用方应把 AbortError 当成"本轮作废"
+   直接 return（不要 toast 报错）。isAbort 用于统一判断。 */
+const abortCtl = new Map();
+function abortable(key) {
+  const prev = abortCtl.get(key);
+  if (prev) prev.ctrl.abort();
+  const ctrl = new AbortController();
+  const entry = { ctrl, signal: ctrl.signal };
+  abortCtl.set(key, entry);
+  return {
+    signal: ctrl.signal,
+    done() { if (abortCtl.get(key) === entry) abortCtl.delete(key); },
+  };
+}
+function isAbort(e) {
+  return !!e && (e.name === 'AbortError' || /aborted|abort/i.test(String(e.message || '')));
 }
 /* toast 操作结果提示。三条改进（深度优化轮 前端 P1）：
    ① 堆叠上限 5 条：连续批量操作此前会把右下角叠满、且无手动关闭；
@@ -686,8 +720,10 @@ async function loadOverview(quiet) {
     const tb = $('accBody');
     if (tb && !tb.children.length) tb.innerHTML = '<tr><td colspan="9">' + skelRows(5, 7) + '</td></tr>';
   }
+  // 防慢响应覆盖：新一轮开始时取消上一轮未完成的 overview 请求。
+  const ctl = abortable('overview');
   try {
-    const d = await api('overview');
+    const d = await api('overview', { signal: ctl.signal });
     overviewData = d;
     $('sTotal').textContent = d.total;
     $('sHealthy').textContent = d.healthy;
@@ -714,6 +750,8 @@ async function loadOverview(quiet) {
     // 已有逐包明细缓存时不再覆盖——明细信息量更大，别把它降级成快照。
     if ($('expBox') && !lastPackages) renderExpirySnapshot(d);
   } catch (e) {
+    // 本轮被下一轮 abort（慢响应作废）：静默返回，不报错也不改 UI。
+    if (isAbort(e)) return;
     // 首屏失败此前完全静默（quiet=true 时一个字都不提示），7 个统计卡永远停在
     // HTML 里的「-」、账号表空白，用户只能猜。这里区分首次与轮询：
     //   首次（还没拿到过数据）→ 表内插持久化错误条 + 就地重试；
@@ -727,6 +765,8 @@ async function loadOverview(quiet) {
       }
     }
     if (!quiet) toast(e.message, 'err');
+  } finally {
+    ctl.done();
   }
 }
 
@@ -1896,13 +1936,29 @@ function refreshVisible() {
 function start() {
   loadOverview(true);
   if (refTimer) clearInterval(refTimer);
-  refTimer = setInterval(refreshVisible, 5000);
+  // 页面隐藏（切到别的标签页/最小化）时不轮询：此前无视 document.hidden，
+  // 后台标签页每 5 秒打一次 overview（日志页还会并发 3 个接口），纯浪费
+  // CPU 与上游配额。可见时由 visibilitychange 恢复。
+  if (!document.hidden) refTimer = setInterval(refreshVisible, 5000);
   checkAuthGate();
 }
 async function checkAuthGate() {
   try { await api('overview'); }
   catch (e) { if (String(e.message).includes('密钥') || String(e.message).includes('api_key')) return; }
 }
+/* 可见性变化：隐藏时停表，恢复时立刻刷新一次并重新开始轮询。
+   立刻刷一次是必要的——后台期间数据可能已变，回到前台应看到最新值。 */
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) {
+    if (refTimer) { clearInterval(refTimer); refTimer = null; }
+    // queueTimer 声明在本文件更下方（let，存在 TDZ）：用 typeof 守卫避免
+    // 在声明前触发 visibilitychange 时抛 ReferenceError。
+    if (typeof queueTimer !== 'undefined' && queueTimer) { clearInterval(queueTimer); queueTimer = null; }
+  } else {
+    start();
+    if (view === 'taskscenter') reattachQueueView();
+  }
+});
 start();
 
 /* ── 积分任务 ─────────────────────────────────────────────────────── */
@@ -3536,7 +3592,7 @@ async function loadPackages(force) {
   $('pkDetail').innerHTML = '';
   try {
     const [d, c] = await Promise.all([
-      api('packages'),
+      api('packages', { signal: abortable('packages').signal }),
       api('config').catch(() => null),
     ]);
     lastPackages = d;                            // 缓存供首页到期卡片与排序切换复用
@@ -3544,6 +3600,9 @@ async function loadPackages(force) {
     lastDetailLimit = pkDetailLimit(c && c.config);
     renderPackages(d, lastDetailLimit);
   } catch (e) {
+    // 被下一轮 abort（慢响应作废）：静默返回。loadPackages 会被轮询/多入口触发，
+    // 旧数据后到会覆盖新数据——abortable 保证只有最新一轮写 UI。
+    if (isAbort(e)) return;
     // 就地重试（此前只有一行字，重试要滚回顶部找「刷新」）。
     $('pkSummary').innerHTML = loadErrorHTML('读取积分构成失败', e.message, '重试');
     $('pkExpiry').innerHTML = '<div class="pk-expiry-empty">读取失败</div>';
