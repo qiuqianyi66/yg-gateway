@@ -182,6 +182,19 @@ body {
 .topbar .sep { color: var(--ink-3); }
 .topbar .meta { color: var(--ink-3); font-size: 12px; font-family: var(--mono); }
 .topbar .grow { flex: 1; }
+
+/* ── 通知中心 ─────────────────────────────────────────────────────── */
+.notif-badge { position: absolute; top: -3px; right: -3px; background: var(--bad); color: #fff; font-size: 10px; min-width: 15px; height: 15px; border-radius: 8px; display: flex; align-items: center; justify-content: center; padding: 0 3px; font-weight: 600; }
+.notif-panel { position: absolute; top: 52px; right: 20px; width: 340px; max-height: 420px; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 12px 32px rgba(0,0,0,.14); z-index: 200; overflow: hidden; }
+.notif-head { padding: 10px 14px; border-bottom: 1px solid var(--line-soft); display: flex; justify-content: space-between; align-items: center; font-weight: 600; font-size: 13px; }
+.notif-head button { background: none; border: none; color: var(--ink-3); font-size: 12px; cursor: pointer; padding: 2px 6px; }
+.notif-head button:hover { color: var(--bad); }
+.notif-list { overflow-y: auto; max-height: 360px; }
+.notif-item { padding: 10px 14px; border-bottom: 1px solid var(--line-soft); font-size: 13px; cursor: pointer; }
+.notif-item:hover { background: var(--surface-2); }
+.notif-item.unread { border-left: 3px solid var(--accent); }
+.notif-time { font-size: 11px; color: var(--ink-3); margin-top: 3px; font-family: var(--mono); }
+
 .view { padding: 22px 24px 60px; max-width: 1560px; margin: 0 auto; width: 100%; }
 .view[hidden] { display: none; }
 
@@ -837,6 +850,14 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
       <button class="icon ghost" id="btnTheme" title="切换明暗（跟随系统 → 浅色 → 深色）" aria-label="切换主题">
         <svg id="icoTheme" viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M13.2 9.6A5.6 5.6 0 0 1 6.4 2.8a5.6 5.6 0 1 0 6.8 6.8z"/></svg>
       </button>
+      <button class="icon ghost" id="btnNotif" title="通知" aria-label="通知" style="position:relative">
+        <svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M8 2a4 4 0 0 0-4 4v2.5L3 10h10l-1-1.5V6a4 4 0 0 0-4-4zM6 13a2 2 0 0 0 4 0"/></svg>
+        <span class="notif-badge" id="notifBadge" hidden>0</span>
+      </button>
+      <div class="notif-panel" id="notifPanel" hidden>
+        <div class="notif-head">通知<button type="button" id="btnNotifClear">清空</button></div>
+        <div class="notif-list" id="notifList"></div>
+      </div>
       <button id="btnRefresh">刷新</button>
       <button class="primary" id="btnAdd">添加账号</button>
     </div>
