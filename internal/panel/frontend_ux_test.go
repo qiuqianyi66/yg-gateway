@@ -392,3 +392,54 @@ func TestAppJSPollingHygiene(t *testing.T) {
 		t.Error("主题监听未收窄到系统配色偏好变化")
 	}
 }
+
+// TestAppJSRequestPagination 请求记录分页：>50 条时必须分页渲染，避免
+// 1000 行 × 10 列全量 DOM 构建卡死面板。
+//
+// 牙齿：把 slice(startIdx, startIdx + REQ_PAGE_SIZE) 改回渲染全量 list →
+// 本测试 FAIL（reqPagerHtml 虽在但表体仍全量）。
+func TestAppJSRequestPagination(t *testing.T) {
+	src := readAppJS(t)
+	for _, want := range []string{
+		"const REQ_PAGE_SIZE = 50;",
+		"let reqPage = 1;",
+		"const totalPages = Math.max(1, Math.ceil(list.length / REQ_PAGE_SIZE));",
+		"const pageItems = list.slice(startIdx, startIdx + REQ_PAGE_SIZE);",
+		"function reqPagerHtml(total, page, totalPages)",
+	} {
+		if !strings.Contains(src, want) {
+			t.Errorf("分页缺失：未找到 %q", want)
+		}
+	}
+	// 渲染必须只画当前页（这是分页的意义所在）
+	body := src[strings.Index(src, "function renderRequestTable()"):]
+	body = body[:strings.Index(body, "/* reqPagerHtml")]
+	if !strings.Contains(body, "pageItems.map(") {
+		t.Error("renderRequestTable 未用 pageItems.map（仍全量渲染 list？）")
+	}
+	if strings.Contains(body, "tb.innerHTML = list.map(") {
+		t.Error("renderRequestTable 仍全量渲染 list（分页失效）")
+	}
+	// 翻页按钮存在
+	if !strings.Contains(src, "pagerHost.querySelectorAll('button[data-page]')") {
+		t.Error("分页器按钮未绑定点击")
+	}
+	// HTML 侧有容器
+	html, err := os.ReadFile("index.html")
+	if err != nil {
+		t.Fatalf("read index.html: %v", err)
+	}
+	if !strings.Contains(string(html), `id="reqPager"`) {
+		t.Error("index.html 缺 reqPager 容器")
+	}
+	if !strings.Contains(string(html), ".req-pager {") {
+		t.Error("index.html 缺分页器样式")
+	}
+	// 筛选变化重置到第一页
+	if !strings.Contains(src, "reqFilter.q = $('reqQ').value.trim(); reqPage = 1;") {
+		t.Error("搜索筛选未重置分页到第一页")
+	}
+	if !strings.Contains(src, "reqFilter.outcome = $('reqOutcome').value;\n  reqPage = 1;") {
+		t.Error("结果筛选未重置分页到第一页")
+	}
+}

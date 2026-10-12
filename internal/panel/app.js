@@ -1124,11 +1124,24 @@ function reqCreditCell(e) {
 
 /* renderRequestTable 渲染请求记录表。来源列是这一版的重点：IP 用等宽字体方便扫，
    UA 单行截断（完整值在 title 里，行本身用 requestLogText 作 tooltip）。 */
+/* 请求记录分页参数：每页渲染条数。1000 行 × 10 列全量渲染会卡面板（DOM 构建 +
+   浏览器布局），而用户实际一次只看几十条。客户端分页：数据全量在内存（筛选/
+   导出不受影响），渲染只画当前页。 */
+const REQ_PAGE_SIZE = 50;
+let reqPage = 1;
+
 function renderRequestTable() {
   const list = reqEntries.filter(e => reqMatch(e));
   const tb = $('reqBody');
   if (!tb) return;
-  tb.innerHTML = list.map(e => {
+  // 分页：筛选结果可能变化（数量/排序），把当前页钳在有效范围内。
+  const totalPages = Math.max(1, Math.ceil(list.length / REQ_PAGE_SIZE));
+  if (reqPage > totalPages) reqPage = totalPages;
+  if (reqPage < 1) reqPage = 1;
+  const startIdx = (reqPage - 1) * REQ_PAGE_SIZE;
+  const pageItems = list.slice(startIdx, startIdx + REQ_PAGE_SIZE);
+
+  tb.innerHTML = pageItems.map(e => {
     const when = e && e.time ? new Date(e.time).toLocaleTimeString('zh-CN', { hour12: false }) : '—';
     const ip = e && e.client_ip ? e.client_ip : '';
     const ua = e && e.user_agent ? e.user_agent : '';
@@ -1148,14 +1161,43 @@ function renderRequestTable() {
   }).join('') || '<tr><td colspan="10" class="empty">' +
       (reqEntries.length ? '没有符合当前筛选条件的请求记录' : '暂无请求记录') + '</td></tr>';
 
+  // 分页器：>1 页才显示（单页时无噪音）。翻页只重画当前页，不重发请求。
+  const pagerHost = $('reqPager');
+  if (pagerHost) {
+    pagerHost.innerHTML = reqPagerHtml(list.length, reqPage, totalPages);
+    pagerHost.querySelectorAll('button[data-page]').forEach(b => {
+      b.onclick = () => { reqPage = Number(b.dataset.page); renderRequestTable(); };
+    });
+  }
+
   const filtered = list.length !== reqEntries.length;
   // 归档里的旧条目没有来源字段（该功能上线前写入）：这时提示开关/历史原因，
   // 而不是让人以为筛选坏了。
   const hasSource = reqEntries.some(e => e && (e.client_ip || e.user_agent));
   $('reqCount').textContent = !reqEntries.length ? ''
     : (filtered ? '命中 ' + list.length + ' / ' + reqEntries.length + ' 条' : reqEntries.length + ' 条') +
+      (totalPages > 1 ? ' · 第 ' + reqPage + '/' + totalPages + ' 页（每页 ' + REQ_PAGE_SIZE + ' 条）' : '') +
       (hasSource ? '' : ' · 来源未记录');
   $('reqCount').className = (filtered || !hasSource) ? 'note src-off' : 'note';
+}
+
+/* reqPagerHtml 生成分页器控件（首页/上一页/页码/下一页/末页）。
+   页码窗口：当前页前后各 2 页，避免 20 页时一排按钮。 */
+function reqPagerHtml(total, page, totalPages) {
+  if (totalPages <= 1) return '';
+  const btn = (label, target, disabled, on) =>
+    '<button class="xs' + (on ? ' primary' : '') + '"' +
+    (disabled ? ' disabled' : ' data-page="' + target + '"') + '>' + esc(label) + '</button>';
+  let nums = '';
+  const winStart = Math.max(1, page - 2), winEnd = Math.min(totalPages, page + 2);
+  if (winStart > 1) { nums += btn('1', 1, false, page === 1); if (winStart > 2) nums += '<span class="pg-ellipsis">…</span>'; }
+  for (let p = winStart; p <= winEnd; p++) nums += btn(String(p), p, false, p === page);
+  if (winEnd < totalPages) { if (winEnd < totalPages - 1) nums += '<span class="pg-ellipsis">…</span>'; nums += btn(String(totalPages), totalPages, false, page === totalPages); }
+  return '<span class="pg">' +
+    btn('‹', page - 1, page <= 1, false) +
+    nums +
+    btn('›', page + 1, page >= totalPages, false) +
+    '</span>';
 }
 
 /* 请求记录筛选控件。搜索框防抖 150ms：最多 1000 行重渲染，不必每键一次。
@@ -1164,14 +1206,15 @@ function renderRequestTable() {
 let reqQTimer = null;
 if ($('reqQ')) $('reqQ').oninput = () => {
   clearTimeout(reqQTimer);
-  reqQTimer = setTimeout(() => { reqFilter.q = $('reqQ').value.trim(); renderRequestTable(); }, 150);
+  reqQTimer = setTimeout(() => { reqFilter.q = $('reqQ').value.trim(); reqPage = 1; renderRequestTable(); }, 150);
 };
 if ($('reqOutcome')) $('reqOutcome').onchange = () => {
   reqFilter.outcome = $('reqOutcome').value;
+  reqPage = 1; // 筛选变化：从第一页开始看，避免停在越界页
   renderRequestTable();
 };
-if ($('reqLimit')) $('reqLimit').onchange = loadLogs;
-if ($('btnReqReload')) $('btnReqReload').onclick = loadLogs;
+if ($('reqLimit')) $('reqLimit').onchange = () => { reqPage = 1; loadLogs(); };
+if ($('btnReqReload')) $('btnReqReload').onclick = () => { reqPage = 1; loadLogs(); };
 /* 请求记录导出：导出**当前筛选后**的行（与屏幕所见一致），不是全部 1000 条。
    列口径与表格一致（时间/结果/模型/账号/来源IP/UA/耗时/Token/积分/请求ID）。 */
 if ($('btnReqExport')) $('btnReqExport').onclick = () => {
