@@ -145,10 +145,83 @@ research: 本轮三份调研（安全审计 / 前端效果 / 后端与路由）
 
 ---
 
-## 五、待补充（调研回收后填入）
+## 五、前端调研结论（已回收，33 条，按 ROI 排序）
 
-- 安全审计 subagent 的完整结论（越权 / SSRF / DoS / 响应头）。
-- 前端调研的完整结论（信息架构 / 空加载错误态 / 可访问性 / 缺失的高价值功能）。
+### 已在本轮修复（缺陷，轻量路径直接改）
+
+| # | 缺陷 | 位置 | 后果 | 状态 |
+|---|---|---|---|---|
+| 36 | **Key 弹窗对 `input.value` 误用 `esc()`** | `app.js:1109-1110` | 名字含 `&` 的 Key 显示/保存被二次转义（`A&B`→`A&amp;B`→`A&amp;amp;B`），ID 参与鉴权匹配更严重 | ✅ 已修（commit `27e3c98`，含牙齿测试） |
+| — | **密钥门 `onsubmit` 内联属性被 CSP 拦截** | `index.html:1480` | 回车提交密钥整页刷新 → 密钥丢失 → 401 循环 | ✅ 已修（commit `d38179a`，Playwright 验证） |
+
+### P0（半天内可完成，收益最大）
+
+| # | 缺陷 | 位置 | 方案 |
+|---|---|---|---|
+| 1 | 切视图静默丢弃未保存的配置改动 | `app.js:352` | `cfgDirty` 标志 + 确认拦截 + `#cfgNote` 显示「● 未保存」 |
+| 2 | 启动时 overview 失败 = 全页静默空白 | `app.js:1603`/`524` | `booted` 标志；首屏失败插持久化错误条（复用 Key 页 `.key-load-error` 范式） |
+| 3 | 浏览器返回键/手改 hash 不工作 | `app.js:361` | 加 `hashchange` 监听，导航改 `location.hash` |
+| 4 | Esc 只关两个 Key 弹窗，其余四个关不掉 | `app.js:1340-1345` | 统一 `VEILS` 列表，Esc 从后往前关当前 `.on` |
+| 5 | **5s 全量 `innerHTML` 重绘打断交互** | `app.js:1605`/`382` | 数据签名短路 + `activeElement` 在表内时跳过 |
+| 7 | 窄屏 topbar 与任务队列行被裁掉 | `index.html:139`/`97` | `.topbar{flex-wrap}`；`#qcList` 包 `.tbl-wrap` |
+| 8 | 「刷新」按钮实际是打上游刷余额 | `app.js:1584` | 拆成纯刷新 + 独立「刷新余额」（带确认） |
+| 9 | 批量/长任务无进度无汇总（`console.log`） | `app.js:1688` | 结果渲染进 `#taskState`，复用 `.qprog` 进度条 |
+| 10 | 切视图不回顶 | `app.js:345` | `go()` 加 `scrollTo({top:0})`（初始那次跳过） |
+
+### P1（无障碍与状态管理）
+
+| # | 缺陷 | 方案 |
+|---|---|---|
+| 11 | 弹窗无 `role="dialog"`/focus trap/焦点回收 | 加 role + 15 行 trap + `lastFocus.focus()` |
+| 12 | Toast 无 `aria-live`、无堆叠上限 | 加 `aria-live="polite"`；上限 4 条；错误改 8s |
+| 13 | 删除/禁用无 undo，用原生 `confirm()` | 自绘确认弹窗；移除账号/删 Key 加 5s undo |
+| 14 | **对比度不达 WCAG AA**（`--ink-3` 3.08–3.82） | 只改 4 个令牌值（`--ink-3`/`--warn`/`--ok` 明暗两套） |
+| 15 | 无 `<main>`/无 `<h1>`/`<th>` 无 `scope` | 语义标签增补，CSS 保视觉 |
+| 16 | 任务中心扫描结果一离开视图就丢 | `lastScan` 缓存 + 回视图时渲染并标注时间 |
+| 17 | 配置页读取失败只有 3.6s toast | 顶部持久化错误块 + 失败时 disable 保存 |
+| 18 | `change` 监听挂 window → 任何控件改动都重写主题图标 | 改 `matchMedia` 监听 |
+| 19 | 轮询无 `AbortController`，慢响应覆盖新响应 | 各 loader 持 controller，新一轮 abort |
+| 20 | 页面隐藏仍轮询 | `visibilitychange` 暂停/恢复 |
+| 21 | 死代码（`.srow` 等 19 行 CSS、重复行） | 清理 |
+
+### 新功能（按 ROI）
+
+**高价值低成本**：#22 CSV 导出（全站无 Blob/download）· #23 筛选状态持久化 + URL 同步 · #24 一键复制诊断（脱敏）· #25 表头排序 + 列控制 · #28 骨架屏 · #33 空态补 CTA
+
+**高价值中成本**：#26 请求记录详情抽屉（取代 title tooltip）· #27 图表交互（图例开关/HTML tooltip/点击下钻）· #29 命令面板 Cmd+K · #30 通知中心 · #31 账号池批量选择 · #32 虚拟滚动/分页
+
+### 信息架构专项
+
+- 首屏**缺**「今天失败数 / 成功率」（运维第一关心）→ 建议加第 3 张 hero。
+- **积分构成页最严重**：每账号一个 box 各含整张 7 列表（12 账号 = 12 张表堆叠）→ 改单表 + 账号列。
+- 模型表几百行无分页；请求记录 1000 行 × 10 列全量 DOM。
+- 运行日志是**唯一控制住长度**的视图（限高 460/420）。
+
+### ⚠️ 隐性约束（必须遵守）
+
+`frontend_test.go` 用 `indexOf` 按函数名**切片**喂 `node/vm`（见 `app.js:3122-3130`、`3264-3268`、`3328-3332` 三处专门注释）。任何新增**顶层语句/常量**必须避开这几个切片区：
+`[PK_ACCOUNT_COLORS, renderExpiryDistribution)`、`[PK_DEFAULT_DETAIL_LIMIT, renderPackages)`、`[expBatches, loadExpiry)`、`[requestLogText, fmtBytes)` —— 否则测试 ReferenceError。
+
+---
+
+## 五之二、安全审计最终结论（主 agent 亲自核查，替代失败的 subagent）
+
+| 面 | 结论 |
+|---|---|
+| 依赖漏洞 | `govulncheck ./...` **零漏洞** ✅ |
+| 鉴权覆盖 | 面板 36 个 `/panel/api/*` **全部** `withAuth`；仅 `index`/`app.js` 公开 ✅ |
+| 多 Key 约束绕过 | 逐条验证：缺 model / 类型非法 / null / realm 前缀 / `models:[]` **全部挡住**，错误码不泄漏 Key 身份 ✅ |
+| XSS | 60 处 `innerHTML` 扫描，24 处"未 esc 插值"经判读**全是内部计算值**（数字/CSS 类名）✅ |
+| 路径穿越 | UID 白名单 `[A-Za-z0-9_-]` ≤64 ✅ |
+| 凭证 ACL（Windows） | **发现未加固（高危）→ 已执行 `lock-auths.ps1` 修复**，复验仅 `yanha`+`SYSTEM` ✅ |
+| 入站 body 上限 | 默认 64MB 恒开 + 牙齿测试 ✅ |
+| 资源有界 | `usage` maxBuckets 400k + Rollup；session TTL+GC；reqlog 定长 100 ✅ |
+| goroutine/定时器泄漏 | Pool/session/usage/monitorBody 关闭路径**均完整** ✅ |
+| SSRF | 上游 base URL 全为**编译期常量**，仅 config.json（本机管理员）可覆盖 ✅ |
+| 响应头 | 面板+API 统一 CSP/nosniff/DENY/no-referrer/COOP/CORP ✅（`/v1/*` 无这些头，但返回 JSON 无 XSS 面） |
+| 错误响应 | 不回传凭证；两处 `err.Error()` 为请求侧/上游解析错误，有意透传便于排查 ✅ |
+
+**结论：未发现新的高危漏洞**（唯一高危是部署态凭证 ACL，已修）。
 
 ---
 
