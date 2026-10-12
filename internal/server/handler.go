@@ -163,10 +163,60 @@ func NewHandler(cfg Config) *Handler {
 	h.mux.HandleFunc("GET /v1/models", h.withAuth(h.rateLimited(h.models)))
 	h.mux.HandleFunc("GET /status", h.withAuth(h.rateLimited(h.status)))
 	h.mux.HandleFunc("GET /healthz", h.healthz)
+	// 兜底：未匹配路径与方法错误统一回 OpenAI 错误信封。
+	//
+	// 为什么需要：Go 1.22 ServeMux 对未注册路径回裸 text/plain "404 page not
+	// found"、对已知路径的错误方法回 "405 Method Not Allowed"，OpenAI 兼容客户端
+	//（Codex / Cherry Studio / 各类 SDK）解析这类响应会失败，报出的错误信息与真实
+	// 原因无关（"invalid character 'p' looking for beginning of value"），排查成本高。
+	// 这里统一成 {"error":{message,type,code}} 信封，并区分 404 / 405。
+	// 注意：/panel/ 前缀已注册（cfg.Panel 非 nil 时），其内部自行处理 404，不会落到这里。
+	h.mux.HandleFunc("/", h.notFound)
 	if cfg.Panel != nil {
 		h.mux.Handle("/panel/", cfg.Panel) // /panel → /panel/ 由 ServeMux 自动重定向
 	}
 	return h
+}
+
+// notFound 未匹配路径 / 方法错误的 OpenAI 错误信封兜底。
+//
+// 405 的判定：Go 1.22 ServeMux 在「路径已注册但方法不符」时会把请求交给最长的
+// 匹配模式，而 "/" 兜底模式对任意方法都匹配，所以这里无法从 mux 直接得知"是否
+// 存在其他方法的同路径"。用已知路由表做显式判定：路径命中已知路由集合且方法与
+// 该路径允许的方法不符 → 405；否则 404。显式表比探测 mux 内部状态更稳。
+func (h *Handler) notFound(w http.ResponseWriter, r *http.Request) {
+	path := r.URL.Path
+	// 已知路径 → 该路径允许的方法集合。
+	known := map[string]map[string]bool{
+		"/v1/chat/completions": {"POST": true},
+		"/v1/models":           {"GET": true},
+		"/status":              {"GET": true},
+		"/healthz":             {"GET": true},
+	}
+	if methods, ok := known[path]; ok {
+		if !methods[r.Method] {
+			w.Header().Set("Allow", allowHeader(methods))
+			writeOpenAIError(w, http.StatusMethodNotAllowed, "method_not_allowed",
+				"method "+r.Method+" not allowed on "+path)
+			return
+		}
+		// 路径与方法都合法却没被 mux 服务：理论上不可达（模式已注册）。
+		// 兜底为 404，避免留下无响应的死路。
+	}
+	writeOpenAIError(w, http.StatusNotFound, "not_found",
+		"unknown endpoint: "+r.Method+" "+path)
+}
+
+// allowHeader 把允许的方法集合拼成 Allow 头（稳定顺序，便于断言）。
+func allowHeader(methods map[string]bool) string {
+	order := []string{"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"}
+	var out []string
+	for _, m := range order {
+		if methods[m] {
+			out = append(out, m)
+		}
+	}
+	return strings.Join(out, ", ")
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -679,20 +729,22 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		writeOpenAIError(w, http.StatusBadRequest, "invalid_request", "read body: "+err.Error())
 		return
 	}
+	// 一次解析同时拿到 stream 与 model 的**原始字节**：把 Model 声明为
+	// json.RawMessage，既能解出字符串、又能判定原始 JSON 类型（missing/null/
+	// string/other 四态），不需要像以前那样对整份 body 再解一遍。
+	// 这是热路径上省下的一次全文档解析（大上下文请求收益显著）。
 	var peek struct {
-		Stream bool   `json:"stream"`
-		Model  string `json:"model"`
+		Stream bool            `json:"stream"`
+		Model  json.RawMessage `json:"model"`
 	}
 	_ = json.Unmarshal(body, &peek)
-
-	// model 字段的原始类型判定（T6 收尾，ADR-001 §五）。json.Unmarshal 会把非字符串
-	// model（数字/布尔/对象/数组）静默置为 ""（零值），与「显式 null/缺失」无法区分。
-	// 这里用 RawMessage 单独捕获原始字节，区分四种情况：缺失、null、字符串、其他类型。
-	var modelRaw struct {
-		Model json.RawMessage `json:"model"`
+	modelKind := modelKindOf(peek.Model) // "missing" / "null" / "string" / "other"
+	// 字符串形态才解出裸值；missing/null/other 一律空串（与旧 peek.Model 同语义：
+	// json.Unmarshal 到 string 时非字符串会被静默置零，result 同样是空串）。
+	modelStr := ""
+	if modelKind == "string" {
+		_ = json.Unmarshal(peek.Model, &modelStr)
 	}
-	_ = json.Unmarshal(body, &modelRaw)
-	modelKind := modelKindOf(modelRaw.Model) // "missing" / "null" / "string" / "other"
 
 	// 工具名名单：上游在没有 tools 的请求里会把工具调用吐成原生标记文本
 	// （见 upstream/dsml.go），修复层用它做严格判定。名单来自「本请求声明的 tools」
@@ -704,7 +756,7 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	// realm 前缀解析（D6）：model 名可能带 "[realm:]" 前缀。剥出 realm + bareModel，
 	// bareModel 用于选号/粘性/出站 body 重写（前缀是网关侧路由协议，上游只认裸名）。
 	// 裸名 → ("cn", 原串)，CN 现状零回归。
-	realm, bareModel := resolveModel(peek.Model)
+	realm, bareModel := resolveModel(modelStr)
 	modelRate := ""
 	if h.cfg.Upstream != nil {
 		modelRate = h.cfg.Upstream.ModelRate(realm, bareModel)
@@ -716,7 +768,7 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	// 复用同一次匹配结果，不重新鉴权（身份一致性不变量）。
 	authKey := authKeyFrom(r)
 	if authKey != nil {
-		if code, msg := h.checkKeyConstraints(authKey, peek.Model, realm, bareModel, modelKind); code != "" {
+		if code, msg := h.checkKeyConstraints(authKey, modelStr, realm, bareModel, modelKind); code != "" {
 			writeOpenAIError(w, http.StatusBadRequest, code, msg)
 			return
 		}
@@ -746,7 +798,7 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	if h.cfg.Session != nil && sessKey != "" {
 		// 按模型解析：绑定号在**当前模型**被 6004 限额时视为不可用 → 重新分配，
 		// 而不是钉在限额号上反复失败（"限额后换不动号"的正解）。
-		if uid, ok := h.cfg.Session.ResolveForModel(sessKey, peek.Model); ok {
+		if uid, ok := h.cfg.Session.ResolveForModel(sessKey, modelStr); ok {
 			stickyUID = uid
 		}
 	}
@@ -759,9 +811,25 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	// 必须在下方 prompt.Rewrite 之前取——改写会动 messages 内容，之后取会让键漂移。
 	turnKey := session.TurnKey(body)
 
-	// gateway_hint 判定所需的请求形态（image_url part）：在改写前取（与 turnKey
-	// 同理）。11133「模型不支持图片」指向的前提。
-	reqHasImage := hasImagePart(body)
+	// gateway_hint 判定所需的请求形态（image_url part）：**惰性求值**。
+	//
+	// 这个信息只在错误路径（hintOf / hintContext）用到，成功请求完全不需要；
+	// 而 hasImagePart 是一次全文档 json.Unmarshal——大上下文请求下与成功路径
+	// 的收益完全无关的纯浪费。改为首次调用时才解析，结果缓存（同请求内 hint
+	// 可能被调用多次，不重复解析）。
+	// 必须在 body 被改写之前捕获原始 body（改写会动 messages 内容）。
+	reqBodyForHint := body
+	var imageProbe struct {
+		done bool
+		val  bool
+	}
+	reqHasImage := func() bool {
+		if !imageProbe.done {
+			imageProbe.val = hasImagePart(reqBodyForHint)
+			imageProbe.done = true
+		}
+		return imageProbe.val
+	}
 
 	// 在途租约：成功选中即占名额；函数出口（含成功 return 与 panic）统一释放。
 	var heldUID string
@@ -809,7 +877,7 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		}
 		delta.Model = bareModel
 		if delta.Model == "" {
-			delta.Model = peek.Model
+			delta.Model = modelStr
 		}
 		latency := time.Since(started)
 		latencyMs := latency.Milliseconds()
@@ -834,9 +902,11 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		// 没拿到任何 token 统计（传输错误 / >=400 / 解析失败），计为失败尝试。
 		// 失败也计入请求数——否则重试放大在「用量」视图里看不见。
 		if h.cfg.Usage != nil {
-			realm := "cn"
-			if a, ok := h.cfg.Pool.Status(uid); ok && a.Realm != "" {
-				realm = a.Realm
+			// realm 只取一个字段：此前用 Pool.Status(uid) 会构造整个 Status
+			//（rate_limited_models / model_costs 切片 + 两次排序），每次尝试都白跑。
+			realm := h.cfg.Pool.RealmOf(uid)
+			if realm == "" {
+				realm = "cn"
 			}
 			keyID := ""
 			if authKey != nil {
@@ -883,8 +953,8 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// outbound model 名重写为 bareModel（D6）：realm 前缀是网关侧路由协议，
-	// 上游不认前缀（global 账号也请求裸模型名）。裸名时 bareModel==peek.Model 恒等。
-	if bareModel != peek.Model {
+	// 上游不认前缀（global 账号也请求裸模型名）。裸名时 bareModel==modelStr 恒等。
+	if bareModel != modelStr {
 		body = rewriteModel(body, bareModel)
 	}
 
@@ -1066,7 +1136,7 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 					msg = "content blocked by upstream content firewall"
 				}
 				writeOpenAIErrorHint(w, http.StatusBadRequest, "content_blocked", msg,
-					h.hintOf(upstream.ErrContentBlocked, string(respBody), bareModel, reqHasImage, uerr))
+					h.hintOf(upstream.ErrContentBlocked, string(respBody), bareModel, reqHasImage(), uerr))
 				st.status = http.StatusBadRequest
 				st.outcome = reqlog.OutcomeHTTPError
 				return
@@ -1081,7 +1151,7 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 				h.applyErrorPolicy(acct.UID, kind, string(respBody), bareModel, uerr)
 				fail(acct.UID)
 				writeOpenAIErrorHint(w, http.StatusBadRequest, "prompt_too_long", promptTooLongMessage(string(respBody)),
-					h.hintOf(upstream.ErrPromptTooLong, string(respBody), bareModel, reqHasImage, uerr))
+					h.hintOf(upstream.ErrPromptTooLong, string(respBody), bareModel, reqHasImage(), uerr))
 				st.status = http.StatusBadRequest
 				st.outcome = reqlog.OutcomeHTTPError
 				return
@@ -1096,7 +1166,7 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 					msg = "image request was rejected by upstream"
 				}
 				writeOpenAIErrorHint(w, http.StatusBadRequest, "image_invalid", msg,
-					h.hintOf(upstream.ErrImageInvalid, string(respBody), bareModel, reqHasImage, uerr))
+					h.hintOf(upstream.ErrImageInvalid, string(respBody), bareModel, reqHasImage(), uerr))
 				st.status = http.StatusBadRequest
 				st.outcome = reqlog.OutcomeHTTPError
 				return
@@ -1114,7 +1184,7 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 					msg = "chat request body was rejected by upstream"
 				}
 				writeOpenAIErrorHint(w, http.StatusBadRequest, "bad_params", msg,
-					h.hintOf(upstream.ErrBadParams, string(respBody), bareModel, reqHasImage, uerr))
+					h.hintOf(upstream.ErrBadParams, string(respBody), bareModel, reqHasImage(), uerr))
 				st.status = http.StatusBadRequest
 				st.outcome = reqlog.OutcomeHTTPError
 				return
@@ -1155,7 +1225,7 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 			// 实测最常见的泄漏成因，只做严格判定等于对主场景不设防。
 			repair := upstream.NewMarkupRepair(declaredTools, true)
 			sErr := upstream.StreamHint(w, stats, upstream.FrameHintFunc(func() upstream.HintContext {
-				return h.hintContext(bareModel, reqHasImage)
+				return h.hintContext(bareModel, reqHasImage())
 			}), upstream.WithErrorFrameObserver(func(payload string) { errFrame = payload }),
 				upstream.WithMarkupRepair(repair))
 			switch {
@@ -1314,7 +1384,7 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	upstreamMsgPassed := false
 	var ue *upstream.Error
 	if errors.As(lastErr, &ue) {
-		hint = h.hintOf(ue.Kind, ue.Msg, bareModel, reqHasImage, ue)
+		hint = h.hintOf(ue.Kind, ue.Msg, bareModel, reqHasImage(), ue)
 		switch ue.Kind {
 		case upstream.ErrSoftRate:
 			status = http.StatusTooManyRequests

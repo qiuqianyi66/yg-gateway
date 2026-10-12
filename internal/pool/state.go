@@ -319,6 +319,22 @@ func (p *Pool) Status(uid string) (Status, bool) {
 	return p.statusOf(uid, e), true
 }
 
+// RealmOf 只取账号的 realm（cn/global），不做 statusOf 的完整构造。
+//
+// 为什么单独开一个：请求热路径的 recordAttempt 每次尝试都要拿 realm 记账，而
+// Status() 会构造整个 Status（含 rate_limited_models 切片、model_costs 切片与
+// 两次排序）——只为读一个字符串。这是每请求一次的全池 RLock + 多次分配的浪费。
+// realm 由 auth.Realm() 计算（与 statusOf 同源，不会漂移）。
+// 未注册的 uid 返回 ""（与 Status 的 !ok 同语义，调用方自行回落默认值）。
+func (p *Pool) RealmOf(uid string) string {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	if e, ok := p.byUID[uid]; ok {
+		return e.a.Realm()
+	}
+	return ""
+}
+
 // AuthByUID 返回账号的完整凭证（给调度器/运维接口用）。
 func (p *Pool) AuthByUID(uid string) *auth.Auth {
 	p.mu.RLock()
