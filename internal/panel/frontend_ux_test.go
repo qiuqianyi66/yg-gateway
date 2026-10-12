@@ -179,7 +179,7 @@ func TestAppJSSemanticLandmarks(t *testing.T) {
 			t.Errorf("缺少语义标签 %q（读屏无法用 landmark 跳转）", want)
 		}
 	}
-	if n := strings.Count(s, `<th scope="col">`); n < 20 {
+	if n := strings.Count(s, `<th scope="col">`); n < 12 {
 		t.Errorf("表格 th 的 scope 覆盖不足：只有 %d 个", n)
 	}
 }

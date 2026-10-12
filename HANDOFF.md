@@ -157,6 +157,30 @@ if ($start.HasExited) { "进程退出 码=" + $start.ExitCode } else { "PID: " +
   $enc = New-Object System.Text.UTF8Encoding($false)
   [System.IO.File]::WriteAllText($path, $text, $enc)
   ```
+
+---
+
+## 六、本轮前端大改（2026-10-12 晚）
+
+**起因**：用户反馈"前端太丑，一眼差评"，要求按 Vercel/Linear 风格大改。
+
+**改了什么**：
+1. **全局设计 token**：强调色从纯蓝改 indigo→violet 渐变（`#6366f1 → #8b5cf6`），状态色更饱和（emerald/amber/red）
+2. **账号池**：表格 → 卡片网格（头像首字母渐变 + 昵称 + 积分大数字 + 进度条 + 4 列统计）
+3. **组件质感**：导航 active 左侧指示条、输入框 focus 3px ring、tag 细边框、按钮渐变 + 阴影
+4. **用量页**：KPI 从 6 张散卡改 4 张大卡（请求/Token/成功率/延迟）
+5. **新增能力**：通知中心（localStorage 持久化）、命令面板（Ctrl+K，9 条命令）、请求记录批量选择 + 导出 CSV、粘性会话详情列表（成本层级可见）
+6. **Anthropic 协议**：/v1/messages 端点（流式 + 非流式），Claude Code 可直连
+
+**测试调整**：账号表格改卡片网格后，`TestAppJSSemanticLandmarks` 的 th scope 阈值从 20 降到 12（设计升级，不再用 table）。
+
+**当前 HEAD**：`e9a044b`（已 push GitHub）
+
+**下一轮候选**：
+1. 粘性路径成本分层（ADR-004 遗留，需折中设计）
+2. 虚拟滚动（请求记录 >1000 条时性能优化）
+3. 竞品路线图：增量用量落库 / OpenRouter 费率折算深化
+4. EWMA 参数调优（/status 已透出信号）
   更稳：走面板 `POST /panel/api/config`（服务端自己落盘，格式天然正确）。
 - **火绒会删新建的 exe**：构建 + 复制 + 启动必须放同一条命令；或加白名单（详见 §三）。
 
