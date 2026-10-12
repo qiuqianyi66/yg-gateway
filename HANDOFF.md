@@ -23,11 +23,11 @@
 - 当前两边 HEAD 都已提交干净，工作区无未提交改动。
 
 **⚠️ 运行实例现状（2026-10-12 实测）**：
-- **唯一在跑的是 `D:\yg-gateway-eval\yg-gateway.exe`，监听 127.0.0.1:7864**（4 号健康，
-  面板 `http://127.0.0.1:7864/panel/`）。它的 config 指向 `auth_dir: D:/yg-gateway/auths`。
-- `D:\yg-gateway`（7863）**当前未运行**（上一轮收尾时还在跑，之后被停止，原因未记录）。
-  如需恢复：§三的构建+复制+启动同命令模板把目标路径/端口/`--config` 换掉即可。
-- 两边 config 是**独立的**：改一边不会自动同步到另一边（见 §五已应用配置清单）。
+- **两个实例都在跑**：`D:\yg-gateway\yg-gateway.exe`（**7863，生产**，4 号健康、养号调度全开）
+  与 `D:\yg-gateway-eval\yg-gateway.exe`（**7864，eval/验证**，上轮 ADR-005 真机验证用）。
+- 两个实例共用 `auth_dir: D:/yg-gateway/auths`；**config 各自独立**，改一边不会同步到另一边。
+- DSH（D:\yg-gateway）代码已整目录同步自开源侧 HEAD（含 ADR-001~005 全部成果），
+  本地提交 `f22a9d7`；私有运行文件（config.json/persona.md/auths/data）保留未动。
 
 ## 三、构建与测试（关键环境）
 
