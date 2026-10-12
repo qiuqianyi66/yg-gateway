@@ -93,6 +93,14 @@ if ($start.HasExited) { "进程退出 码=" + $start.ExitCode } else { "PID: " +
 13. **深度优化轮（前端 + 后端低风险项）**：热路径去重解析（实测 ~6× / 省 61% 内存）、reqlog 环形缓冲、404/405 OpenAI 信封、CSV 导出、骨架屏 + 就地错误态、配置页脏守卫、hash 路由、渲染短路、轮询三件套（防覆盖/隐藏暂停）、无障碍与对比度
 14. **ADR-003 调度可靠性四项**：断路器 half-open（`pool.breaker_probe_gap`）、全局准入 429（`pool.global_max_in_flight`）、选号降锁（prune 时间节流，实测 2×）、延迟分位数（新包 `internal/metrics`，`/status` 的 `latency` 段）
 15. **安全巡检**：发现并修复 `auths/*.json` ACL 未加固（`BUILTIN\Users` 可读明文 token）；`govulncheck` 零漏洞；面板 36 个 API 全 `withAuth`；多 Key 约束绕过逐条验证挡住
+16. **排水式优雅停机**：Shutdown 5s → 30s 并记录超时（原 5s 会硬掐在途 SSE）
+17. **请求记录分页**：>50 条/页渲染（原 1000 行 × 10 列全量 DOM，改筛选卡顿）
+18. **ADR-004 会话粘性派生键可关闭**（修「4 个号有积分却只用一个号」）：
+    机制 = 客户端不传会话标识时按 `SHA-256(system + 首条 user)` 派生会话键，
+    固定 system + 短开场会把**无关对话**判为同一会话、全钉到一个号。
+    实测对照：不同 `conversation_id` × 6 → 分散 3 号；相同 system+开头 × 4 → **4/4 单号**。
+    新配置 `session_sticky.derive`（`*bool` 三态，默认开 = 零回归；**本实例已设 false**）。
+    顺带修 R11：`session_sticky.enabled` / `.derive` 是装配期字段，此前漏列重启项。
 
 ## 五、当前待办（新对话从这里接）
 
@@ -100,19 +108,33 @@ if ($start.HasExited) { "进程退出 码=" + $start.ExitCode } else { "PID: " +
 - ✅ 多 API Key 派发（一期，ADR-001）+ 面板 Key 管理页（二期，ADR-002）
 - ✅ 用量按 Key 聚合（`by_key` / `credit_by_key` + 面板「按 Key」页签）
 - ✅ `/v1/models` 档位字段双名兼容
-- ✅ 深度优化轮（前端体验 + 后端热路径 + 路由兜底 + CSV 导出）
+- ✅ 深度优化轮（前端体验 + 后端热路径 6× + 路由兜底 + CSV 导出 + 分页）
 - ✅ ADR-003 调度可靠性四项（half-open / 全局准入 / 选号降锁 / 分位数）
+- ✅ ADR-004 会话粘性派生键开关（+ R11 重启项修正）
 - ✅ 全仓 gofmt 归零；代码规范速查清单（`.harness/rules/CODE-STANDARDS-CHECKLIST.md`）
 
-**已应用的运行配置**（D:\yg-gateway\config.json）：`pool.global_max_in_flight = 18`
-（4 账号 × per-account 3 × 1.5）。`breaker_probe_gap` 留空 = 用默认 30s。
+**已应用的运行配置**（D:\yg-gateway\config.json）：
+- `pool.global_max_in_flight = 18`（4 账号 × per-account 4，留余量）
+- `pool.breaker_probe_gap` 空 = 默认 30s
+- `session_sticky.derive = false`（关掉内容派生，修「只用一个号」）
 
 **第二轮候选**（见 `.harness/changes/deep-optimization-2026-10/summary.md`）：
-1. 选号版本化快照（`pick` 写锁仍在，本轮只削了遍历开销）
+1. 选号版本化快照（`pick` 写锁仍在，本轮只削了遍历开销 → 时间节流）
 2. EWMA 成功率/延迟权重回灌选号（P95 观测已有，尚未用于决策）
-3. 排水式优雅停机（Shutdown 只等 5s 会硬掐 SSE）
-4. 前端长列表虚拟滚动/分页（请求记录 1000 行 × 10 列）
-5. 竞品分析里的路线图：OpenRouter 费率折算 / 增量用量落库 / 客户端生态 / Anthropic 协议
+3. 粘性路径的成本分层（ADR-004 §五 方案 D 被弃：与缓存复用冲突，需重新设计）
+4. 前端剩余：表头排序、请求详情抽屉、通知中心、命令面板、批量选择、虚拟滚动
+5. 竞品路线图：OpenRouter 费率折算 / 增量用量落库 / 客户端生态 / Anthropic 协议
+
+**⚠️ 环境坑（已踩，务必注意）**：
+- **写 `D:\yg-gateway\config.json` 不要用 PowerShell `Set-Content -Encoding UTF8`**
+  —— 会加 UTF-8 BOM，Go 的 json 解析直接失败（`invalid character '\ufeff'`），服务起不来。
+  用无 BOM 写法：
+  ```powershell
+  $enc = New-Object System.Text.UTF8Encoding($false)
+  [System.IO.File]::WriteAllText($path, $text, $enc)
+  ```
+  更稳：走面板 `POST /panel/api/config`（服务端自己落盘，格式天然正确）。
+- **火绒会删新建的 exe**：构建 + 复制 + 启动必须放同一条命令；或加白名单（详见 §三）。
 
 ## 六、关键架构事实（新对话必知）
 
