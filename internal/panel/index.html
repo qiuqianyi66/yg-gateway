@@ -12,23 +12,25 @@
   --bg: #0c0e14; --surface: #14171f; --surface-2: #1a1e28; --raise: #202531;
   --line: #262c3a; --line-soft: #1e232e;
   --ink: #e8ebf2; --ink-2: #a8b0c2; --ink-3: #7d8699;
-  --accent: #5b7cfa; --accent-ink: #ffffff; --accent-soft: rgba(91,124,250,.13);
-  --ok: #3ddc97; --ok-soft: rgba(61,220,151,.12);
-  --warn: #f5b544; --warn-soft: rgba(245,181,68,.12);
-  --bad: #f0655f; --bad-soft: rgba(240,101,95,.12);
-  --shadow: 0 1px 2px rgba(0,0,0,.4), 0 8px 24px -12px rgba(0,0,0,.5);
+  --accent: #6366f1; --accent-2: #8b5cf6; --accent-ink: #ffffff; --accent-soft: rgba(99,102,241,.15);
+  --accent-gradient: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
+  --ok: #10b981; --ok-soft: rgba(16,185,129,.14);
+  --warn: #f59e0b; --warn-soft: rgba(245,158,11,.14);
+  --bad: #ef4444; --bad-soft: rgba(239,68,68,.14);
+  --shadow: 0 1px 3px rgba(0,0,0,.4), 0 8px 24px -8px rgba(99,102,241,.15);
   --mono: ui-monospace, "Cascadia Mono", "SF Mono", Consolas, monospace;
   --sans: system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
 }
 [data-theme="light"] {
-  --bg: #f4f5f8; --surface: #ffffff; --surface-2: #f8f9fb; --raise: #ffffff;
-  --line: #e2e5ec; --line-soft: #eceef3;
-  --ink: #14171f; --ink-2: #545c6e; --ink-3: #6b7280;
-  --accent: #3d5fe0; --accent-ink: #ffffff; --accent-soft: rgba(61,95,224,.09);
-  --ok: #0a7a4d; --ok-soft: rgba(10,122,77,.1);
-  --warn: #96610a; --warn-soft: rgba(150,97,10,.11);
-  --bad: #cf3b34; --bad-soft: rgba(207,59,52,.09);
-  --shadow: 0 1px 2px rgba(16,20,32,.06), 0 8px 24px -14px rgba(16,20,32,.14);
+  --bg: #f8fafc; --surface: #ffffff; --surface-2: #f1f5f9; --raise: #ffffff;
+  --line: #e2e8f0; --line-soft: #f1f5f9;
+  --ink: #0f172a; --ink-2: #475569; --ink-3: #64748b;
+  --accent: #4f46e5; --accent-2: #7c3aed; --accent-ink: #ffffff; --accent-soft: rgba(79,70,229,.08);
+  --accent-gradient: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%);
+  --ok: #059669; --ok-soft: rgba(5,150,105,.1);
+  --warn: #d97706; --warn-soft: rgba(217,119,6,.1);
+  --bad: #dc2626; --bad-soft: rgba(220,38,38,.08);
+  --shadow: 0 1px 3px rgba(15,23,42,.08), 0 8px 24px -12px rgba(79,70,229,.12);
 }
 * { box-sizing: border-box; margin: 0; padding: 0; }
 [hidden] { display: none !important; }
@@ -206,8 +208,8 @@ button {
 }
 button:hover:not(:disabled) { border-color: var(--accent); }
 button:disabled { opacity: .5; cursor: default; }
-button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 550; }
-button.primary:hover:not(:disabled) { filter: brightness(1.08); }
+button.primary { background: var(--accent-gradient); border: none; color: var(--accent-ink); font-weight: 600; box-shadow: 0 2px 8px -2px rgba(99,102,241,.4); }
+button.primary:hover:not(:disabled) { filter: brightness(1.1); box-shadow: 0 4px 12px -2px rgba(99,102,241,.5); }
 button.ghost { background: transparent; }
 button.danger { color: var(--bad); }
 button.danger:hover:not(:disabled) { border-color: var(--bad); }
@@ -241,8 +243,9 @@ label.fld > .hint { display: block; font-size: 11.5px; color: var(--ink-3); marg
 @media (max-width: 1180px) { .stats { grid-template-columns: repeat(4, 1fr); } }
 @media (max-width: 980px) { .stats { grid-template-columns: repeat(3, 1fr); } }
 @media (max-width: 560px) { .stats { grid-template-columns: repeat(2, 1fr); } }
-.stat { padding: 14px 17px; border-right: 1px solid var(--line-soft); border-bottom: 1px solid var(--line-soft); }
-.stat .v { font: 600 26px/1.15 var(--mono); font-variant-numeric: tabular-nums; letter-spacing: -.02em; white-space: nowrap; }
+.stat { padding: 16px 18px; border-right: 1px solid var(--line-soft); border-bottom: 1px solid var(--line-soft); background: var(--surface); transition: background .15s; }
+.stat:hover { background: var(--surface-2); }
+.stat .v { font: 700 28px/1.15 var(--mono); font-variant-numeric: tabular-nums; letter-spacing: -.02em; white-space: nowrap; }
 .stat .k { color: var(--ink-3); font-size: 11.5px; margin-top: 5px; }
 .stat.good .v { color: var(--ok); } .stat.warn .v { color: var(--warn); } .stat.bad .v { color: var(--bad); }
 /* 主指标：更大的数字 + 底色区分，是首屏视线落点 */
