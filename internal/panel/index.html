@@ -878,6 +878,14 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
         <div class="stat minor"><div class="v" id="sTodayTok">-</div><div class="k">今日 Token</div></div>
       </div>
 
+      <!-- 粘性会话详情：当前会话绑到哪个号 + 成本层级（让用户知道是否绑到收费号） -->
+      <div class="box" id="stickyBox" hidden>
+        <header>
+          <h3>粘性会话<span class="hint">当前会话绑定的账号 · 成本层级：免费=绿 / 未知=灰 / 收费=红</span></h3>
+        </header>
+        <div class="pad"><div id="stickyList"></div></div>
+      </div>
+
       <!-- 卡片默认可见：此前 hidden + 「仅点检查才渲染」形成死锁（按钮藏在隐藏卡片里，
            用户看不到也就点不到，issue #137）。现在进页面即用 /overview 的到期快照渲染
            （数据来自 state.json，不经上游），「检查」按钮改为拉取逐包明细的增强入口。 -->
