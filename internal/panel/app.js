@@ -1842,6 +1842,7 @@ const CFG_MAP = {
   session_sticky_enabled: ['session_sticky', 'enabled'],
   session_sticky_derive: ['session_sticky', 'derive'],
   request_client_info: ['logging', 'request_client_info'],
+  usage_credit_cny_rate: ['usage', 'credit_cny_rate'],
 };
 /* 「覆盖型」文本字段：空串本身是有意义的取值（= 回落到内置默认），必须照发。
  *
