@@ -21,7 +21,7 @@ GitHub 上「把腾讯 WorkBuddy / CodeBuddy 账号变成 OpenAI 兼容 API」�
 
 **劣势（必须承认）**：
 
-1. **功能广度不如 workbuddy-manager / workbuddy2api-hub**。它们有密钥分组派发、IP/模型白名单、多上游级联、SQLite 落库、OpenRouter 费率折算、增量用量聚合——这些是"给一群用户开 API Key 卖"的 B 端能力。YG Gateway 目前是单 api_key 鉴权，没有多租户派发。
+1. **功能广度不如 workbuddy-manager / workbuddy2api-hub**。它们有密钥分组派发、IP/模型白名单、多上游级联、SQLite 落库、OpenRouter 费率折算、增量用量聚合——这些是"给一群用户开 API Key 卖"的 B 端能力。YG Gateway 已交付**多 API Key 派发**（id / models 白名单 / realm 约束 + 面板可视化管理 + 用量按 Key 归因），但仍缺它们的 **IP 白名单、多上游级联、SQLite 落库、额度计费**。
 2. **工程成熟度不如它们**。workbuddy-manager 2124 个测试、五语种 i18n、签名校验的一键更新；workbuddy2api-hub 119 个测试套件、OpenWrt 嵌入式适配。这些都是长期打磨出来的。
 3. **生态广度不如**。它们支持更多客户端形态（Codex / Claude Code / DSH / Anthropic SDK），YG Gateway 目前聚焦 OpenAI 兼容。
 
@@ -82,9 +82,14 @@ YG Gateway 仓库里带一套完整的 `.harness/` 治理体系：十阶段开�
 
 诚实地说，YG Gateway 要成为一个真正有竞争力的开源项目，还差这几块（按优先级）：
 
-1. **多 API Key 派发**（对标 workbuddy-manager）—— 这是"从自用到给朋友用"的分水岭，也是星标增长的关键。
+1. ~~**多 API Key 派发**（对标 workbuddy-manager）~~ ✅ **已交付**（ADR-001 + ADR-002）：
+   每把 Key 带 id / models 白名单 / realm 约束，摘要前缀索引 + 常量时间比较，
+   面板可视化管理（新增/编辑/启停/删除/一键生成），用量按 Key 归因。
 2. **OpenRouter 费率折算**（对标 workbuddy2api-hub）—— 用户想知道"我省了多少钱"。
-3. **增量用量聚合 + 落库**（对标 workbuddy2api-hub）—— 目前是 JSONL 归档，量大后查询会慢。
+3. **增量用量聚合 + 落库**（对标 workbuddy2api-hub）—— 目前是 JSONL 归档 + `usage.json` 桶，量大后查询会慢。
 4. **更完整的客户端生态**（Claude Code / Codex 直连）—— 目前聚焦 OpenAI 兼容。
 
-这四条是"做出来就能翻星标"的路标，但每一条都是实打实的工程量，需要逐个立项、按十阶段流程推进。
+**已补的可靠性短板**（ADR-003）：断路器 half-open、全局准入 429、延迟分位数观测。
+这些不直接对标竞品，但都是长期跑生产会撞上的问题。
+
+剩下的路标每条都是实打实的工程量，需要逐个立项、按十阶段流程推进。

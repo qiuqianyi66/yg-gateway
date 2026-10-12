@@ -32,12 +32,12 @@ $env:CGO_ENABLED = '0'
 
 & $go build -trimpath -ldflags="-s -w" -o yg-gateway.exe ./cmd/server
 & $go vet ./...
-& $go test ./...                          # 19 包，全绿
+& $go test ./...                          # 20 包，全绿
 & $go fmt -l ./cmd ./internal             # 应为空（CI 门禁）
 node --check internal/panel/app.js        # 前端语法（go:embed 不查内容）
 ```
 
-- 全量测试：15 个有测试的包 ok + 4 个 no test files = 19 包。
+- 全量测试：17 个有测试的包 ok + 3 个 no test files（cmd/credit、cmd/signin、cmd/trial）= 20 包。
 
 ### 部署踩坑：新 exe 被实时防护删除（火绒）
 
@@ -70,7 +70,7 @@ if ($start.HasExited) { "进程退出 码=" + $start.ExitCode } else { "PID: " +
    并用 `Get-ChildItem D:\yg-gateway -Filter "yg-gateway*"` 确认 exe 还在。
 5. **替换前先备份**（R15）：`Copy-Item` 到 `.v{版本}.bak`，被删了也能秒回。
 
-**当前状态（2026-10-12）**：火绒已由 YG 关闭，二进制部署正常（PID 26272）。若后续
+**当前状态（2026-10-12）**：火绒已由 YG 关闭，二进制部署正常（见 `Get-Process yg-gateway`）。若后续
 重新开启火绒，按第 1 条加白名单。
 
 ## 四、已完成的工作（按时间线）
@@ -90,22 +90,29 @@ if ($start.HasExited) { "进程退出 码=" + $start.ExitCode } else { "PID: " +
 10. **面板 Key 管理页（二期，ADR-002）**：卡片+弹窗风格，新增/编辑/启停/删除/一键生成，明文一次性展示，CSP 兼容（无行内 onclick）
 11. **用量按 Key 聚合**：`usage` 桶加 Key 维度（fileVersion 4→5），面板用量页与积分页各加「按 Key」页签；旧数据归入「未归因」（无损）
 12. **`/v1/models` 档位字段双名**：`supported_efforts` / `default_effort` 作为 `reasoning_*` 的别名，兼容只认裸名字段的客户端（修「该模型不校验该参数」提示）
+13. **深度优化轮（前端 + 后端低风险项）**：热路径去重解析（实测 ~6× / 省 61% 内存）、reqlog 环形缓冲、404/405 OpenAI 信封、CSV 导出、骨架屏 + 就地错误态、配置页脏守卫、hash 路由、渲染短路、轮询三件套（防覆盖/隐藏暂停）、无障碍与对比度
+14. **ADR-003 调度可靠性四项**：断路器 half-open（`pool.breaker_probe_gap`）、全局准入 429（`pool.global_max_in_flight`）、选号降锁（prune 时间节流，实测 2×）、延迟分位数（新包 `internal/metrics`，`/status` 的 `latency` 段）
+15. **安全巡检**：发现并修复 `auths/*.json` ACL 未加固（`BUILTIN\Users` 可读明文 token）；`govulncheck` 零漏洞；面板 36 个 API 全 `withAuth`；多 Key 约束绕过逐条验证挡住
 
 ## 五、当前待办（新对话从这里接）
 
 **主线已完成**：
-- ✅ 多 API Key 派发（一期，ADR-001）：httpauth 前缀索引 + 常量时间比较、realm/models 约束、热更新、脱敏回显
-- ✅ 面板 Key 管理页（二期，ADR-002）：卡片+弹窗、新增/编辑/启停/删除/一键生成、明文一次性展示
-- ✅ 用量按 Key 聚合（ADR-001 F-005 二期收尾）：`by_key` / `credit_by_key` 两维度 + 面板「按 Key」页签；usage.json 升至 v5，旧数据无损归入「未归因」
-- ✅ `/v1/models` 档位字段双名兼容（`supported_efforts` / `default_effort` 别名，兼容只认裸名的客户端）
-- ✅ 全仓 gofmt 归零（18 个文件的历史对齐漂移）
+- ✅ 多 API Key 派发（一期，ADR-001）+ 面板 Key 管理页（二期，ADR-002）
+- ✅ 用量按 Key 聚合（`by_key` / `credit_by_key` + 面板「按 Key」页签）
+- ✅ `/v1/models` 档位字段双名兼容
+- ✅ 深度优化轮（前端体验 + 后端热路径 + 路由兜底 + CSV 导出）
+- ✅ ADR-003 调度可靠性四项（half-open / 全局准入 / 选号降锁 / 分位数）
+- ✅ 全仓 gofmt 归零；代码规范速查清单（`.harness/rules/CODE-STANDARDS-CHECKLIST.md`）
 
-**可选下一步路线图**（等你拍板）：
-1. OpenRouter 费率折算（回答"我省了多少钱"）
-2. 增量用量聚合 + 落库（目前 JSONL + usage.json，量大后查询会慢）
-3. 自动养号任务补齐（任务中心有 Sequential_Tasks_* 预留）
-4. 更完整的客户端生态（Claude Code / Codex 直连）
-5. Anthropic 协议双支持
+**已应用的运行配置**（D:\yg-gateway\config.json）：`pool.global_max_in_flight = 18`
+（4 账号 × per-account 3 × 1.5）。`breaker_probe_gap` 留空 = 用默认 30s。
+
+**第二轮候选**（见 `.harness/changes/deep-optimization-2026-10/summary.md`）：
+1. 选号版本化快照（`pick` 写锁仍在，本轮只削了遍历开销）
+2. EWMA 成功率/延迟权重回灌选号（P95 观测已有，尚未用于决策）
+3. 排水式优雅停机（Shutdown 只等 5s 会硬掐 SSE）
+4. 前端长列表虚拟滚动/分页（请求记录 1000 行 × 10 列）
+5. 竞品分析里的路线图：OpenRouter 费率折算 / 增量用量落库 / 客户端生态 / Anthropic 协议
 
 ## 六、关键架构事实（新对话必知）
 
