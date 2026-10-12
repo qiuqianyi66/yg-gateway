@@ -3,6 +3,8 @@ package reqlog
 import (
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
@@ -23,6 +25,55 @@ func TestRecorderMetricsAndRecent(t *testing.T) {
 	}
 	if len(s.Recent) != 2 || s.Recent[0].RequestID != "bad" || s.Recent[1].RequestID != "ok" {
 		t.Fatalf("recent = %+v, want newest first", s.Recent)
+	}
+}
+
+// TestRecentRingBufferWrap 环形缓冲回绕：写满并超过 recentLimit 后，Recent 必须
+// 恰好保留最近 recentLimit 条、且仍是「最近在前」。
+//
+// 牙齿：若 recentEvents 的索引方向写反（或 recentHead 不取模），超过容量后
+// 顺序会错乱或重复旧条目 → 本测试 FAIL。这是环形缓冲最易写错的点。
+func TestRecentRingBufferWrap(t *testing.T) {
+	r := New(Config{})
+	total := recentLimit + 25 // 故意超过容量，触发回绕
+	for i := 0; i < total; i++ {
+		r.Record(Event{RequestID: "req-" + strconv.Itoa(i), Status: 200, OK: true})
+	}
+	s := r.Snapshot()
+	if len(s.Recent) != recentLimit {
+		t.Fatalf("Recent 长度 = %d, want %d（环形缓冲容量）", len(s.Recent), recentLimit)
+	}
+	// 最近一条是最后写入的 req-(total-1)，最旧一条是 req-(total-recentLimit)。
+	if got := s.Recent[0].RequestID; got != "req-"+strconv.Itoa(total-1) {
+		t.Fatalf("Recent[0] = %q, want req-%d（最近在前）", got, total-1)
+	}
+	if got := s.Recent[recentLimit-1].RequestID; got != "req-"+strconv.Itoa(total-recentLimit) {
+		t.Fatalf("Recent[%d] = %q, want req-%d（最旧的被挤出的边界）",
+			recentLimit-1, got, total-recentLimit)
+	}
+	// 顺序必须严格单调递减的序号（无重复、无跳变）。
+	for i := 1; i < len(s.Recent); i++ {
+		prev, err1 := strconv.Atoi(strings.TrimPrefix(s.Recent[i-1].RequestID, "req-"))
+		cur, err2 := strconv.Atoi(strings.TrimPrefix(s.Recent[i].RequestID, "req-"))
+		if err1 != nil || err2 != nil {
+			t.Fatalf("RequestID 解析失败: %q / %q", s.Recent[i-1].RequestID, s.Recent[i].RequestID)
+		}
+		if prev-1 != cur {
+			t.Fatalf("Recent 顺序断裂：index %d = %d, index %d = %d（应连续递减）", i-1, prev, i, cur)
+		}
+	}
+}
+
+// TestRecentEmpty 无记录时 Recent 必须是空切片（不是 null）——前端把 null 与
+// 「归档关闭」混在一起会走错分支。
+func TestRecentEmpty(t *testing.T) {
+	r := New(Config{})
+	s := r.Snapshot()
+	if s.Recent == nil {
+		t.Fatal("Recent 应为空切片而非 nil")
+	}
+	if len(s.Recent) != 0 {
+		t.Fatalf("Recent = %+v, want empty", s.Recent)
 	}
 }
 
