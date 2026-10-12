@@ -42,9 +42,19 @@ func (p *Pool) PickExcludingForRealm(tried map[string]bool, reqModel, realm stri
 // pick 在 healthy 候选集中按权重加权随机选出账号，并记录 lastUsed（防并发撞号）。
 // reqModel 非空时把健康口径换成 healthyForModel（6004 模型豁免生效）。
 // realm 非空时候选过滤叠加 Realm()==realm 谓词（分池选号域）。
+//
+// 锁口径（ADR-005 D-500）：只持 **读锁** —— 选号是每请求必经、写锁是全池唯一
+// 串行点，改读锁后并发 pick 可并行。读锁下不允许写普通字段：选中写回
+// （lastUsed/usedSeq/breakerProbeAt/pickSeq）全部原子化；探索台账
+// （exploreLast/costExploreEvents）由独立 exploreMu 保护；过期台账清理
+// （prune）移出热路径（见 saveLocked）。
+// 唯一语义放宽：同一瞬间的并发 pick 可能同时选中同一账号（旧写锁靠串行让
+// 第 2..N 个进入者看到 lastUsed 已更新）；由 handler 的 Acquire 租约 + tried
+// 轮换自愈（Acquire 失败即换号，不产生上游请求），且 per-account 在途上限
+// 天然限流，不构成正确性问题（防撞号窗口对「下一个进入者」继续生效）。
 func (p *Pool) pick(tried map[string]bool, reqModel, realm string) *auth.Auth {
-	p.mu.Lock()
-	defer p.mu.Unlock()
+	p.mu.RLock()
+	defer p.mu.RUnlock()
 	now := time.Now()
 	realmOK := func(e *entry) bool { return realm == "" || e.a.Realm() == realm }
 	healthyOf := func(e *entry) bool { return realmOK(e) && e.healthy(now) }
@@ -74,20 +84,21 @@ func (p *Pool) pick(tried map[string]bool, reqModel, realm string) *auth.Auth {
 		if e.retryCount == 0 {
 			return false // 已成功恢复（NoteSuccess 清 retryCount）
 		}
-		if e.breakerProbeAt.IsZero() {
+		if t := e.probeAtTime(); t.IsZero() {
 			return false // 首次到期：放行一次试探
+		} else {
+			return now.Sub(t) < p.breakerProbeGap
 		}
-		return now.Sub(e.breakerProbeAt) < p.breakerProbeGap
 	}
 	var cands []*entry
 	for uid, e := range p.byUID {
 		if tried != nil && tried[uid] {
 			continue
 		}
-		// 惰性清理过期的模型级冷却与成本台账（两者的 map 都不无限膨胀；
-		// status 只读遍历天然跳过过期项，但内存条目必须在此真正删除）。
-		e.pruneExpiredModelCooldowns(now)
-		e.pruneExpiredModelCosts(now)
+		// 过期模型级冷却/成本台账由 saveLocked 的 pruneAllLocked 统一清理
+		// （ADR-005 D-500：pick 改读锁后不能在热路径删 map，内存卫生移入写锁
+		// 落盘点）。读路径仍按 TTL 跳过过期项（modelCostOf/modelExempt），晚删
+		// 一轮零正确性影响——本循环只做健康判定，不写任何状态。
 		if !healthyOf(e) {
 			continue
 		}
@@ -160,10 +171,14 @@ func (p *Pool) pick(tried map[string]bool, reqModel, realm string) *auth.Auth {
 	// 成功 → NoteModelCost 首观测 → 毕业（tier 0/2，下一轮 pick 立即生效）；
 	// 失败 → 既有错误策略照常，无探测风暴。
 	// hasTier1 复用本循环上方 costTier 的预计算口径（每候选一次的契约不变）。
-	// timer 同锁写入：并发 pick 串行进入写锁，只有一个进入者能通过窗口判定
-	//（天然防重复探索）。key = realm + "\x1f" + reqModel：同模型名可跨域，
-	// 探索节奏按 (域, 模型) 独立；realm==""（Pick 老语义）单独成键。
+	// 探索判定 + 写入由 exploreMu 保护（ADR-005 D-500）：pick 改读锁后，
+	// exploreLast 是 map，不能在读锁下写；且「窗口判定 + 置位」必须原子，
+	// 否则并发 pick 会重复探索。独立小锁避免把写锁拉回热路径（该分支只在
+	// tier 0 垄断 + tier 1 存在时走，天然低频）。
+	// key = realm + "\x1f" + reqModel：同模型名可跨域，探索节奏按 (域, 模型)
+	// 独立；realm==""（Pick 老语义）单独成键。
 	if p.costExploreInterval > 0 && bestTier == 0 && reqModel != "" {
+		p.exploreMu.Lock()
 		for i := range cands {
 			if candTier[i] == 1 {
 				hasTier1 = true
@@ -177,20 +192,24 @@ func (p *Pool) pick(tried map[string]bool, reqModel, realm string) *auth.Auth {
 			bestTier = 1
 			explored = true
 		}
+		p.exploreMu.Unlock()
 	}
 	// 权重只算一次：顶 5 截断要排序，若在 sort 比较器里现算 weightOf 会翻成 O(n log n) 次
 	// 冗余浮点计算（46 账号约 500 次）。先做 O(n) 预计算，再按 (权重, uid) 排序。
 	// costTier/modelCostOf 同样每候选只算一次（存入 tier/cost1k），比较器只读缓存字段。
+	// EWMA 延迟因子（ADR-005 D-502）：先算全候选池延迟中位数作为「慢账号」基准；
+	// 该中位数在 ws 构建与 pickWeighted 两处共用同一值（否则两阶段权重不可比）。
 	type weighted struct {
 		e      *entry
 		w      float64
 		tier   int
 		cost1k float64
 	}
+	medianLatencyMs := p.poolMedianLatencyMs(cands)
 	ws := make([]weighted, 0, len(cands))
 	for i, e := range cands {
 		if candTier[i] == bestTier {
-			ws = append(ws, weighted{e: e, w: p.routingWeightOf(e, maxCredits, now), tier: candTier[i], cost1k: candCost[i]})
+			ws = append(ws, weighted{e: e, w: p.routingWeightOf(e, maxCredits, now, medianLatencyMs), tier: candTier[i], cost1k: candCost[i]})
 		}
 	}
 	// 等权重洗牌：仅当存在权重相等且候选数超过 top5 时，才对 ws 做 Fisher-Yates
@@ -234,13 +253,13 @@ func (p *Pool) pick(tried map[string]bool, reqModel, realm string) *auth.Auth {
 		cands = cands[:5]
 	}
 	var e *entry
-	// 防并发撞号：在持锁内基于「上次选中时刻」过滤，但同一批并发 goroutine 会串行进入
-	// 本函数（写锁），每个进入者都把 lastUsed 置为 now —— 于是同一瞬间的第 2..N 个
-	// 进入者看到前一个账号 lastUsed==now（距今 0 < minPickGap），被自然挤向其他账号。
-	// 关键：lastUsed 在锁内赋值，使时间窗口判定在并发下可重入。
+	// 防并发撞号：基于「上次选中时刻」过滤。改读锁后（ADR-005 D-500）同一瞬间
+	// 的并发 pick 可能都读到旧 lastUsed 而同选一号（语义放宽见 pick 头注释，
+	// 由 Acquire 租约 + tried 轮换自愈）；对「下一个进入者」而言，下方原子写回
+	// 让 lastUsed 立即可见，时间窗口判定继续生效。
 	eligible := make([]*entry, 0, len(cands))
 	for _, c := range cands {
-		if now.Sub(c.lastUsed) >= minPickGap {
+		if t := c.lastUsedTime(); t.IsZero() || now.Sub(t) >= minPickGap {
 			eligible = append(eligible, c)
 		}
 	}
@@ -251,12 +270,12 @@ func (p *Pool) pick(tried map[string]bool, reqModel, realm string) *auth.Auth {
 		// candsAll[0] 导致集中。usedSeq 严格全序，与时间精度无关。
 		e = candsAll[0]
 		for _, c := range candsAll[1:] {
-			if c.usedSeq < e.usedSeq {
+			if c.usedSeq.Load() < e.usedSeq.Load() {
 				e = c
 			}
 		}
 	} else {
-		e = p.pickWeighted(eligible) // eligible 保序 = top5 降序子集
+		e = p.pickWeighted(eligible, medianLatencyMs) // eligible 保序 = top5 降序子集
 	}
 	if explored {
 		// 探索事件日志（可观测性）：选中号此时才确定，故在选中点打出。
@@ -265,14 +284,15 @@ func (p *Pool) pick(tried map[string]bool, reqModel, realm string) *auth.Auth {
 		log.Printf("[pool] cost explore model=%s realm=%q acct=%s window=%s",
 			reqModel, realm, logfmt.Label(e.a.UID, e.a.Nickname), p.costExploreInterval)
 	}
-	e.lastUsed = now // 锁内即时标记：下一个进入 pick 的 goroutine 立即看到本号已用
-	p.pickSeq++
-	e.usedSeq = p.pickSeq // 单调序号：保证 usedSeq 严格全序（防惊群/LRU 的权威依据）
+	// 原子写回（ADR-005 D-500）：读锁下用 atomic 标记选中，不写普通字段。
+	e.setLastUsed(now)
+	seq := p.pickSeq.Add(1)
+	e.usedSeq.Store(seq) // 单调序号：保证 usedSeq 严格全序（防惊群/LRU 的权威依据）
 	// half-open 试探占位（ADR-003 D-400）：本号是被放行的试探（熔断刚到期且
 	// retryCount>0），记下时刻让下一个进入者按 gap 限速。成功→NoteSuccess 清
 	// retryCount（此后不再限速）；失败→重新熔断（退避加倍），两条都由既有路径承接。
 	if p.breakerProbeGap > 0 && !e.breakerUntil.IsZero() && now.After(e.breakerUntil) && e.retryCount > 0 {
-		e.breakerProbeAt = now
+		e.setProbeAt(now)
 	}
 	return e.a
 }
@@ -371,13 +391,14 @@ func (p *Pool) pickEarliestExpiryLocked(tried map[string]bool, now time.Time, re
 		return nil
 	}
 	log.Printf("WARN: [pool] fallback_earliest_expiry acct=%s until=%s kind=%s", logfmt.Label(best.a.UID, best.a.Nickname), best.expiry(now).Format(time.RFC3339), best.fallbackKind(now))
-	best.lastUsed = time.Now()
+	// 原子写回（ADR-005 D-500）：同 pick 正常路径口径（本函数经 pick 读锁路径调用）。
 	// 兜底同样是「选中」，必须与 pick() 正常路径、粘性命中路径（PickByUIDForModel）
 	// 一样推进 usedSeq/pickSeq：否则被兜底反复选中的账号 usedSeq 恒为 0，在 pick 的
 	// LRU 兜底（按 usedSeq 取最旧）眼里永远是「最旧」，刚被用过就被立刻再选——
 	// 防集中/防惊群失效（entry.usedSeq 契约：每次被选中时取 p.pickSeq 自增值）。
-	p.pickSeq++
-	best.usedSeq = p.pickSeq
+	best.setLastUsed(time.Now())
+	seq := p.pickSeq.Add(1)
+	best.usedSeq.Store(seq)
 	return best.a
 }
 
@@ -405,7 +426,7 @@ var minPickGap = 100 * time.Millisecond
 // credits 全 0 时仍按 idleWeight 加权（不退化均匀随机）。
 // 权重为浮点，用 int64 定点（×1e6）抽签可保持确定性随机源注入（randInt64N 语义不变）。
 // 随机源优先用 p.randInt64N（仅供测试注入确定性），nil 时回退 math/rand/v2 全局源。
-func (p *Pool) pickWeighted(cands []*entry) *entry {
+func (p *Pool) pickWeighted(cands []*entry, medianLatencyMs float64) *entry {
 	now := time.Now()
 	var maxCredits int64
 	for _, e := range cands {
@@ -417,7 +438,7 @@ func (p *Pool) pickWeighted(cands []*entry) *entry {
 	weights := make([]int64, len(cands))
 	var total int64
 	for i, e := range cands {
-		w := p.routingWeightOf(e, maxCredits, now)
+		w := p.routingWeightOf(e, maxCredits, now, medianLatencyMs)
 		weights[i] = int64(w * scale)
 		total += weights[i]
 	}
@@ -447,10 +468,10 @@ func (p *Pool) weightOf(e *entry, maxCredits int64, now time.Time) float64 {
 		w += float64(e.credits) / float64(maxCredits) * 10
 	}
 	// 2. 闲置补偿。
-	if e.lastUsed.IsZero() {
+	if t := e.lastUsedTime(); t.IsZero() {
 		w += p.idleWeightMax // 从未使用 → 满分
 	} else {
-		hours := now.Sub(e.lastUsed).Hours()
+		hours := now.Sub(t).Hours()
 		idleW := hours * p.idleWeightPerHour
 		if idleW > p.idleWeightMax {
 			idleW = p.idleWeightMax
@@ -474,14 +495,77 @@ func expiringNow(e *entry, now time.Time) bool {
 		e.creditsEarliestExpiry.After(now)
 }
 
-// routingWeightOf 在普通账号权重上叠加快过期虚拟实例数量。prefer_expiring=false
-// 或账号无有效快过期批次时，实例数恒为 1，结果与旧 weightOf 完全一致。
-func (p *Pool) routingWeightOf(e *entry, maxCredits int64, now time.Time) float64 {
+// routingWeightOf 在普通账号权重上叠加 EWMA 表现因子（ADR-005 D-502）与快过期
+// 虚拟实例数量。prefer_expiring=false 或账号无有效快过期批次时，实例数恒为 1；
+// ewma 关闭或样本不足时表现因子恒 1 —— 两者叠加后与旧 weightOf 完全一致（零回归）。
+// medianLatencyMs 为池级延迟中位数（poolMedianLatencyMs 单次计算，两阶段共用）。
+func (p *Pool) routingWeightOf(e *entry, maxCredits int64, now time.Time, medianLatencyMs float64) float64 {
 	w := p.weightOf(e, maxCredits, now)
+	if p.ewmaEnabled {
+		w *= p.ewmaWeightFactor(e, medianLatencyMs)
+	}
 	if p.preferExpiring && expiringNow(e, now) {
 		return w * expiringVirtualSlots
 	}
 	return w
+}
+
+// poolMedianLatencyMs 计算候选集的 EWMA 延迟中位数（毫秒），作为「慢账号」基准。
+// 仅当 ewma 开启且至少 2 个候选有达标样本时才有意义；否则返回 0（因子中性）。
+// 中位数比均值稳健：单个 60s 超时不会把整个池的基准抬高而取消对慢号的惩罚。
+func (p *Pool) poolMedianLatencyMs(cands []*entry) float64 {
+	if !p.ewmaEnabled || len(cands) < 2 {
+		return 0
+	}
+	lats := make([]float64, 0, len(cands))
+	for _, e := range cands {
+		if e.ewmaLatencySamples >= p.ewmaMinSamples && e.ewmaLatencyMs > 0 {
+			lats = append(lats, e.ewmaLatencyMs)
+		}
+	}
+	if len(lats) < 2 {
+		return 0
+	}
+	sort.Float64s(lats)
+	// 偶数取「下中位」（(n-1)/2）：比上中位更保守地认定慢号（多罚一个慢账号的
+	// 代价 < 漏罚），且两候选场景取较小者，避免单个慢号把基准抬到自己头上。
+	return lats[(len(lats)-1)/2]
+}
+
+// ewmaWeightFactor 计算 EWMA 表现因子（ADR-005 D-502）。
+//
+// 成功率因子：sr 高于基线（0.95）→ 线性加分到 +successBoostMax（sr=1 封顶）；
+// 低于基线 → 线性减分到 -successPenaltyMax（sr=0 封底）。因子被钳制在
+// [1-successPenaltyMax, 1+successBoostMax]，不可能把账号权重清零（饿死防护），
+// 也只是温和拉开档位，不颠覆 credits/闲置/快过期的主导地位。
+//
+// 延迟因子：仅惩罚显著慢于池中位数的账号（ewmaLatencyMs > median × slowFactor），
+// 超阈值部分线性升到 -latencyPenaltyMax 封顶；低于阈值不罚（对噪声稳健，快账号
+// 不额外加分——避免振荡与「快号越用越多」的正反馈）。
+//
+// 冷启动中性：任一样本数不足 minSamples 时对应因子恒 1（不惩罚新号/没流量号）。
+// 返回值 ∈ [1-latencyPenaltyMax-successPenaltyMax, 1+successBoostMax]。
+func (p *Pool) ewmaWeightFactor(e *entry, medianMs float64) float64 {
+	f := 1.0
+	if e.ewmaSuccessSamples >= p.ewmaMinSamples {
+		sr := e.ewmaSuccess
+		if sr > ewmaSuccessBaseline {
+			boost := (sr - ewmaSuccessBaseline) / (1 - ewmaSuccessBaseline) * ewmaSuccessBoostMax
+			f *= 1 + boost
+		} else {
+			pen := (ewmaSuccessBaseline - sr) / ewmaSuccessBaseline * ewmaSuccessPenaltyMax
+			f *= 1 - pen
+		}
+	}
+	if e.ewmaLatencySamples >= p.ewmaMinSamples && medianMs > 0 && e.ewmaLatencyMs > medianMs*ewmaLatencySlowFactor {
+		ratio := e.ewmaLatencyMs / medianMs
+		pen := (ratio - ewmaLatencySlowFactor) / ewmaLatencySlowFactor * ewmaLatencyPenaltyMax
+		if pen > ewmaLatencyPenaltyMax {
+			pen = ewmaLatencyPenaltyMax
+		}
+		f *= 1 - pen
+	}
+	return f
 }
 
 // SetCredits 更新账号余额。

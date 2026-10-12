@@ -154,6 +154,12 @@ func TestNewPoolConfigDefaults(t *testing.T) {
 	if !c.Pool.PreferExpiring || c.ExpiringSoonDur != 7*24*time.Hour {
 		t.Errorf("expiring defaults: enabled=%v window=%v", c.Pool.PreferExpiring, c.ExpiringSoonDur)
 	}
+	if c.Pool.Ewma.Enabled {
+		t.Error("pool.ewma.enabled 默认应为 false（零回归）")
+	}
+	if c.Pool.Ewma.Alpha != 0.1 || c.Pool.Ewma.MinSamples != 5 {
+		t.Errorf("pool.ewma 默认值=%v/%v want 0.1/5", c.Pool.Ewma.Alpha, c.Pool.Ewma.MinSamples)
+	}
 	if c.SoftRateMaxDur.Hours() != 2 {
 		t.Errorf("soft_rate_max=%v want 2h", c.SoftRateMaxDur)
 	}
@@ -181,7 +187,8 @@ func TestPoolConfigParsedFromFile(t *testing.T) {
 			"idle_weight_per_hour":0.7,
 			"idle_weight_max":8.0,
 			"prefer_expiring":false,
-			"expiring_soon":"72h"
+			"expiring_soon":"72h",
+			"ewma":{"enabled":true,"alpha":0.2,"min_samples":10}
 		},
 		"session_sticky":{"enabled":false,"ttl":"1h","gc_interval":"2m"}
 	}`), 0o600)
@@ -203,6 +210,9 @@ func TestPoolConfigParsedFromFile(t *testing.T) {
 	}
 	if c.Pool.PreferExpiring || c.ExpiringSoonDur != 72*time.Hour {
 		t.Errorf("expiring override: enabled=%v window=%v", c.Pool.PreferExpiring, c.ExpiringSoonDur)
+	}
+	if !c.Pool.Ewma.Enabled || c.Pool.Ewma.Alpha != 0.2 || c.Pool.Ewma.MinSamples != 10 {
+		t.Errorf("pool.ewma 覆盖=%+v want enabled/0.2/10", c.Pool.Ewma)
 	}
 	if c.SessionSticky.Enabled {
 		t.Error("session_sticky.enabled want false from file")
@@ -251,6 +261,27 @@ func TestNegativeExpiringSoonClampsToDisabled(t *testing.T) {
 	}
 	if c.ExpiringSoonDur != 0 || c.Pool.ExpiringSoon != "0" {
 		t.Fatalf("negative window=%v/%q want 0/0", c.ExpiringSoonDur, c.Pool.ExpiringSoon)
+	}
+}
+
+// TestPoolEwmaNormalize pool.ewma 归一（ADR-005 D-502）：alpha<=0 回落默认、>1 报错、
+// min_samples<=0 回落默认。归一失效 → 非法配置悄悄生效 → 本测试 FAIL。
+func TestPoolEwmaNormalize(t *testing.T) {
+	dir := t.TempDir()
+	fp := filepath.Join(dir, "c.json")
+
+	os.WriteFile(fp, []byte(`{"pool":{"ewma":{"enabled":true,"alpha":0,"min_samples":0}}}`), 0o600)
+	c, err := Load(fp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !c.Pool.Ewma.Enabled || c.Pool.Ewma.Alpha != 0.1 || c.Pool.Ewma.MinSamples != 5 {
+		t.Fatalf("alpha=0/min=0 应回落默认: %+v", c.Pool.Ewma)
+	}
+
+	os.WriteFile(fp, []byte(`{"pool":{"ewma":{"alpha":1.5}}}`), 0o600)
+	if _, err := Load(fp); err == nil {
+		t.Fatal("alpha>1 应报错")
 	}
 }
 

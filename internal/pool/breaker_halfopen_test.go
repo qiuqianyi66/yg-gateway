@@ -61,7 +61,7 @@ func TestBreakerHalfOpenAllowsAfterGap(t *testing.T) {
 	}
 	// 把上次试探时刻拨到 gap 之前 → 本轮的限速判定应放行。
 	p.mu.Lock()
-	e.breakerProbeAt = time.Now().Add(-2 * time.Minute)
+	e.setProbeAt(time.Now().Add(-2 * time.Minute))
 	p.mu.Unlock()
 
 	if got := p.PickExcluding(nil); got == nil || got.UID != "u1" {
@@ -83,7 +83,7 @@ func TestBreakerSuccessRestoresFully(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		p.mu.Lock()
 		if e := p.byUID["u1"]; e != nil {
-			e.lastUsed = time.Time{} // 清掉防撞号窗口，专测 half-open 是否还在限速
+			e.clearLastUsed() // 清掉防撞号窗口，专测 half-open 是否还在限速
 		}
 		p.mu.Unlock()
 		if got := p.PickExcluding(nil); got == nil || got.UID != "u1" {
@@ -103,7 +103,7 @@ func TestBreakerHalfOpenDisabledRegression(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		p.mu.Lock()
 		if e := p.byUID["u1"]; e != nil {
-			e.lastUsed = time.Time{} // 只测 half-open 维度，排除防撞号干扰
+			e.clearLastUsed() // 只测 half-open 维度，排除防撞号干扰
 		}
 		p.mu.Unlock()
 		if got := p.PickExcluding(nil); got == nil || got.UID != "u1" {
@@ -121,7 +121,7 @@ func TestBreakerHalfOpenSkipsNeverBroken(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		p.mu.Lock()
 		if e := p.byUID["u1"]; e != nil {
-			e.lastUsed = time.Time{}
+			e.clearLastUsed()
 		}
 		p.mu.Unlock()
 		if got := p.PickExcluding(nil); got == nil || got.UID != "u1" {
@@ -137,7 +137,7 @@ func TestBreakerProbeAtSetOnSelection(t *testing.T) {
 		t.Fatal("首次到期应放行试探")
 	}
 	p.mu.RLock()
-	probeAt := e.breakerProbeAt
+	probeAt := e.probeAtTime()
 	p.mu.RUnlock()
 	if probeAt.IsZero() {
 		t.Fatal("试探被放行后必须记录 breakerProbeAt（否则限速失效）")
@@ -153,7 +153,7 @@ func TestBreakerProbeAtClearedOnSuccess(t *testing.T) {
 	p.NoteSuccess("u1")
 	p.mu.RLock()
 	defer p.mu.RUnlock()
-	if !e.breakerProbeAt.IsZero() {
+	if !e.probeAtTime().IsZero() {
 		t.Error("NoteSuccess 应清 breakerProbeAt（恢复后不再限速）")
 	}
 }
