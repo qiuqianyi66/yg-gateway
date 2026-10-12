@@ -22,12 +22,12 @@
 - 开源仓库地址：`https://github.com/qiuqianyi66/yg-gateway`（公开）
 - 当前两边 HEAD 都已提交干净，工作区无未提交改动。
 
-**⚠️ 运行实例现状（2026-10-12 实测）**：
+**⚠️ 运行实例现状（2026-10-12 深夜实测）**：
 - **两个实例都在跑**：`D:\yg-gateway\yg-gateway.exe`（**7863，生产**，4 号健康、养号调度全开）
   与 `D:\yg-gateway-eval\yg-gateway.exe`（**7864，eval/验证**，上轮 ADR-005 真机验证用）。
 - 两个实例共用 `auth_dir: D:/yg-gateway/auths`；**config 各自独立**，改一边不会同步到另一边。
-- DSH（D:\yg-gateway）代码已整目录同步自开源侧 HEAD（含 ADR-001~005 全部成果），
-  本地提交 `f22a9d7`；私有运行文件（config.json/persona.md/auths/data）保留未动。
+- DSH（D:\yg-gateway）已部署本轮前端打磨版（`yg-gateway.exe.pre-playground.bak` 为替换前备份），
+  私有运行文件（config.json/persona.md/auths/data）保留未动。
 
 ## 三、构建与测试（关键环境）
 
@@ -132,7 +132,7 @@ if ($start.HasExited) { "进程退出 码=" + $start.ExitCode } else { "PID: " +
   + EWMA 成功率/延迟回灌（默认关零回归，热生效）
 - ✅ 全仓 gofmt 归零；代码规范速查清单（`.harness/rules/CODE-STANDARDS-CHECKLIST.md`）
 
-**已应用的运行配置**（D:\yg-gateway\config.json，注意：该实例当前未运行，见 §二）：
+**已应用的运行配置**（D:\yg-gateway\config.json，**当前活实例**，7863 端口）：
 - `pool.global_max_in_flight = 18`（4 账号 × per-account 4，留余量）
 - `pool.breaker_probe_gap` 空 = 默认 30s
 - `session_sticky.derive = false`（关掉内容派生，修「只用一个号」）
@@ -144,10 +144,10 @@ if ($start.HasExited) { "进程退出 码=" + $start.ExitCode } else { "PID: " +
 
 **下一轮候选**：
 1. 粘性路径的成本分层（ADR-004 §五 方案 D 被弃：与缓存复用冲突，需重新设计）
-2. 前端剩余：表头排序、请求详情抽屉、通知中心、命令面板、批量选择、虚拟滚动
-3. 竞品路线图：OpenRouter 费率折算 / 增量用量落库 / 客户端生态 / Anthropic 协议
-4. 可选打磨：EWMA 参数调优观测（/status 已透出信号）、pick CAS-claim（当前由
+2. 竞品路线图：OpenRouter 费率折算 / 增量用量落库 / 客户端生态深化 / Anthropic 协议（已落地基础版）
+3. 可选打磨：EWMA 参数调优观测（/status 已透出信号）、pick CAS-claim（当前由
    Acquire+tried 兜底，仅同 tick 并发场景才需考虑）
+4. ~~虚拟滚动~~（已被请求记录 50 条/页分页取代，不再需要）
 
 **⚠️ 环境坑（已踩，务必注意）**：
 - **写 `D:\yg-gateway\config.json` 不要用 PowerShell `Set-Content -Encoding UTF8`**
@@ -174,15 +174,39 @@ if ($start.HasExited) { "进程退出 码=" + $start.ExitCode } else { "PID: " +
 
 **测试调整**：账号表格改卡片网格后，`TestAppJSSemanticLandmarks` 的 th scope 阈值从 20 降到 12（设计升级，不再用 table）。
 
-**当前 HEAD**：`e9a044b`（已 push GitHub）
+**当前 HEAD**：`96be554`（已 push GitHub）
 
 **下一轮候选**：
 1. 粘性路径成本分层（ADR-004 遗留，需折中设计）
-2. 虚拟滚动（请求记录 >1000 条时性能优化）
-3. 竞品路线图：增量用量落库 / OpenRouter 费率折算深化
-4. EWMA 参数调优（/status 已透出信号）
-  更稳：走面板 `POST /panel/api/config`（服务端自己落盘，格式天然正确）。
-- **火绒会删新建的 exe**：构建 + 复制 + 启动必须放同一条命令；或加白名单（详见 §三）。
+2. 竞品路线图：增量用量落库 / OpenRouter 费率折算深化 / 客户端生态
+3. EWMA 参数调优（/status 已透出信号）
+
+## 六之二、本轮前端打磨（2026-10-12 深夜，第二波）
+
+**起因**：用户要求"把前端好好去做"，一次性做完剩余前端改进；按偏好先调研竞品前端
+（new-api/ARP 有内置在线测试，YG 独缺）再用横纵分析定方向。
+
+**改了什么**：
+1. **API 调试台（Playground）**：顶栏终端按钮 + 弹窗，直连本机 `/v1/chat/completions`
+   （CSP `connect-src 'self'` 放行同源；鉴权头复用面板 Bearer key，与客户端同口径）。
+   模型下拉（/panel/api/models）+ temperature/max_tokens + 流式开关；SSE 行缓冲解析
+   逐 delta 渲染 + `[DONE]` 收尾；AbortController 停止；耗时/用量统计；错误信封就地显示；
+   已纳入统一 Esc/遮罩关闭体系（VEIL_CLOSERS）。
+2. **修复命令面板真 bug**：5 条跳转命令引用**从未定义的 `switchView`**，点击必抛
+   ReferenceError。改走 `cmdGo`（带 cfgDirty 守卫 + hash 同步）；命令从 9 条扩充到
+   18 条（8 视图全跳转 + 添加账号/调试台/扫描待办/查询券码/导出用量/导出积分等）。
+3. **请求记录键盘可达**：行 `tabindex=0` + `aria-expanded`，Enter/Space 展开详情；
+   仅用户主动展开才 `scrollIntoView`（轮询刷新路径不滚动，不打断阅读）。
+4. **响应式修复**：`.acc-grid` 改 `minmax(min(340px,100%),1fr)`，消除窄屏卡片横向溢出。
+5. **骨架数量对齐**：usStats 6→4、usCreditStats 4→5（与实际渲染一致，去掉闪跳）。
+6. **通知中心「全部已读」**显式按钮（与打开面板自动清读同一操作）。
+
+**测试**：新增 6 项源码断言测试（Playground 完整链路 / 命令面板防回归 / 键盘可达 /
+骨架数量 / 全部已读 / 响应式），20 包全绿；`node --check` 通过。
+
+**验证（真机）**：7863 已热替换（备份 `yg-gateway.exe.pre-playground.bak`）；
+healthz 200 + 4/4 健康；overview/models 带鉴权 200；`/v1/chat/completions`
+非流式 200 + 流式 SSE 全链路（delta 逐块 → usage → `[DONE]`）与前端解析逻辑一致。
 
 ## 六、关键架构事实（新对话必知）
 
