@@ -87,6 +87,8 @@
     "breaker_threshold": 3,
     "breaker_cooldown": "30m",
     "breaker_cooldown_max": "6h",
+    "breaker_probe_gap": "30s",
+    "global_max_in_flight": 0,
     "degrade_threshold": 5,
     "degrade_cooldown": "10m",
     "degrade_cooldown_max": "2h",

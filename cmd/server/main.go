@@ -21,6 +21,7 @@ import (
 	"yg-gateway/internal/auth"
 	"yg-gateway/internal/httpauth"
 	"yg-gateway/internal/livecfg"
+	"yg-gateway/internal/metrics"
 	"yg-gateway/internal/panel"
 	"yg-gateway/internal/pool"
 	"yg-gateway/internal/redisstore"
@@ -108,6 +109,8 @@ func main() {
 	p.SetDegrade(cfg.Pool.DegradeThreshold, cfg.DegradeCooldownDur, cfg.DegradeCooldownMaxD)
 	p.SetSoftRateMax(cfg.SoftRateMaxDur)                 // 软冷却指数退避封顶（soft_rate_max，默认 2h）
 	p.SetCostExploreInterval(cfg.CostExploreIntervalDur) // costTier 探索窗口（issue #136，默认 30m；0 关停）
+	p.SetBreakerProbeGap(cfg.BreakerProbeGapDur)         // 熔断 half-open 试探间隔（ADR-003 D-400，默认 30s；0 关闭）
+	p.SetGlobalMaxInFlight(cfg.Pool.GlobalMaxInFlight)   // 全局在途上限（ADR-003 D-401，默认 0 = 不限）
 	p.SetCreditFloor(cfg.Pool.CreditFloor)               // 积分保底（默认 0 = 关闭）
 	p.SetWeights(cfg.Pool.IdleWeightPerHour, cfg.Pool.IdleWeightMax)
 	p.SetPreferExpiring(cfg.Pool.PreferExpiring)
@@ -249,6 +252,10 @@ func main() {
 	defer rec.Stop()
 	log.Printf("[usage] 逐请求用量记录已启用: %s (%s)", usagePath, rec.Describe())
 
+	// 延迟分位数观测（ADR-003 D-403）：自实现固定分桶，零新依赖。
+	// 进程级单例（无需落盘，重启归零——分位数是近期健康度而非历史账本）。
+	latencyReg := metrics.NewRegistry()
+
 	// 请求指标始终启用；JSONL 归档只写脱敏元数据，写盘失败不影响聊天请求。
 	requestLog := reqlog.New(reqlog.Config{
 		Dir:           stateSibling(cfg.StateFile, "request-logs"),
@@ -305,6 +312,7 @@ func main() {
 		Panel:        pn,
 		Live:         live,
 		Usage:        rec,
+		Latency:      latencyReg,
 		RequestLog:   requestLog,
 		PromptMode:   cfg.Prompt.Mode,
 		PromptText:   cfg.PromptText,
@@ -504,6 +512,8 @@ func saveConfig(raw []byte, path string, live *livecfg.Holder, p *pool.Pool, up 
 	p.SetDegrade(newCfg.Pool.DegradeThreshold, newCfg.DegradeCooldownDur, newCfg.DegradeCooldownMaxD)
 	p.SetSoftRateMax(newCfg.SoftRateMaxDur)
 	p.SetCostExploreInterval(newCfg.CostExploreIntervalDur) // costTier 探索窗口热生效（0 关停）
+	p.SetBreakerProbeGap(newCfg.BreakerProbeGapDur)         // half-open 试探间隔热生效（ADR-003 D-400）
+	p.SetGlobalMaxInFlight(newCfg.Pool.GlobalMaxInFlight)   // 全局在途上限热生效（ADR-003 D-401）
 	p.SetCreditFloor(newCfg.Pool.CreditFloor)               // 积分保底热生效（0 = 关闭）
 	p.SetWeights(newCfg.Pool.IdleWeightPerHour, newCfg.Pool.IdleWeightMax)
 	p.SetPreferExpiring(newCfg.Pool.PreferExpiring)

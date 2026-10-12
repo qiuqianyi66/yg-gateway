@@ -218,6 +218,16 @@ type entry struct {
 	breakerUntil time.Time // 熔断截止（指数退避）
 	fails        int       // 连续失败计数（熔断用，唯一权威）
 	retryCount   int       // 已熔断次数（指数退避的指数）
+	// breakerProbeAt 最近一次 half-open 试探时刻（ADR-003 D-400）。
+	// 熔断到期后不再一次性全量放回，而是每 breakerProbeGap 至多 1 次试探；
+	// 本字段记录上次试探，供限速判定。运行态，不持久化（重启后首次到期即试探，
+	// 语义安全：最坏多探一次）。
+	breakerProbeAt time.Time
+	// lastPrune 上次清理模型级台账（modelCost / modelCooldowns）的时刻
+	// （ADR-003 D-402）。pick 的写锁内每轮对全池每个 entry 扫这两个 map，
+	// 实测占 pick 耗时 ~85%；改为按 pruneInterval 时间节流后，绝大多数 pick
+	// 直接跳过扫描。运行态，不持久化。
+	lastPrune time.Time
 	// softStreak 连续软冷却次数（CoolSoft），独立于熔断器 fails 的**冷却域**计数器：
 	// fails 会被熔断触发清零、且被 hard 冷却与 NoteError 污染，无法表达"连续软限流"。
 	// 重置点只有两处（都是账号被证明恢复的时刻）：NoteSuccess、reviveCoolingLocked。
@@ -342,25 +352,35 @@ func (e *entry) healthyForModel(now time.Time, reqModel string) bool {
 	return e.healthy(now)
 }
 
-// pruneExpiredModelCosts 删除 modelCost 中已过期的条目（惰性清理，与
-// pruneExpiredModelCooldowns 同形同调用点）。
+// pruneInterval 模型级台账的时间节流间隔（ADR-003 D-402）。
 //
-// 为什么必须有它：modelCost 此前只在**读**（modelCostOf）、**落盘**（persist）、
+// 实测（pick_prune_bench_test.go，50 账号各 10 条台账）：每轮 pick 扫这两个 map
+// 占 pick 耗时的 **~85%**（16.6µs vs 2.4µs），且全部发生在 pick 的写锁内——
+// 而选号是每请求必经、写锁是全池唯一串行点。
+//
+// 过期条目在**读路径天然被跳过**（modelCostOf / status 都判有效期），晚删一轮对
+// 正确性零影响，只是内存多占一会儿。故按时间节流：每 entry 每 interval 至多真扫一次。
+// 选 10s：被清理对象的时间尺度是小时级（modelCostTTL）/ 分钟级（冷却 Until），
+// 10s 的删除延迟相对可忽略。
+const pruneInterval = 10 * time.Second
+
+// pruneExpiredModelCosts 删除 modelCost 中已过期的条目（惰性清理，时间节流）。
+//
+// 为什么必须有它：modelCost 只在**读**（modelCostOf）、**落盘**（persist）、
 // **恢复**（persist）、**status**（state.go）四处做"过期过滤"，内存里的条目本身
-// 从不回收——即「map 只增不减」。而 entry.modelCost 的注释明确声称
-// 「落盘/恢复按 modelCostTTL 惰性过滤，陈旧观测不复活（同 modelCooldowns 口径）」，
-// 模型级冷却表正是靠 pruneExpiredModelCooldowns 在 pick 写锁路径做真正删除的
-// （见 pick.go「map 不无限膨胀」）。两者口径不一致：一旦某模型的观测过期，它就会
-// 永久占据一条内存（进程重启才清），并在后续每一轮 pick 的遍历、每次 status 遍历里
-// 被反复判定为过期（只是没人删）。
+// 从不回收——即「map 只增不减」。本函数补上真正的删除（与
+// pruneExpiredModelCooldowns 同调用点：pick 写锁路径）。
 //
-// 观测只在成功请求路径写入（NoteModelCost），且 model 不与目录校验，故增长受
-// "历史服务过的模型名"限制——不是无界泄漏，但同样是"只增不减"的无回收表。
+// 快路径（任一即返回）：空 map｜距上次清理不足 pruneInterval。
 // 调用方必须已持有 p.mu 写锁。
 func (e *entry) pruneExpiredModelCosts(now time.Time) {
 	if len(e.modelCost) == 0 {
-		return
+		return // 空 map：绝大多数账号的常态，零成本
 	}
+	if !e.lastPrune.IsZero() && now.Sub(e.lastPrune) < pruneInterval {
+		return // 时间节流：同一 entry 每 interval 至多真扫一次
+	}
+	e.lastPrune = now
 	for m, mc := range e.modelCost {
 		if mc.LastSeen.IsZero() || now.Sub(mc.LastSeen) > modelCostTTL {
 			delete(e.modelCost, m)
@@ -368,12 +388,14 @@ func (e *entry) pruneExpiredModelCosts(now time.Time) {
 	}
 }
 
-// pruneExpiredModelCooldowns 删除 modelCooldowns 中已过期的条目（惰性清理）。
-// pick 写锁路径与 revive 调用，防止 map 无限膨胀；status 只读遍历天然跳过过期项，
-// 无需清理。调用方必须已持有 p.mu 写锁。
+// pruneExpiredModelCooldowns 删除 modelCooldowns 中已过期的条目（惰性清理，时间节流）。
+// pick 写锁路径与 revive 调用，防止 map 无限膨胀；status 只读遍历天然跳过过期项。
+// 与 pruneExpiredModelCosts 共用 lastPrune：后者先被调用并做节流判定，
+// 本函数只判空 map（避免同一轮 pick 判两次）。
+// 调用方必须已持有 p.mu 写锁。
 func (e *entry) pruneExpiredModelCooldowns(now time.Time) {
 	if len(e.modelCooldowns) == 0 {
-		return
+		return // 空 map：多数账号从无 6004，零成本
 	}
 	for m, mc := range e.modelCooldowns {
 		if mc.Until.IsZero() || !now.Before(mc.Until) {

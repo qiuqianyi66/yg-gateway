@@ -3,6 +3,7 @@
 package pool
 
 import (
+	"log"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -68,6 +69,16 @@ type Pool struct {
 	// randInt64N 仅供测试注入确定性随机源；nil 时用 math/rand/v2 全局源。
 	// 生产代码不应设置此字段。
 	randInt64N func(n int64) int64
+	// breakerProbeGap 熔断到期后的 half-open 试探间隔（ADR-003 D-400）：
+	// 熔断号到期后不再一次性全量放回，而是每 gap 至多放行 1 次试探；成功即全量恢复。
+	// 0 = 关闭 half-open（退化为既有的「到期即全量」行为，零回归）。
+	breakerProbeGap time.Duration
+	// globalMaxInFlight 全局在途上限（ADR-003 D-401）：所有账号在途请求总数上限，
+	// 超限立即 429 不排队。0 = 不限（默认，零回归）。经 globalInFlight 原子计数判定。
+	globalMaxInFlight int
+	// globalInFlight 全局在途原子计数（ADR-003 D-401）：Acquire 成功 +1、Release -1，
+	// 严格配对。与每账号 inFlight 并存（后者是 per-account 上限，本字段是全局上限）。
+	globalInFlight atomic.Int64
 	// persistFails 本地 state.json 连续落盘失败计数（仅 saveLocked 在持锁下读写，无需 atomic）。
 	// 用于落盘失败的日志节流：首败/每 N 次提醒/恢复各打一条，避免磁盘满时刷屏。
 	persistFails int
@@ -133,6 +144,67 @@ func (p *Pool) SetBreaker(threshold int, cooldown, cooldownMax time.Duration) {
 	}
 	if cooldownMax > 0 {
 		p.breakerCooldownMax = cooldownMax
+	}
+}
+
+// SetBreakerProbeGap 注入熔断 half-open 试探间隔（ADR-003 D-400）。
+// 0（或负）= 关闭 half-open，退化为「到期即全量放回」的既有行为。
+func (p *Pool) SetBreakerProbeGap(d time.Duration) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if d < 0 {
+		d = 0
+	}
+	p.breakerProbeGap = d
+}
+
+// SetGlobalMaxInFlight 注入全局在途上限（ADR-003 D-401）。0（或负）= 不限。
+func (p *Pool) SetGlobalMaxInFlight(n int) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if n < 0 {
+		n = 0
+	}
+	p.globalMaxInFlight = n
+}
+
+// GlobalInFlight 返回当前全局在途请求数（ADR-003 D-401，/status 与准入判定用）。
+func (p *Pool) GlobalInFlight() int64 {
+	return p.globalInFlight.Load()
+}
+
+// AcquireGlobal 全局准入判定（ADR-003 D-401）：未配置上限恒放行；否则在
+// 「当前在途 < 上限」时占用一个名额并返回 true。占用成功后**必须**配对调用
+// ReleaseGlobal（handler 用 defer 保证）。
+//
+// 为什么用 CAS 循环而不是先读后写：并发下「读-判-写」会超发（多个 goroutine
+// 同时读到 n-1 都以为还有名额）。CAS 保证不超发，且无需锁。
+func (p *Pool) AcquireGlobal() bool {
+	limit := p.globalMaxInFlight
+	if limit <= 0 {
+		return true // 未配置上限：恒放行（零回归）
+	}
+	for {
+		cur := p.globalInFlight.Load()
+		if cur >= int64(limit) {
+			return false
+		}
+		if p.globalInFlight.CompareAndSwap(cur, cur+1) {
+			return true
+		}
+	}
+}
+
+// ReleaseGlobal 释放一个全局在途名额（与 AcquireGlobal 严格配对）。
+// 未配置上限时是空操作（因为 AcquireGlobal 没有真的占名额）。
+func (p *Pool) ReleaseGlobal() {
+	if p.globalMaxInFlight <= 0 {
+		return
+	}
+	// 防御性下溢保护：正常配对下不会负；异常路径（重复 Release）只记不崩。
+	if v := p.globalInFlight.Add(-1); v < 0 {
+		p.globalInFlight.Store(0)
+		log.Printf("WARN: [pool] globalInFlight 下溢（Release 不配对？）已钳 0")
 	}
 }
 
