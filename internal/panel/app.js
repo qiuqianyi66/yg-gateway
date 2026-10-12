@@ -50,12 +50,29 @@ async function api(path, opts = {}) {
   if (!r.ok) throw new Error(d.error || ('HTTP ' + r.status));
   return d;
 }
+/* toast 操作结果提示。三条改进（深度优化轮 前端 P1）：
+   ① 堆叠上限 5 条：连续批量操作此前会把右下角叠满、且无手动关闭；
+   ② 错误类停留 8s（成功 3.6s）：报错还没读完就消失是常见抱怨；
+   ③ 加手动关闭 ×：长文案/想先复制时不用等自动消失。
+   #toasts 已加 aria-live="polite"（见 index.html），读屏能播报结果。 */
 function toast(msg, cls) {
+  const host = $('toasts');
   const el = document.createElement('div');
   el.className = 'tst ' + (cls || '');
-  el.textContent = msg;
-  $('toasts').appendChild(el);
-  setTimeout(() => el.remove(), 3600);
+  const txt = document.createElement('span');
+  txt.textContent = msg;
+  el.appendChild(txt);
+  const x = document.createElement('button');
+  x.className = 'tst-x';
+  x.type = 'button';
+  x.setAttribute('aria-label', '关闭提示');
+  x.textContent = '×';
+  x.onclick = () => el.remove();
+  el.appendChild(x);
+  host.appendChild(el);
+  // 超上限先挤掉最旧的（FIFO），避免叠满右下角。
+  while (host.children.length > 5) host.firstChild.remove();
+  setTimeout(() => el.remove(), cls === 'err' ? 8000 : 3600);
 }
 // esc 文本/属性双安全转义。不能只用 div.innerHTML（它转义 <>& 但不转义引号），
 // 否则字符串拼进 HTML 属性（如 title="uid: ..."）时引号可闭合属性并注入事件处理器。
@@ -342,11 +359,41 @@ let expFetching = false;                       // 到期卡片在途标记（防
 const EXP_FRESH_MS = 2 * 60 * 1000;            // 缓存新鲜窗口：2 分钟内复用
 
 const TITLES = { accounts: '账号池', usage: '用量', packages: '积分构成', taskscenter: '任务中心', models: '模型与档位', keys: 'API Key 管理', config: '配置', logs: '运行日志' };
-function go(v) {
+
+/* cfgDirty 配置页未保存标记。
+   为什么需要：go() 进配置页会无条件 loadConfig() 重拉并整体回填表单。用户改了
+   若干字段后点别的导航，再点回来，改动被静默覆盖（savebar 的「放弃修改」是显式
+   入口，导航却是隐式入口却同效）——这是"配置页改了半天全没了"的根因。
+   置位：表单任意 input/change（见 CFG_MAP 绑定处）；清位：loadConfig 回填后、
+   保存成功后。 */
+let cfgDirty = false;
+function markCfgDirty() {
+  if (cfgDirty) return;
+  cfgDirty = true;
+  const n = $('cfgNote');
+  if (n) { n.textContent = '● 有未保存的改动'; n.classList.add('cfg-dirty'); }
+}
+function clearCfgDirty() {
+  cfgDirty = false;
+  const n = $('cfgNote');
+  if (n) { n.textContent = ''; n.classList.remove('cfg-dirty'); }
+}
+
+/* go 切换视图。skipGuard=true 用于初始深链（无用户改动可丢）。
+   返回 true 表示切换完成、false 表示被守卫拦下（用户在配置页有未保存改动）。 */
+function go(v, skipGuard) {
+  if (!skipGuard && view === 'config' && v !== 'config' && cfgDirty) {
+    if (!confirm('配置页有未保存的改动，切换视图会丢弃它们。确认离开？')) return false;
+    clearCfgDirty();
+  }
   view = v;
   document.querySelectorAll('.view').forEach(s => s.hidden = s.id !== 'view-' + v);
   document.querySelectorAll('.nav a').forEach(a => a.classList.toggle('on', a.dataset.view === v));
   $('ttl').textContent = TITLES[v];
+  // 切视图回顶：从很长的页面（积分构成/模型表）切到别的视图，若沿用旧滚动位置
+  // 会停在页面中部，看起来像"页面坏了"。初始深链由调用方传 skipGuard，此处只
+  // 在用户主动切换时回顶。
+  if (!skipGuard) window.scrollTo({ top: 0 });
   if (v === 'models' && !$('mdBody').children.length) loadModels();
   if (v === 'keys') loadKeys();
   if (v === 'config') loadConfig();
@@ -357,8 +404,25 @@ function go(v) {
   // 每轮刷新）。不再「打开账号池就打上游」——逐账号实时查在账号多时会卡死面板。
   // 完整逐包明细由卡片上的「检查」按钮显式触发（loadPackages/loadExpiry）。
   if (v === 'taskscenter') reattachQueueView();
+  return true;
 }
-document.querySelectorAll('.nav a').forEach(a => a.onclick = e => { e.preventDefault(); go(a.dataset.view); history.replaceState(null, '', '#' + a.dataset.view); });
+
+/* 导航点击：用 pushState 写 hash，让浏览器前进/后退真正可用。
+   此前只 replaceState，历史里没有记录 → 按返回键直接离开面板（用户报"回不去"）。 */
+document.querySelectorAll('.nav a').forEach(a => a.onclick = e => {
+  e.preventDefault();
+  if (go(a.dataset.view) === false) return; // 被配置页守卫拦下：不改 hash
+  history.pushState(null, '', '#' + a.dataset.view);
+});
+/* hashchange：浏览器前进/后退、手改地址栏 hash 都走这里。
+   与导航点击去重：点击已 pushState 过，hashchange 只在 hash 真的变化时触发，
+   且此时 view 已等于目标 → 直接 return，不会重复 go()。 */
+addEventListener('hashchange', () => {
+  const h = (location.hash || '#accounts').slice(1);
+  if (!(h in TITLES) || h === view) return;
+  go(h); // 注意：此处改动不应再写 hash（已在 URL 里）
+});
+
 /* 首次进入延到本轮脚本求值之后再 go()。
    原因：go() 会同步触发视图的数据加载（loadUsage/loadLogs/loadPackages…），而这些
    函数读到的模块级 let/const（usageRateWarmAt、PK_* 等）在文件后半段才初始化——
@@ -367,11 +431,45 @@ document.querySelectorAll('.nav a').forEach(a => a.onclick = e => { e.preventDef
    延迟 0ms 让整份脚本先求值完，是修这一类问题最省事也最不容易再犯的办法。 */
 setTimeout(() => {
   const hash = (location.hash || '#accounts').slice(1);
-  go(hash in TITLES ? hash : 'accounts');
+  go(hash in TITLES ? hash : 'accounts', true); // skipGuard：初始进入无改动可丢，且不回顶
 }, 0);
 
 /* ── 账号池 ───────────────────────────────────────────────────────── */
+/* renderAccounts 签名短路：内容没变就不重建 DOM。
+ *
+ * 为什么：面板每 5s 轮询一次 overview（refreshVisible），此前无条件走
+ * tb.innerHTML = ... 全量重绘。后果——
+ *   ① .acc tbody tr:hover 的悬停高亮每 5 秒被抹掉一次；
+ *   ② 用户正在表格里选中 uid 想复制时，选区随重绘消失；
+ *   ③ 行 title 气泡（成本台账 tip）悬停到一半被重建，提示闪断；
+ *   ④ 账号多时每 5 秒重建几十行 DOM，肉眼可见抖动。
+ * 签名比对让"数据没变"的绝大多数 tick 直接短路（零 DOM 操作）。
+ * 另加一条：用户正在表内交互（有焦点）时本轮直接跳过，避免打断输入/选择。
+ * 注意：签名必须覆盖**所有会影响渲染的字段**，否则该更新的不更新（比抖动更糟）。 */
+let accRenderSig = '';
+function accountsSig(list) {
+  return (list || []).map(s => [
+    s.uid, s.nickname, s.realm, s.enterprise ? 1 : 0,
+    s.disabled ? 1 : 0, s.paused ? 1 : 0, s.checkin_done ? 1 : 0,
+    s.credits, s.credits_total, s.success_count, s.err_total, s.in_flight,
+    Math.round(s.cool_remaining_sec || 0),
+    s.breaker_until || '', s.degrade_until || '', s.cool_kind || '',
+    s.reason || '', s.last_success || '',
+    (s.rate_limited_models || []).map(r => r.model + ':' + (r.kind || '') + ':' + (r.reset_at || '')).join(','),
+    JSON.stringify(s.token_usage || {}),
+    (s.model_costs || []).map(c => c.model + ':' + c.cost_per_1k).join(','),
+  ].join('\u0001')).join('\u0002');
+}
 function renderAccounts(list) {
+  const tb = $('accBody');
+  // 用户正在表内交互（聚焦/选中）时跳过本轮：重建会打断选择与输入。
+  if (document.activeElement && tb.contains(document.activeElement)) return;
+  const sig = accountsSig(list);
+  if (sig === accRenderSig) return; // 数据无变化：不碰 DOM
+  accRenderSig = sig;
+  renderAccountsUnsafe(list);
+}
+function renderAccountsUnsafe(list) {
   const tb = $('accBody');
   if (!list.length) {
     tb.innerHTML = '<tr><td colspan="9"><div class="empty"><div class="big">账号池是空的</div>点击右上角「添加账号」，用浏览器登录一个 WorkBuddy 账号</div></td></tr>';
@@ -459,7 +557,17 @@ function renderAccounts(list) {
 
 // renderModelLocks 模型锁池：哪些模型不能用、锁了几个号、还要锁多久。
 // 后端 model_locks 已按「整池不可用 → 没号可用 → 部分限流」排好序，这里只做展示。
+// 同样加签名短路：该表多数时候为空或不变，无需每 5 秒重建（与 renderAccounts 同理）。
+let mlRenderSig = '';
 function renderModelLocks(rows) {
+  const tb = $('mlBody');
+  if (!tb) return;
+  const sig = JSON.stringify(rows || []);
+  if (sig === mlRenderSig) return; // 无变化：不碰 DOM
+  mlRenderSig = sig;
+  renderModelLocksUnsafe(rows);
+}
+function renderModelLocksUnsafe(rows) {
   const tb = $('mlBody');
   if (!tb) return;
   const note = $('mlNote');
@@ -1336,15 +1444,46 @@ $('kfRealmPills').querySelectorAll('.realm-pill').forEach(p => {
   };
 });
 
-// 点击遮罩关闭弹窗
-$('keyEditVeil').onclick = (e) => { if (e.target === $('keyEditVeil')) closeKeyDialog(); };
-$('keyShowVeil').onclick = (e) => { if (e.target === $('keyShowVeil')) hideVeil('keyShowVeil'); };
+/* ── 弹窗统一关闭（Esc / 点击遮罩）────────────────────────────────────
+   此前只有 Key 的两个弹窗有 Esc 与遮罩关闭：addVeil（添加账号）、taskVeil（积分
+   任务，940px 大弹窗）、vcVeil（券码）、keyVeil（密钥门）都没有出口——键盘用户
+   只能摸鼠标找「关闭」。
+   这里统一登记：每个 veil 一个关闭回调；Esc 从后往前关当前打开的那个（与视觉层级
+   一致）；点遮罩空白处关闭（data-lock 的弹窗禁止，如密钥门必须输入密钥）。 */
+const VEIL_CLOSERS = {
+  // 用直接 DOM 操作 + 必要的状态清理，而不是调用 closeAdd()/closeTasks()：
+  // 后者声明在本文件更下方（函数声明虽会 hoist，但这里刻意不依赖求值顺序，
+  // 也让「关弹窗」这件事的语义在本地一目了然）。
+  addVeil: () => { stopPoll(); loginState = null; $('addVeil').classList.remove('on'); },
+  taskVeil: () => { $('taskVeil').classList.remove('on'); taskUID = null; },
+  vcVeil: () => $('vcVeil').classList.remove('on'),
+  keyEditVeil: () => closeKeyDialog(),
+  keyShowVeil: () => hideVeil('keyShowVeil'),
+  keyVeil: () => $('keyVeil').classList.remove('on'), // data-lock 时由下方逻辑跳过
+};
 
-// ESC 关闭弹窗
+// 点击遮罩关闭（事件目标就是 veil 本身 = 点在遮罩空白处，不是在 .dlg 上）
+Object.entries(VEIL_CLOSERS).forEach(([id, close]) => {
+  const el = $(id);
+  if (!el) return;
+  el.onclick = (e) => {
+    if (e.target !== el) return;      // 点在弹窗内容里，不关
+    if (el.dataset.lock) return;      // data-lock="1"：必须显式操作才能关（如密钥门）
+    close();
+  };
+});
+
+// Esc 关闭：从后往前找当前打开的 veil，只关最上面那个（一次一个，符合直觉）。
 document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape') {
-    if ($('keyEditVeil').classList.contains('on')) closeKeyDialog();
-    if ($('keyShowVeil').classList.contains('on')) hideVeil('keyShowVeil');
+  if (e.key !== 'Escape') return;
+  const ids = Object.keys(VEIL_CLOSERS);
+  for (let i = ids.length - 1; i >= 0; i--) {
+    const el = $(ids[i]);
+    if (el && el.classList.contains('on')) {
+      if (el.dataset.lock) continue; // data-lock：Esc 也不关（须输入密钥）
+      VEIL_CLOSERS[ids[i]]();
+      return;
+    }
   }
 });
 
@@ -1411,7 +1550,8 @@ async function loadConfig() {
       else el.value = v == null ? '' : v;
     }
     markDurationFields(); // 回填后重置校验态（清掉残留红框；现值来自后端必然合法）
-    $('cfgNote').textContent = '';
+    // 回填即"与后端一致"→ 清掉脏标记（避免刚加载就被判为有未保存改动）。
+    clearCfgDirty();
   } catch (e) { toast('读取配置失败：' + e.message, 'err'); }
 }
 function collectConfig() {
@@ -1457,8 +1597,11 @@ function markDurationFields() {
   }
 }
 $('cfgForm').addEventListener('input', ev => {
+  markCfgDirty(); // 任何改动都置脏（供 go() 的切换守卫与 #cfgNote 提示）
   if (DURATION_FIELDS.includes(ev.target.name)) markDurationFields();
 });
+// checkbox / select 改动同样算脏（input 事件在部分浏览器对 checkbox 不触发）
+$('cfgForm').addEventListener('change', markCfgDirty);
 $('btnEye').onclick = () => {
   const el = $('cfgKey');
   const show = el.type === 'password';
@@ -1585,16 +1728,36 @@ $('importFile').onchange = async () => {
 
 /* ── 顶部动作 ─────────────────────────────────────────────────────── */
 $('btnAdd').onclick = openAdd;
+/* 顶栏「刷新」= 只刷新视图（重拉 overview + 当前视图数据），**不打上游**。
+   此前这里直接调 balance_all（对所有账号向上游查余额，是重量级操作），
+   但按钮文案是「刷新」——用户只想刷新视图时却触发了整池上游请求。
+   真实的「从上游刷新余额」已挪到账号池 header（见 btnBalanceAll），与其它批量
+   按钮同处，且带二次确认。 */
 $('btnRefresh').onclick = async () => {
   const b = $('btnRefresh');
+  b.disabled = true; b.textContent = '刷新中…';
+  try {
+    await loadOverview(true);
+    if (view === 'logs') await loadLogs();
+    else if (view === 'usage') await loadUsage();
+    else if (view === 'keys') await loadKeys();
+    else if (view === 'models') await loadModels();
+    else if (view === 'packages') await loadPackages(true);
+  } catch (e) { toast('刷新失败：' + e.message, 'err'); }
+  finally { b.disabled = false; b.textContent = '刷新'; }
+};
+
+/* 「从上游刷新余额」：独立的重量级操作（逐账号查上游），故带二次确认。 */
+$('btnBalanceAll').onclick = async () => {
+  if (!confirm('将从上游逐账号查询余额并写回积分快照。\n账号多时会持续数秒到数十秒，确认继续？')) return;
+  const b = $('btnBalanceAll');
   b.disabled = true; b.textContent = '刷新中…';
   try {
     await api('balance_all', { method: 'POST' });
     await loadOverview(true);
     toast('余额已从上游刷新', 'ok');
-  } catch (e) { toast('刷新失败：' + e.message, 'err'); await loadOverview(true); }
-  finally { b.disabled = false; b.textContent = '刷新'; }
-  if (view === 'logs') loadLogs();
+  } catch (e) { toast('刷新失败：' + e.message, 'err'); }
+  finally { b.disabled = false; b.textContent = '刷新余额'; }
 };
 
 /* ── 轮询 ─────────────────────────────────────────────────────────── */
