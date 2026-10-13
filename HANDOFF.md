@@ -429,6 +429,26 @@ Playwright 实测主路径全通：卡片按钮 → 状态 A 回看配置 → �
 1. 用户如需要：重置密钥时可选「自定义新密钥」（当前固定 genApiKey 生成）
 2. 其他用户反馈
 
+## 六之十、README 重写为主推项目门面（2026-10-13 深夜）
+
+**起因**：用户要求把 README「好好写」，作为项目主推门面。
+
+**改了什么**：
+1. **结构升级**：hero 一句话 + shields 徽章（license/go/stars）→ 真实面板截图（两张：
+   panel-accounts.png 账号池看板、panel-keys.png API Key 管理）→ mermaid 架构图 → 核心能力
+   （分组表格）→ 快速开始 → 客户端导入（OpenAI/Anthropic 协议对照表）→ 进阶配置 →
+   调度可靠性 → 安全基线 → 已加固审计 → 面板八视图 → 开发 → 路线图 → 免责声明。
+2. **截图匿名化**：账号池截图在 Playwright 里先把真实昵称替换为「演示账号 A-D」
+   （精确匹配昵称文本节点，品牌区不受影响）再落盘；截断 UID 片段（前 8+4 位 hex）仍可见，
+   无法用于登录；**积分余额数字（14931/21077）为真实值保留**——如用户在意公网泄露可后续
+   再处理或换演示数据。
+3. **不编造**：功能清单/参数/CVE 描述均沿用原 README 已验证内容；路线图取自真实候选。
+
+**验证**：截图经 Read 目检（账号池页数据加载完整、Key 页演示卡片含「接入配置」按钮）；
+README 引用文件全部存在（LICENSE/go.mod/docs/COMPETITIVE-ANALYSIS.md/lock-auths.ps1/docker-compose.yml）。
+
+**当前 HEAD**：`e009c46`（已 push GitHub）
+
 ## 六、关键架构事实（新对话必知）
 
 ### 鉴权（httpauth）
