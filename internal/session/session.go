@@ -249,8 +249,8 @@ func (r *Router) Count() int {
 
 // SessionBinding 粘性绑定快照（供面板展示）。
 type SessionBinding struct {
-	Key       string    `json:"key"`
-	UID       string    `json:"uid"`
+	Key        string    `json:"key"`
+	UID        string    `json:"uid"`
 	LastActive time.Time `json:"last_active"`
 }
 

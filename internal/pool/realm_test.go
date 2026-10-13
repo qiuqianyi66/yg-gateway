@@ -152,3 +152,80 @@ func TestPickExcludingForRealmTried(t *testing.T) {
 		t.Fatalf("picked non-cn %s", a.UID)
 	}
 }
+
+// TestPickGroupFilter：group 非空时候选集只含同组账号；空 group = 不限池（零回归）。
+// P1-B 账号池分组。
+func TestPickGroupFilter(t *testing.T) {
+	withNoPickGap(t)
+	auth.SetGlobalEnabled(true)
+	t.Cleanup(func() { auth.SetGlobalEnabled(true) })
+	p := New("")
+	// 4 个号：team-a 两个，team-b 一个，未分组一个。
+	p.Add(&auth.Auth{UID: "a1", Domain: "www.codebuddy.cn", Group: "team-a"})
+	p.Add(&auth.Auth{UID: "a2", Domain: "www.codebuddy.cn", Group: "team-a"})
+	p.Add(&auth.Auth{UID: "b1", Domain: "www.codebuddy.cn", Group: "team-b"})
+	p.Add(&auth.Auth{UID: "plain", Domain: "www.codebuddy.cn"}) // 空 group
+
+	// group=team-a → 只能选 a1/a2。
+	for i := 0; i < 50; i++ {
+		a := p.PickExcludingForRealmGroup(nil, "", "cn", "team-a")
+		if a == nil {
+			t.Fatal("team-a 组应有号，返回 nil")
+		}
+		if a.Group != "team-a" {
+			t.Fatalf("group=team-a 却选到 %s（group=%q）", a.UID, a.Group)
+		}
+	}
+	// group=team-b → 只能选 b1。
+	for i := 0; i < 20; i++ {
+		a := p.PickExcludingForRealmGroup(nil, "", "cn", "team-b")
+		if a == nil || a.UID != "b1" {
+			t.Fatalf("group=team-b 应只选 b1, got %v", a)
+		}
+	}
+	// group=空 → 所有 cn 号都能选（零回归）。
+	seen := map[string]bool{}
+	for i := 0; i < 100; i++ {
+		a := p.PickExcludingForRealmGroup(nil, "", "cn", "")
+		if a == nil {
+			t.Fatal("group 空应能选到号")
+		}
+		seen[a.UID] = true
+	}
+	for _, uid := range []string{"a1", "a2", "b1", "plain"} {
+		if !seen[uid] {
+			t.Fatalf("group 空时 %s 从未被选到（候选集不对）", uid)
+		}
+	}
+	// group=不存在的组 → 无候选，返回 nil。
+	if a := p.PickExcludingForRealmGroup(nil, "", "cn", "no-such-group"); a != nil {
+		t.Fatalf("不存在的组应返回 nil, got %s", a.UID)
+	}
+}
+
+// TestPickGroupWithRealm：realm 与 group 过滤叠加——两个谓词都要满足。
+func TestPickGroupWithRealm(t *testing.T) {
+	withNoPickGap(t)
+	auth.SetGlobalEnabled(true)
+	t.Cleanup(func() { auth.SetGlobalEnabled(true) })
+	p := New("")
+	// cn + team-a；global + team-a；cn + team-b。
+	p.Add(&auth.Auth{UID: "cn-a1", Domain: "www.codebuddy.cn", Group: "team-a"})
+	p.Add(&auth.Auth{UID: "gl-a1", Domain: "www.workbuddy.ai", Group: "team-a"})
+	p.Add(&auth.Auth{UID: "cn-b1", Domain: "www.codebuddy.cn", Group: "team-b"})
+
+	// realm=cn + group=team-a → 只能选 cn-a1。
+	for i := 0; i < 20; i++ {
+		a := p.PickExcludingForRealmGroup(nil, "", "cn", "team-a")
+		if a == nil || a.UID != "cn-a1" {
+			t.Fatalf("realm=cn+group=team-a 应只选 cn-a1, got %v", a)
+		}
+	}
+	// realm=global + group=team-a → 只能选 gl-a1。
+	for i := 0; i < 20; i++ {
+		a := p.PickExcludingForRealmGroup(nil, "", "global", "team-a")
+		if a == nil || a.UID != "gl-a1" {
+			t.Fatalf("realm=global+group=team-a 应只选 gl-a1, got %v", a)
+		}
+	}
+}

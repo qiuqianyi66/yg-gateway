@@ -1,4 +1,4 @@
-﻿package usage
+package usage
 
 import (
 	"encoding/json"
@@ -488,9 +488,9 @@ func TestUSDValuePricing(t *testing.T) {
 	base := time.Date(2026, 10, 1, 10, 0, 0, 0, time.Local)
 	// 1000 prompt + 200 completion，其中 400 为 cache hit。
 	r.Add(base, "cn", "u1", "glm-5.2", Delta{
-		PromptTokens:     1000, HasPromptTokens: true,
+		PromptTokens: 1000, HasPromptTokens: true,
 		CompletionTokens: 200, HasCompletion: true,
-		CacheHitTokens:   400, HasCacheTokens: true,
+		CacheHitTokens: 400, HasCacheTokens: true,
 	}, true)
 
 	// 无 pricing → 美元值为 0。
@@ -518,5 +518,51 @@ func TestUSDValuePricing(t *testing.T) {
 	}
 	if s.ByModel[0].USDValue != want {
 		t.Fatalf("by_model USDValue = %f, want %f", s.ByModel[0].USDValue, want)
+	}
+}
+
+// TestMonthlyTokenQuota：per-key 月累计按 KeyID 归因，未归因/KeyID 空不累计；
+// 跨重启（落盘往返）后当月累计保留。P1-A。
+func TestMonthlyTokenQuota(t *testing.T) {
+	r := New("")
+	now := time.Now()
+	// k1 两笔：100 + 50 = 150 total（带 Total 字段）。
+	r.Add(now, "cn", "u1", "m", Delta{KeyID: "k1", TotalTokens: 100, HasTotal: true}, true)
+	r.Add(now, "cn", "u1", "m", Delta{KeyID: "k1", TotalTokens: 50, HasTotal: true}, true)
+	// k2 一笔：200（无 Total，pt+ct 兜底 = 120+80=200）。
+	r.Add(now, "cn", "u1", "m", Delta{KeyID: "k2", PromptTokens: 120, HasPromptTokens: true, CompletionTokens: 80, HasCompletion: true}, true)
+	// 未归因（KeyID 空）→ 不进月累计。
+	r.Add(now, "cn", "u1", "m", Delta{TotalTokens: 999, HasTotal: true}, true)
+
+	if got := r.MonthlyUsed("k1"); got != 150 {
+		t.Fatalf("k1 月累计 = %d, want 150", got)
+	}
+	if got := r.MonthlyUsed("k2"); got != 200 {
+		t.Fatalf("k2 月累计 = %d, want 200", got)
+	}
+	if got := r.MonthlyUsed(""); got != 0 {
+		t.Fatalf("空 KeyID 查询应返回 0, got %d", got)
+	}
+	if got := r.MonthlyUsed("nonexistent"); got != 0 {
+		t.Fatalf("未出现过的 key 应返回 0, got %d", got)
+	}
+}
+
+// TestMonthlyTokenQuotaPersistence：月累计落盘后 load 恢复，跨重启不丢。
+func TestMonthlyTokenQuotaPersistence(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "usage.json")
+	r1 := New(path)
+	now := time.Now()
+	r1.Add(now, "cn", "u1", "m", Delta{KeyID: "k1", TotalTokens: 300, HasTotal: true}, true)
+	r1.Save()
+
+	// 重新 load。
+	r2 := New(path)
+	if got := r2.MonthlyUsed("k1"); got != 300 {
+		t.Fatalf("重启后 k1 月累计 = %d, want 300", got)
+	}
+	if got := r2.MonthlyUsed("k2"); got != 0 {
+		t.Fatalf("重启后未出现 key 应 0, got %d", got)
 	}
 }

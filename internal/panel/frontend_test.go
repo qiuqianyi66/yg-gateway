@@ -583,7 +583,15 @@ func TestConfigFormMatchesCFGMap(t *testing.T) {
 	if len(names) == 0 {
 		t.Fatal("未从配置表单解析出任何 name 字段")
 	}
+	// 特殊字段豁免：这些字段在表单里有控件但走单独序列化逻辑（非简单 path 映射），
+	// 不进 CFG_MAP。新增时在这里登记，注释说明为什么不走 CFG_MAP。
+	exemptFromMap := map[string]string{
+		"model_aliases": "map[string]string，需序列化成 from=to 文本行，collectConfig 单独处理",
+	}
 	for n := range names {
+		if exemptFromMap[n] != "" {
+			continue
+		}
 		if !inMap(n) {
 			t.Errorf("表单字段 %q 在 CFG_MAP 里没有条目（保存时会被静默丢弃）", n)
 		}

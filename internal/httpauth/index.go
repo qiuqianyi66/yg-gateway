@@ -16,11 +16,18 @@ const SingleKeyID = "single"
 // 明文只在 config.json 的 api_keys[].key 里，BuildIndex 时转成 Digest 摘要；
 // 这里以及后续所有运行时结构都不携带 Key 原文（ADR §三 凭证安全契约）。
 type Key struct {
-	ID     string   // 稳定身份标识（归因/统计用）
-	Name   string   // 展示名（可重复、可改）
-	Digest []byte   // sha256(key) 的 32 字节摘要
-	Models []string // 模型白名单三态：nil=不限 / []string{}=全拒 / 非空=白名单
-	Realm  string   // 版本归属 cn/global/空=不限
+	ID      string   // 稳定身份标识（归因/统计用）
+	Name    string   // 展示名（可重复、可改）
+	Digest  []byte   // sha256(key) 的 32 字节摘要
+	Models  []string // 模型白名单三态：nil=不限 / []string{}=全拒 / 非空=白名单（支持 * 后缀）
+	Realm   string   // 版本归属 cn/global/空=不限
+	RPM     int      // 该 Key 每分钟最大请求数；0 = 不限
+	// MonthlyTokenQuota 该 Key 当月 token 硬上限；0 = 不限。
+	// 已用量由 usage.Recorder 按 ID 累计（跨重启持久化）。
+	MonthlyTokenQuota int64
+	// Group 账号池分组标签（P1-B）。空 = 不限池（全部账号可选）；
+	// 非空 = 选号只从同 Group 账号里挑，实现 key 与账号组绑定隔离。
+	Group string
 }
 
 // prefixLen 摘要前缀长度（hex 字符数）。对齐 workbuddy-manager 的 12 位前缀，

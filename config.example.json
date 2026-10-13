@@ -6,10 +6,22 @@
       "id": "user-001",
       "key": "sk-multi-key-example",
       "name": "小明",
-      "models": ["deepseek-v4-flash"],
-      "realm": "cn"
+      "models": ["deepseek-v4-flash", "glm-*"],
+      "realm": "cn",
+      "rpm": 60,
+      "monthly_token_quota": 5000000,
+      "group": "team-a"
     }
   ],
+  "model_aliases": {
+    "glm": "glm-5.3-flash",
+    "ds": "deepseek-v4-flash"
+  },
+  "alerting": {
+    "webhook_url": "https://sctapi.ftqq.com/SENDKEY.send",
+    "min_credit_threshold": 100,
+    "dedup_minutes": 60
+  },
   "auth_dir": "./auths",
   "state_file": "./data/state.json",
   "server": {

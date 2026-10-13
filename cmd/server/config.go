@@ -59,6 +59,33 @@ type Config struct {
 	// json:"-" 不参与序列化；由 ParseConfigInto 在 unmarshal 前探测原始 JSON 设置。
 	apiKeysFieldSet bool `json:"-"`
 
+	// ModelAliases 客户端模型名 → 上游实际模型名映射。
+	//
+	// 用途：客户端写 `glm` 这类短名，网关转发前替换成上游真正认识的 `glm-5.3-flash`。
+	// 只影响出站 body 的 model 字段；不影响选号/白名单/用量归因（白名单仍匹配客户端
+	// 原始声明的裸模型名，用户配 key 时写什么名就放行什么名）。
+	// 映射在 resolveModel（剥 cn:/global: 前缀）之后应用，key 用客户端原始完整名
+	// （不含前缀）与裸名两种形式都查：先查完整 modelStr，再查 bareModel，命中即用。
+	ModelAliases map[string]string `json:"model_aliases,omitempty"`
+
+	// Alerting 异常外发告警（webhook）。空配置 = 不发（零回归）。
+	// 触发点：账号积分跌破阈值、账号触发熔断。POST 一个通用 JSON 到 WebhookURL，
+	// Server酱/TG bot/飞书自定义机器人/Discord 都能接（body 是 {text,...}，
+	// 真要接特定平台格式可在外面套一层 n8n/中转）。
+	Alerting struct {
+		// WebhookURL 告警接收端点。空 = 不发任何告警。
+		WebhookURL string `json:"webhook_url"`
+		// MinCreditThreshold 账号积分低于该值时发「余额告急」告警。
+		// <=0 = 关闭该触发。默认 0（关）。
+		MinCreditThreshold int64 `json:"min_credit_threshold"`
+		// ConsecutiveFailures 账号连续失败达该次数时发「触发熔断」告警。
+		// <=0 = 关闭该触发。默认 0（关）。
+		ConsecutiveFailures int `json:"consecutive_failures"`
+		// DedupMinutes 同一账号同类告警的去重窗口（分钟）。窗口内重复触发不重发。
+		// <=0 回落 60。
+		DedupMinutes int `json:"dedup_minutes"`
+	} `json:"alerting"`
+
 	Panel struct {
 		// PackageDetailLimit 积分构成页单账号默认展示的最近到期包数；<=0 回落 5。
 		PackageDetailLimit int `json:"package_detail_limit"`
@@ -346,9 +373,15 @@ type APIKeyConfig struct {
 	ID      string   `json:"id"`      // 稳定身份标识，必填，[A-Za-z0-9_-] ≤64，不重复
 	Key     string   `json:"key"`     // 明文 Key；空条目 normalize 忽略
 	Name    string   `json:"name"`    // 展示名（可空）
-	Models  []string `json:"models"`  // 三态模型白名单
+	Models  []string `json:"models"`  // 三态模型白名单（支持 * 后缀通配，如 "glm-*"）
 	Realm   string   `json:"realm"`   // cn/global/空=不限；其他值 fail fast
-	Enabled *bool    `json:"enabled"` // 启停开关：nil/true=启用；false=禁用（不进鉴权索引，但保留在 config 里）
+	RPM     int      `json:"rpm"`     // 该 Key 每分钟最大请求数；0 = 不限（旧行为）
+	// MonthlyTokenQuota 该 Key 当月 token 硬上限；0 = 不限。
+	// 已用量由 usage.Recorder 按 KeyID 累计（持久化跨重启），超限拒新请求。
+	MonthlyTokenQuota int64  `json:"monthly_token_quota"`
+	// Group 账号池分组标签（P1-B）：该 Key 只能用同 Group 的账号。空 = 不限池。
+	Group   string `json:"group"`
+	Enabled *bool  `json:"enabled"` // 启停开关：nil/true=启用；false=禁用（不进鉴权索引，但保留在 config 里）
 }
 
 // Default 默认配置。
@@ -442,17 +475,17 @@ func defaultPricing() map[string]ModelPrice {
 		// MiniMax
 		"minimax-m3": {Input: 0.3, Output: 1.2, CacheRead: 0.03},
 		// DeepSeek
-		"deepseek-v4-flash":    {Input: 0.15, Output: 0.6, CacheRead: 0.015},
-		"deepseek-v4.1-flash":  {Input: 0.15, Output: 0.6, CacheRead: 0.015},
-		"deepseek-v4-pro":      {Input: 0.6, Output: 2.4, CacheRead: 0.06},
+		"deepseek-v4-flash":   {Input: 0.15, Output: 0.6, CacheRead: 0.015},
+		"deepseek-v4.1-flash": {Input: 0.15, Output: 0.6, CacheRead: 0.015},
+		"deepseek-v4-pro":     {Input: 0.6, Output: 2.4, CacheRead: 0.06},
 		// Kimi（月之暗面）
-		"kimi-k2.6":          {Input: 0.6, Output: 2.4, CacheRead: 0.06},
-		"kimi-k2.7":          {Input: 0.6, Output: 2.4, CacheRead: 0.06},
-		"kimi-k2.8-preview":  {Input: 0.6, Output: 2.4, CacheRead: 0.06},
-		"kimi-k3-1":          {Input: 0.6, Output: 2.4, CacheRead: 0.06},
+		"kimi-k2.6":         {Input: 0.6, Output: 2.4, CacheRead: 0.06},
+		"kimi-k2.7":         {Input: 0.6, Output: 2.4, CacheRead: 0.06},
+		"kimi-k2.8-preview": {Input: 0.6, Output: 2.4, CacheRead: 0.06},
+		"kimi-k3-1":         {Input: 0.6, Output: 2.4, CacheRead: 0.06},
 		// 混元（腾讯）
-		"hy3":       {Input: 0.1, Output: 0.1, CacheRead: 0.01},
-		"hy3-x":     {Input: 0.1, Output: 0.1, CacheRead: 0.01},
+		"hy3":         {Input: 0.1, Output: 0.1, CacheRead: 0.01},
+		"hy3-x":       {Input: 0.1, Output: 0.1, CacheRead: 0.01},
 		"hy4-preview": {Input: 1.1, Output: 1.1, CacheRead: 0.11},
 		// 阶跃
 		"step-5-preview": {Input: 0.6, Output: 2.4, CacheRead: 0.06},
@@ -823,6 +856,16 @@ func (c *Config) normalize() error {
 			c.Schedule.BalanceRefreshMinutes = 5
 		}
 		c.BalanceRefreshInterval = time.Duration(c.Schedule.BalanceRefreshMinutes) * time.Minute
+	}
+	// 告警去重窗口兜底：<=0 回落 60 分钟（同一账号同类事件 1h 内不重发）。
+	if c.Alerting.DedupMinutes <= 0 {
+		c.Alerting.DedupMinutes = 60
+	}
+	if c.Alerting.MinCreditThreshold < 0 {
+		c.Alerting.MinCreditThreshold = 0
+	}
+	if c.Alerting.ConsecutiveFailures < 0 {
+		c.Alerting.ConsecutiveFailures = 0
 	}
 	if err := c.validateScheduleHours(); err != nil {
 		return err

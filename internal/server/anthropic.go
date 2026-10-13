@@ -14,11 +14,11 @@ import (
 // 只实现 MVP 非流式所需字段；其余字段（tools / stop_sequences / metadata）忽略。
 // 文档：https://docs.anthropic.com/en/api/messages
 type anthropicReq struct {
-	Model     string          `json:"model"`
-	Messages  []anthropicMsg  `json:"messages"`
-	MaxTokens int64           `json:"max_tokens"`
-	System    string          `json:"system,omitempty"`
-	Stream    bool            `json:"stream,omitempty"`
+	Model     string         `json:"model"`
+	Messages  []anthropicMsg `json:"messages"`
+	MaxTokens int64          `json:"max_tokens"`
+	System    string         `json:"system,omitempty"`
+	Stream    bool           `json:"stream,omitempty"`
 }
 
 type anthropicMsg struct {
@@ -27,10 +27,10 @@ type anthropicMsg struct {
 }
 
 type anthropicResp struct {
-	ID    string `json:"id"`
-	Type  string `json:"type"`
-	Role  string `json:"role"`
-	Model string `json:"model"`
+	ID      string `json:"id"`
+	Type    string `json:"type"`
+	Role    string `json:"role"`
+	Model   string `json:"model"`
 	Content []struct {
 		Type string `json:"type"`
 		Text string `json:"text"`
@@ -173,17 +173,17 @@ func (h *Handler) anthropicStream(w http.ResponseWriter, r *http.Request) {
 	writeSSEEvent(w, flusher, "message_start", map[string]any{
 		"type": "message_start",
 		"message": map[string]any{
-			"id":    "msg_" + strconv.FormatInt(time.Now().UnixNano(), 10),
-			"type":  "message",
-			"role":  "assistant",
-			"model": "",
+			"id":      "msg_" + strconv.FormatInt(time.Now().UnixNano(), 10),
+			"type":    "message",
+			"role":    "assistant",
+			"model":   "",
 			"content": []any{},
-			"usage": map[string]int{"input_tokens": 0, "output_tokens": 0},
+			"usage":   map[string]int{"input_tokens": 0, "output_tokens": 0},
 		},
 	})
 	writeSSEEvent(w, flusher, "content_block_start", map[string]any{
-		"type":         "content_block_start",
-		"index":        0,
+		"type":          "content_block_start",
+		"index":         0,
 		"content_block": map[string]string{"type": "text", "text": ""},
 	})
 
@@ -215,9 +215,9 @@ func writeSSEEvent(w http.ResponseWriter, f http.Flusher, event string, data any
 // streamInterceptWriter 逐行拦截 OpenAI SSE，把 delta.content 转成 Anthropic content_block_delta。
 type streamInterceptWriter struct {
 	http.ResponseWriter
-	flusher  http.Flusher
-	lineBuf  bytes.Buffer
-	done     bool
+	flusher http.Flusher
+	lineBuf bytes.Buffer
+	done    bool
 }
 
 func (sw *streamInterceptWriter) Write(b []byte) (int, error) {
