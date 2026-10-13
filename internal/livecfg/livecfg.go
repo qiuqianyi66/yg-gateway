@@ -23,6 +23,8 @@ type Snapshot struct {
 	SoftCooldown         time.Duration   // 429 软冷却基数（<=0 时调用方回退内置默认）
 	SanitizeFingerprints bool            // 出站请求体指纹脱敏
 	RecordClientInfo     bool            // 请求日志是否记录调用来源（客户端 IP / UA）
+	// ModelAliases 客户端模型名 → 上游实际名映射（热生效；nil = 无映射）。
+	ModelAliases map[string]string
 }
 
 // Holder 原子持有当前快照。

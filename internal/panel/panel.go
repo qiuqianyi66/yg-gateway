@@ -191,6 +191,7 @@ func (p *Panel) routes() {
 	p.mux.HandleFunc("POST /panel/api/balance_all", p.withAuth(p.balanceAll))
 	p.mux.HandleFunc("GET /panel/api/packages", p.withAuth(p.packages))
 	p.mux.HandleFunc("GET /panel/api/usage", p.withAuth(p.usage))
+	p.mux.HandleFunc("GET /panel/api/usage/monthly", p.withAuth(p.usageMonthly))
 	p.mux.HandleFunc("POST /panel/api/usage/save", p.withAuth(p.usageSave))
 	p.mux.HandleFunc("GET /panel/api/model_probes", p.withAuth(p.modelProbes))
 	p.mux.HandleFunc("GET /panel/api/config", p.withAuth(p.getConfig))
@@ -782,6 +783,19 @@ func (p *Panel) syncNicknames() {
 //   - hours：滚动窗口（默认 72，上限 1440=60 天），卡片汇总/按域/按账号/按模型/
 //     时序**全部**按该窗口统计；显式 hours=0 表示全部历史（含 90 天前折叠出的日桶）；
 //   - 都不给：等同于 hours=72（保持旧调用方行为）。
+// usageMonthly 返回当月 per-key 累计 token（P1-A：面板 Key 卡片显示"已用/配额"）。
+// 响应 {"month": "2026-10", "keys": {"key-id": 12345, ...}}。
+func (p *Panel) usageMonthly(w http.ResponseWriter, r *http.Request) {
+	if p.cfg.Usage == nil {
+		writeErr(w, http.StatusNotImplemented, "usage recorder not available")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"month": time.Now().Format("2006-01"),
+		"keys":  p.cfg.Usage.MonthlySnapshot(),
+	})
+}
+
 func (p *Panel) usage(w http.ResponseWriter, r *http.Request) {
 	if p.cfg.Usage == nil {
 		writeErr(w, http.StatusNotImplemented, "usage recorder not available")

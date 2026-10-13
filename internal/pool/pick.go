@@ -15,28 +15,35 @@ import (
 // Pick 单一选号入口（无请求级轮换、无 realm 过滤，模型感知缺省账号级）。
 // 需要请求级轮换（tried）或分池（realm）时用 PickExcludingForRealm。
 func (p *Pool) Pick() *auth.Auth {
-	return p.pick(nil, "", "")
+	return p.pick(nil, "", "", "")
 }
 
 // PickExcluding 同上，但跳过 tried 中的 uid（请求级轮换）。
 // 挑选策略：healthy 账号中按权重取前 5 名，再在 Top5 内按同一权重加权随机抽签，
 // 意图是打散热点，避免永远打同一个账号。
 func (p *Pool) PickExcluding(tried map[string]bool) *auth.Auth {
-	return p.pick(tried, "", "")
+	return p.pick(tried, "", "", "")
 }
 
 // PickExcludingForModel 模型感知选号：等同 PickExcluding，但对「6004 模型级冷却中的
 // 账号」进行模型豁免——请求模型与其 trigger 模型不同时视为可用（issue #31）。
 // reqModel 为空时即普通 PickExcluding（不影响既有调用语义）。
 func (p *Pool) PickExcludingForModel(tried map[string]bool, reqModel string) *auth.Auth {
-	return p.pick(tried, reqModel, "")
+	return p.pick(tried, reqModel, "", "")
 }
 
 // PickExcludingForRealm 模型感知 + 分池选号：候选集先按 Realm()==realm 过滤
 // （realm 空 = 不过滤，退化为 PickExcludingForModel），再按模型健康口径判定。
 // 供 handler 在 global/cn 双域下分流（global 模型请求只路由 global 账号）。
 func (p *Pool) PickExcludingForRealm(tried map[string]bool, reqModel, realm string) *auth.Auth {
-	return p.pick(tried, reqModel, realm)
+	return p.pick(tried, reqModel, realm, "")
+}
+
+// PickExcludingForRealmGroup 模型感知 + 分池选号 + 账号组过滤（P1-B）。
+// group 非空时候选集再叠加 Auth.Group == group 过滤：同一把 key 只能用自己组的账号。
+// group 为空时退化为 PickExcludingForRealm（零回归）。
+func (p *Pool) PickExcludingForRealmGroup(tried map[string]bool, reqModel, realm, group string) *auth.Auth {
+	return p.pick(tried, reqModel, realm, group)
 }
 
 // pick 在 healthy 候选集中按权重加权随机选出账号，并记录 lastUsed（防并发撞号）。
@@ -52,11 +59,20 @@ func (p *Pool) PickExcludingForRealm(tried map[string]bool, reqModel, realm stri
 // 第 2..N 个进入者看到 lastUsed 已更新）；由 handler 的 Acquire 租约 + tried
 // 轮换自愈（Acquire 失败即换号，不产生上游请求），且 per-account 在途上限
 // 天然限流，不构成正确性问题（防撞号窗口对「下一个进入者」继续生效）。
-func (p *Pool) pick(tried map[string]bool, reqModel, realm string) *auth.Auth {
+func (p *Pool) pick(tried map[string]bool, reqModel, realm, group string) *auth.Auth {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	now := time.Now()
-	realmOK := func(e *entry) bool { return realm == "" || e.a.Realm() == realm }
+	// realm 过滤 + group 过滤（P1-B：账号池分组）。group 空 = 不限池（零回归）。
+	realmOK := func(e *entry) bool {
+		if realm != "" && e.a.Realm() != realm {
+			return false
+		}
+		if group != "" && e.a.Group != group {
+			return false
+		}
+		return true
+	}
 	healthyOf := func(e *entry) bool { return realmOK(e) && e.healthy(now) }
 	if reqModel != "" {
 		healthyOf = func(e *entry) bool { return realmOK(e) && e.healthyForModel(now, reqModel) }

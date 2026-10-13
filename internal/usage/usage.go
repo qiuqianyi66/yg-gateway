@@ -43,9 +43,10 @@ const (
 
 // fileVersion 是 usage.json 的当前格式版本。版本 2 增加积分观测字段，版本 3
 // 增加模型生效倍率分区，版本 4 增加前缀缓存命中/未命中累计，版本 5 增加下游
-// Key 身份分区（ADR-001 F-005 二期：用量按 Key 聚合）；
+// Key 身份分区（ADR-001 F-005 二期：用量按 Key 聚合）；版本 6 增加 per-key
+// 月 token 累计（P1-A：月配额硬上限）。
 // 旧版本缺失字段按零值加载，旧数据不会丢弃。
-const fileVersion = 5
+const fileVersion = 6
 
 // bucket 一个 (时间片, realm, uid, model, rate, key) 的累计量。
 // JSON 字段名刻意取短，因为桶数量会随时间增长。
@@ -80,6 +81,10 @@ type file struct {
 	Version int      `json:"version"`
 	Saved   string   `json:"saved"`
 	Buckets []bucket `json:"buckets"`
+	// Monthly per-key 当月 token 累计（P1-A 月配额）。key = "YYYY-MM|keyID"，
+	// value = 该 key 在该月累计的 prompt+completion tokens。跨月自动开新键，旧月
+	// 记录保留供面板回看（不主动清理，量小）。
+	Monthly map[string]int64 `json:"monthly,omitempty"`
 }
 
 // USDPrice 一个模型的 OpenRouter 公开参考价（$/1M tokens）。
@@ -119,6 +124,9 @@ type Recorder struct {
 	mu      sync.Mutex
 	path    string
 	buckets map[string]*bucket // key: bucketKey(scope, realm, uid, model, rate, keyID)
+	// monthly per-key 当月 token 累计（P1-A 月配额）。key = "YYYY-MM|keyID"。
+	// 与 buckets 同生命周期：Add 累加、flush 落盘、load 恢复。
+	monthly map[string]int64
 	dirty   bool
 	started time.Time
 
@@ -139,6 +147,7 @@ func New(path string) *Recorder {
 	r := &Recorder{
 		path:    path,
 		buckets: make(map[string]*bucket),
+		monthly: make(map[string]int64),
 		started: time.Now(),
 		stop:    make(chan struct{}),
 		done:    make(chan struct{}),
@@ -269,7 +278,48 @@ func (r *Recorder) Add(now time.Time, realm, uid, model string, d Delta, ok bool
 		b.TPS += d.TokensPerSecond
 		b.TPSN++
 	}
+	// P1-A：per-key 月 token 累计（月配额硬上限）。
+	// 只归因到具体 key（KeyID 非空）；未启用鉴权的流量不归月配额。
+	// 口径：与 b.TT 一致（优先 total，否则 pt+ct 兜底）。
+	if d.KeyID != "" {
+		mt := d.TotalTokens
+		if !d.HasTotal {
+			mt = d.PromptTokens + d.CompletionTokens
+		}
+		if mt > 0 {
+			r.monthly[now.Format("2006-01")+"|"+d.KeyID] += mt
+		}
+	}
 	r.dirty = true
+}
+
+// MonthlyUsed 返回指定 key 在当月已累计的 token 数（P1-A 月配额查询）。
+// keyID 为空（未归因）返回 0——未启用鉴权的流量不受月配额约束。
+func (r *Recorder) MonthlyUsed(keyID string) int64 {
+	if r == nil || keyID == "" {
+		return 0
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.monthly[time.Now().Format("2006-01")+"|"+keyID]
+}
+
+// MonthlySnapshot 返回当月所有 key 的累计 token 数（面板展示用）。
+// 返回 map 的 key 是 keyID（不带月份前缀），value 是当月 token 数。
+func (r *Recorder) MonthlySnapshot() map[string]int64 {
+	if r == nil {
+		return nil
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	prefix := time.Now().Format("2006-01") + "|"
+	out := make(map[string]int64)
+	for k, v := range r.monthly {
+		if strings.HasPrefix(k, prefix) {
+			out[strings.TrimPrefix(k, prefix)] = v
+		}
+	}
+	return out
 }
 
 // Rollup 把超出 hourlyKeep 的小时桶折叠为日桶（按本地日历日）。
@@ -349,6 +399,12 @@ func (r *Recorder) load() error {
 		b := f.Buckets[i]
 		r.buckets[bucketKey(b.Scope, b.Realm, b.UID, b.Model, b.Rate, b.Key)] = &b
 	}
+	// P1-A：恢复 per-key 月累计（旧版本无该字段 → nil map，零值）。
+	if f.Monthly != nil {
+		for k, v := range f.Monthly {
+			r.monthly[k] = v
+		}
+	}
 	log.Printf("[usage] 已恢复 %d 个用量桶（%s）", len(r.buckets), r.path)
 	return nil
 }
@@ -365,6 +421,13 @@ func (r *Recorder) flush(force bool) {
 	snap := file{Version: fileVersion, Saved: time.Now().Format(time.RFC3339), Buckets: make([]bucket, 0, len(r.buckets))}
 	for _, b := range r.buckets {
 		snap.Buckets = append(snap.Buckets, *b)
+	}
+	// P1-A：复制 monthly map（避免写快照期间持锁读并发 map）。
+	if len(r.monthly) > 0 {
+		snap.Monthly = make(map[string]int64, len(r.monthly))
+		for k, v := range r.monthly {
+			snap.Monthly[k] = v
+		}
 	}
 	r.dirty = false
 	r.mu.Unlock()

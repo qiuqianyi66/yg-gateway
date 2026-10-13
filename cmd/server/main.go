@@ -18,6 +18,7 @@ import (
 	"syscall"
 	"time"
 
+	"yg-gateway/internal/alerting"
 	"yg-gateway/internal/auth"
 	"yg-gateway/internal/httpauth"
 	"yg-gateway/internal/livecfg"
@@ -280,20 +281,20 @@ func main() {
 	}
 
 	pn := panel.New(panel.Config{
-		Pool:           p,
-		Usage:          rec,
-		CreditCNYRate:  cfg.Usage.CreditCNYRate,
-		Pricing:        buildUSDPriceMap(cfg.Usage.Pricing),
-		RequestLog:     requestLog,
-		Upstream:    up,
-		Scheduler:   sch,
-		AuthDir:     cfg.AuthDir,
-		APIKey:      cfg.APIKey,
-		RedisMode:   redisMode,
-		StickyCount: sessCount,
+		Pool:            p,
+		Usage:           rec,
+		CreditCNYRate:   cfg.Usage.CreditCNYRate,
+		Pricing:         buildUSDPriceMap(cfg.Usage.Pricing),
+		RequestLog:      requestLog,
+		Upstream:        up,
+		Scheduler:       sch,
+		AuthDir:         cfg.AuthDir,
+		APIKey:          cfg.APIKey,
+		RedisMode:       redisMode,
+		StickyCount:     sessCount,
 		SessionSnapshot: sessSnapshot,
-		Version:     appVersion,
-		Live:        live,
+		Version:         appVersion,
+		Live:            live,
 		// 模型上限探测数据（scripts/probe_max_tokens.py --panel-out 写入）：
 		// 与 state 文件同目录，缺省 data/output_probes.json。
 		ProbeFile:  stateSibling(cfg.StateFile, "output_probes.json"),
@@ -345,6 +346,12 @@ func main() {
 				Window: cfg.ReadOnlyRateLimitWindow,
 			}
 		}(),
+		// 异常外发告警（P0-4）：webhook URL 空 = 不告警（零回归）。
+		Alerting: alerting.New(alerting.Config{
+			WebhookURL:         cfg.Alerting.WebhookURL,
+			MinCreditThreshold: cfg.Alerting.MinCreditThreshold,
+			DedupWindow:        time.Duration(cfg.Alerting.DedupMinutes) * time.Minute,
+		}),
 	})
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -635,17 +642,21 @@ func buildAuthSnapshot(c *Config) livecfg.Snapshot {
 		}
 		sum := sha256.Sum256([]byte(k.Key))
 		keys = append(keys, httpauth.Key{
-			ID:     k.ID,
-			Name:   k.Name,
-			Digest: sum[:],
-			Models: k.Models,
-			Realm:  k.Realm,
+			ID:                k.ID,
+			Name:              k.Name,
+			Digest:            sum[:],
+			Models:            k.Models,
+			Realm:             k.Realm,
+			RPM:               k.RPM,
+			MonthlyTokenQuota: k.MonthlyTokenQuota,
+			Group:             k.Group,
 		})
 	}
 	snap := livecfg.BuildSnapshot(c.APIKey, keys)
 	snap.SoftCooldown = c.SoftRateDur
 	snap.SanitizeFingerprints = c.Features.SanitizeBlacklistFingerprints
 	snap.RecordClientInfo = c.Logging.RequestClientInfo
+	snap.ModelAliases = c.ModelAliases
 	return snap
 }
 

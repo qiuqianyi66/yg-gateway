@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"yg-gateway/internal/alerting"
 	"yg-gateway/internal/auth"
 	"yg-gateway/internal/httpauth"
 	"yg-gateway/internal/livecfg"
@@ -103,6 +104,10 @@ type Config struct {
 	// 缺省 nil = 不限流（保留旧行为）。按来源 IP 计数（未配置受信任代理时回落 TCP
 	// 对端，等价按直连来源计数）。
 	ReadOnlyRateLimit *ReadOnlyRateLimit
+
+	// Alerting 异常外发告警（可选；nil = 不告警）。账号余额告急/被禁用/会话死/触发
+	// 熔断时 POST 到配置的 webhook。fire-and-forget，不阻塞业务路径。
+	Alerting *alerting.Notifier
 }
 
 // loadLive 返回当前运行期快照；Live 为 nil 时用静态字段合成。
@@ -153,6 +158,9 @@ type Handler struct {
 	// readonlyRL 只读端点限流器（F-003；nil = 不限流）。在 NewHandler 由
 	// cfg.ReadOnlyRateLimit 构建一次，运行期固定。
 	readonlyRL *rateLimiter
+	// keyRPM per-key RPM 限流器（P0-3）：每把下游 key 独立 1 分钟窗口计数，
+	// 上限来自 live snapshot 的 key.RPM（热生效）。nil = 不限流。
+	keyRPM *keyRPMGuard
 }
 
 // NewHandler 构建 handler。
@@ -171,6 +179,7 @@ func NewHandler(cfg Config) *Handler {
 	}
 	h := &Handler{cfg: cfg, mux: http.NewServeMux()}
 	h.readonlyRL = cfg.ReadOnlyRateLimit.build()
+	h.keyRPM = newKeyRPMGuard()
 	h.mux.HandleFunc("POST /v1/chat/completions", h.withAuth(h.chatCompletions))
 	h.mux.HandleFunc("POST /v1/messages", h.withAuth(h.anthropicMessages))
 	h.mux.HandleFunc("GET /v1/models", h.withAuth(h.rateLimited(h.models)))
@@ -277,6 +286,24 @@ func (h *Handler) withAuth(next http.HandlerFunc) http.HandlerFunc {
 			writeOpenAIError(w, http.StatusUnauthorized, "invalid_api_key", "missing or invalid API key")
 			return
 		}
+		// Per-key RPM 限流（P0-3）：在鉴权后、业务前检查。未配置 rpm=0 的 key 恒放行。
+		// 超限返 429 + Retry-After，与上游 429 语义一致（客户端自带退避）。
+		if !h.keyRPM.allow(key) {
+			w.Header().Set("Retry-After", "60")
+			writeOpenAIError(w, http.StatusTooManyRequests, "rate_limited",
+				"API key rate limit exceeded; retry in a minute")
+			return
+		}
+		// Per-key 月 token 硬上限（P1-A）：已用量从 usage.Recorder 按 KeyID 累计查询。
+		// quota=0 恒放行（零回归）。超限返 429 + Retry-After=到下个自然月。
+		if key != nil && key.MonthlyTokenQuota > 0 && h.cfg.Usage != nil {
+			if used := h.cfg.Usage.MonthlyUsed(key.ID); used >= key.MonthlyTokenQuota {
+				w.Header().Set("Retry-After", "86400")
+				writeOpenAIError(w, http.StatusTooManyRequests, "quota_exceeded",
+					"API key monthly token quota exceeded this month")
+				return
+			}
+		}
 		// 把命中的 Key 身份放进独立 context（供约束校验/归因，不依赖 requestTrace，
 		// 因为 trace 只在 RequestLog 非 nil 时才创建）。
 		if key != nil {
@@ -365,12 +392,10 @@ func (h *Handler) checkKeyConstraints(key *httpauth.Key, reqModel, realm, bareMo
 	if modelKind == "missing" || modelKind == "null" || reqModel == "" {
 		return "model_not_allowed", "该密钥启用了模型白名单，请求必须指定 model"
 	}
-	for _, m := range key.Models {
-		if m == bareModel {
-			return "", ""
-		}
+	if !modelAllowedByWhitelist(key.Models, bareModel) {
+		return "model_not_allowed", "模型不在该密钥的白名单内"
 	}
-	return "model_not_allowed", "模型不在该密钥的白名单内"
+	return "", ""
 }
 
 // rateLimited 只读端点限流中间件（F-003）。readonlyRL 为 nil 时透传（不限流）。
@@ -821,6 +846,9 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	// bareModel 用于选号/粘性/出站 body 重写（前缀是网关侧路由协议，上游只认裸名）。
 	// 裸名 → ("cn", 原串)，CN 现状零回归。
 	realm, bareModel := resolveModel(modelStr)
+	// 模型别名映射：bareModel 是客户端原始裸名（选号/白名单/用量/回包全用它）；
+	// upstreamModel 是出站 body 真正发给上游的名。无映射时二者相等（零回归）。
+	upstreamModel := applyModelAliases(bareModel, h.loadLive().ModelAliases)
 	modelRate := ""
 	if h.cfg.Upstream != nil {
 		modelRate = h.cfg.Upstream.ModelRate(realm, bareModel)
@@ -853,6 +881,9 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	// modelBlock 记录本次是否因「模型级冷却」而选不到号（下方 acct==nil 分支填充）。
 	// 默认零值 Blocked=false = 按既有的"没有可用账号"口径报错。
 	var modelBlock pool.ModelBlockStatus
+	// groupFilteredOut 记录本次是否因 key 绑定了账号组（authKey.Group 非空）而最终选号失败。
+	// 用于在错误 hint 里提示运维：是「号全挂了」还是「组里压根没号/组名配错」。
+	groupFilteredOut := false
 
 	// 会话粘性：从请求体提取会话键并解析绑定号（找不到/无效则 stickyUID 为空，走普通轮换）。
 	// ExtractKey 与粘性开关解耦（issue #35 侧）：关闭粘性时会话头族的聚合主键仍按
@@ -1025,10 +1056,11 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		degradedApplied = true
 	}
 
-	// outbound model 名重写为 bareModel（D6）：realm 前缀是网关侧路由协议，
-	// 上游不认前缀（global 账号也请求裸模型名）。裸名时 bareModel==modelStr 恒等。
-	if bareModel != modelStr {
-		body = rewriteModel(body, bareModel)
+	// outbound model 名重写：realm 前缀是网关侧路由协议，上游不认前缀；
+	// 若配置了 model_aliases，客户端短名也要替换成上游实际名。
+	// 回包给客户端的 delta.Model 仍用客户端原始名 bareModel（不暴露映射）。
+	if upstreamModel != modelStr {
+		body = rewriteModel(body, upstreamModel)
 	}
 
 	// 会话头族（issue #35）：后台按 X-Conversation-Request-ID（对话轮级）聚合请求，
@@ -1074,7 +1106,12 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		if acct == nil {
 			// 模型感知 + realm 感知选号：模型非空时启用 6004 模型级冷却豁免
 			// （healthyForModel），realm 谓词过滤跨域账号。
-			acct = h.cfg.Pool.PickExcludingForRealm(tried, bareModel, realm)
+			// P1-B：再叠加 authKey.Group 过滤——该 key 只能用自己组的账号。
+			group := ""
+			if authKey != nil {
+				group = authKey.Group
+			}
+			acct = h.cfg.Pool.PickExcludingForRealmGroup(tried, bareModel, realm, group)
 		}
 		if acct == nil {
 			st.status = http.StatusServiceUnavailable
@@ -1084,6 +1121,10 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 			// 两者此前都报 no_healthy_account，导致「模型不可用」被读成「号全挂了」。
 			// 在这里取一次快照，供下方错误构造区分（issue #102 附带发现 1）。
 			modelBlock = h.cfg.Pool.ModelBlocked(bareModel)
+			// P1-B：key 绑定了账号组但组里没号可选 → 标记，错误 hint 里给运维提示。
+			if authKey != nil && authKey.Group != "" {
+				groupFilteredOut = true
+			}
 			break
 		}
 		st.uid = acct.UID
@@ -1509,6 +1550,11 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		}
 		status = http.StatusBadRequest
 	}
+	// P1-B：key 绑定了账号组但组里没选到号 → 在 hint 里给运维明确提示。
+	// 只在「不是模型级阻塞」时加（modelBlock 已覆盖那一类，避免信息重复）。
+	if groupFilteredOut && !modelBlock.Blocked && authKey != nil {
+		hint += fmt.Sprintf("; note: API key is bound to account group %q, no healthy account in this group — check auth files group tag or the group name typo", authKey.Group)
+	}
 	writeOpenAIErrorHint(w, status, code, msg, hint)
 	st.status = status
 	st.outcome = reqlog.OutcomeHTTPError
@@ -1656,6 +1702,9 @@ func (h *Handler) applyErrorPolicy(uid string, kind upstream.ErrKind, body, mode
 		// 402 + 余额关键词即积分耗尽：同步冷却到次日 04:00（签到任务 09/21 点恢复），
 		// 不需要异步核查（冗余）。立即换号。
 		h.cfg.Pool.CooldownUntilTomorrow4AM(uid, "余额不足")
+		if h.cfg.Alerting != nil {
+			h.cfg.Alerting.NotifyCreditLow(uid, "", 0)
+		}
 	case upstream.ErrSoftRate:
 		// 统一对齐上游重置时间：只要 body 带「将在 … 重置」，无论业务 code 是
 		// 6004 还是 11140 rate-limiting 等形态，都精确冷却到该墙钟、绝不指数堆加。
@@ -1698,6 +1747,9 @@ func (h *Handler) applyErrorPolicy(uid string, kind upstream.ErrKind, body, mode
 		h.cfg.Pool.CooldownSoftRate(uid, jitterDur(wafCooldownBase), time.Time{}, "waf 403 block")
 	case upstream.ErrSessionDead:
 		h.cfg.Pool.Disable(uid, "12153 session dead")
+		if h.cfg.Alerting != nil {
+			h.cfg.Alerting.NotifyAccountDown("session_dead", uid, "", "12153 session dead")
+		}
 	case upstream.ErrNotFound:
 		// 404 短冷却（软冷却），防雪崩。固定 notFoundCooldown，不随 soft_rate 退避：
 		// 偶发路径缺失不是限流信号，不该按限流惩罚升级。
@@ -1710,6 +1762,9 @@ func (h *Handler) applyErrorPolicy(uid string, kind upstream.ErrKind, body, mode
 		// 大小写不敏感（与 Classify 的 marker 匹配同口径）。
 		if strings.Contains(strings.ToLower(body), "request illegal") {
 			h.cfg.Pool.Disable(uid, "account banned by upstream (11140 request illegal), re-login required")
+			if h.cfg.Alerting != nil {
+				h.cfg.Alerting.NotifyAccountDown("account_disabled", uid, "", "11140 request illegal, re-login required")
+			}
 			return
 		}
 		h.cfg.Pool.Cooldown(uid, pool.CoolSoft, h.softCooldown(), "account fault (14017)")

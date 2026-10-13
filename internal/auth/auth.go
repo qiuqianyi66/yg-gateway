@@ -38,6 +38,11 @@ type Auth struct {
 	Nickname     string
 	FilePath     string // 来源文件；refresh 后原子写回此处
 
+	// Group 账号池分组标签（P1-B）。空 = 未分组（default 池）。
+	// 选号时按 key 指定的 group 过滤候选：key.group 非空时只挑同组账号。
+	// 从 auth 文件顶层 "group" 键读取（手写扁平形 auth 可直接写 "group": "team-a"）。
+	Group string
+
 	// DeviceToken 设备风控 Token（X-Device-Token 头），来源 auth 文件的 device_token 键。
 	// 缺省为空 = 不注入该头（容器内无桌面端 Turing SDK 的常见部署）。
 	// 手写扁平形 auth 文件可直接写 "device_token": "..."；插件 OAuth 嵌套形
@@ -255,6 +260,8 @@ func Parse(raw []byte) (*Auth, error) {
 			} `json:"account"`
 			// DeviceToken 顶层 device_token（嵌套形与扁平形共用；手写时无需嵌进 auth 对象）。
 			DeviceToken string `json:"device_token"`
+			// Group 顶层 group（账号池分组标签，P1-B；嵌套形/扁平形都读顶层）。
+			Group string `json:"group"`
 		}
 		if err := json.Unmarshal(raw, &n); err != nil {
 			return nil, fmt.Errorf("storage_parse_error: %w", err)
@@ -268,6 +275,7 @@ func Parse(raw []byte) (*Auth, error) {
 			UID:          n.Account.UID,
 			EnterpriseID: n.Account.EnterpriseID,
 			Nickname:     n.Account.Nickname,
+			Group:        n.Group,
 			DeviceToken:  n.DeviceToken,
 		}
 	} else {
@@ -281,6 +289,7 @@ func Parse(raw []byte) (*Auth, error) {
 			EnterpriseID string `json:"enterpriseId"`
 			Nickname     string `json:"nickname"`
 			DeviceToken  string `json:"device_token"`
+			Group        string `json:"group"`
 		}
 		if err := json.Unmarshal(raw, &f); err != nil {
 			return nil, fmt.Errorf("storage_parse_error: %w", err)
@@ -294,6 +303,7 @@ func Parse(raw []byte) (*Auth, error) {
 			UID:          f.UID,
 			EnterpriseID: f.EnterpriseID,
 			Nickname:     f.Nickname,
+			Group:        f.Group,
 			DeviceToken:  f.DeviceToken,
 		}
 	}
@@ -333,6 +343,10 @@ func (a *Auth) SaveAtomic() error {
 	// （保持与插件 OAuth 输出形状一致，插件读取忽略未知键）。
 	if a.DeviceToken != "" {
 		doc["device_token"] = a.DeviceToken
+	}
+	// Group 非空才写回顶层 group（P1-B：账号池分组标签）。
+	if a.Group != "" {
+		doc["group"] = a.Group
 	}
 	raw, err := json.MarshalIndent(doc, "", "  ")
 	if err != nil {

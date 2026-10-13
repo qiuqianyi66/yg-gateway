@@ -1582,6 +1582,7 @@ $('btnLogPin').onclick = () => {
 
 let keyData = null;       // GET config 返回的 api_keys 数组（脱敏后）
 let keyAdminCfg = false;  // api_key_configured 状态
+let monthlyData = null;   // GET usage/monthly 返回的 {id: tokens}（P1-A 面板展示当月已用）
 let keyEditing = null;    // 当前编辑中的 Key 对象（null=未编辑）
 let keyIsNew = false;     // true=新增模式, false=编辑模式
 let keySaving = false;    // 提交锁：防连点建重复 Key
@@ -1589,9 +1590,10 @@ let keyLoadFailed = false; // 取数失败标记（区分空状态）
 
 async function loadKeys() {
   try {
-    const d = await api('config');
+    const [d, m] = await Promise.all([api('config'), api('usage/monthly').catch(() => null)]);
     keyData = Array.isArray(d.config.api_keys) ? d.config.api_keys : [];
     keyAdminCfg = !!d.config.api_key_configured;
+    monthlyData = (m && m.keys && typeof m.keys === 'object') ? m.keys : null;
     keyLoadFailed = false;
     renderKeyList();
   } catch (e) {
@@ -1660,6 +1662,22 @@ function keyCardHTML(k) {
     ? '<span class="tag ok">已配置</span>'
     : '<span class="tag mute">未配置</span>';
 
+  // RPM 限制 badge（>0 时才显示）
+  const rpmBadge = (typeof k.rpm === 'number' && k.rpm > 0)
+    ? `<span class="key-badge models-list" title="每分钟最多 ${k.rpm} 次请求">${k.rpm} RPM</span>`
+    : '';
+
+  // 月配额 badge（>0 时才显示），带当月已用进度。
+  const used = (monthlyData && typeof monthlyData[k.id] === 'number') ? monthlyData[k.id] : 0;
+  const mqBadge = (typeof k.monthly_token_quota === 'number' && k.monthly_token_quota > 0)
+    ? `<span class="key-badge models-list" title="当月已用 ${used.toLocaleString()} / 配额 ${k.monthly_token_quota.toLocaleString()} tokens（跨月自动重置）">${(used / 1e6).toFixed(2)} / ${(k.monthly_token_quota / 1e6).toFixed(1)}M tok/月</span>`
+    : '';
+
+  // 账号组 badge（非空才显示）
+  const grpBadge = (typeof k.group === 'string' && k.group)
+    ? `<span class="key-badge models-list" title="仅使用同组账号">组：${esc(k.group)}</span>`
+    : '';
+
   return `<div class="key-card${en ? '' : ' disabled'}" data-kid="${id}">
     <div class="key-card-main">
       <div class="key-info">
@@ -1668,6 +1686,9 @@ function keyCardHTML(k) {
         ${keyStatus}
         ${realmBadge}
         ${modelsBadge}
+        ${rpmBadge}
+        ${mqBadge}
+        ${grpBadge}
       </div>
       <div class="key-actions">
         <label class="switch" title="${en ? '已启用' : '已禁用'}">
@@ -1716,6 +1737,9 @@ function openKeyDialog(id) {
     ? '留空 = 不修改密钥；填写 = 更新为新密钥'
     : '必填；点击「生成」可一键生成随机密钥';
   $('kfModels').value = (k && Array.isArray(k.models)) ? k.models.join(', ') : '';
+  $('kfRpm').value = (k && typeof k.rpm === 'number') ? k.rpm : 0;
+  $('kfMonthlyQuota').value = (k && typeof k.monthly_token_quota === 'number') ? k.monthly_token_quota : 0;
+  $('kfGroup').value = (k && typeof k.group === 'string') ? k.group : '';
 
   // realm 胶囊（默认不限）
   const realm = k ? esc(k.realm || '') : '';
@@ -1774,6 +1798,15 @@ function collectKeyFromDialog() {
     entry.models = null; // 新增时不填 = 不限（null 三态）
   }
 
+  const rpm = parseInt($('kfRpm').value, 10);
+  entry.rpm = (isNaN(rpm) || rpm < 0) ? 0 : rpm;
+
+  const mq = parseInt($('kfMonthlyQuota').value, 10);
+  entry.monthly_token_quota = (isNaN(mq) || mq < 0) ? 0 : mq;
+
+  const grp = $('kfGroup').value.trim();
+  if (grp) entry.group = grp;
+
   return entry;
 }
 
@@ -1793,6 +1826,10 @@ function buildSavePayload(newEntry) {
       else if (k.realm) merged.realm = k.realm;
       if (newEntry.models !== undefined) merged.models = newEntry.models;
       else if (Array.isArray(k.models)) merged.models = k.models;
+      merged.rpm = (typeof newEntry.rpm === 'number') ? newEntry.rpm : (k.rpm || 0);
+      merged.monthly_token_quota = (typeof newEntry.monthly_token_quota === 'number') ? newEntry.monthly_token_quota : (k.monthly_token_quota || 0);
+      if (newEntry.group !== undefined) merged.group = newEntry.group;
+      else if (k.group) merged.group = k.group;
       merged.enabled = k.enabled !== false;
       out.push(merged);
       replaced = true;
@@ -1803,6 +1840,9 @@ function buildSavePayload(newEntry) {
       if (k.key) entry.key = k.key;
       if (k.realm) entry.realm = k.realm;
       if (Array.isArray(k.models)) entry.models = k.models;
+      entry.rpm = k.rpm || 0;
+      entry.monthly_token_quota = k.monthly_token_quota || 0;
+      if (k.group) entry.group = k.group;
       out.push(entry);
     }
   });
@@ -2008,6 +2048,8 @@ const CFG_MAP = {
   session_sticky_derive: ['session_sticky', 'derive'],
   request_client_info: ['logging', 'request_client_info'],
   usage_credit_cny_rate: ['usage', 'credit_cny_rate'],
+  alerting_webhook_url: ['alerting', 'webhook_url'],
+  alerting_min_credit_threshold: ['alerting', 'min_credit_threshold'],
 };
 /* 「覆盖型」文本字段：空串本身是有意义的取值（= 回落到内置默认），必须照发。
  *
@@ -2020,7 +2062,7 @@ const CFG_MAP = {
  * 刻意不含 api_key：清空它 = 关闭整个鉴权，误触代价是网关变成无鉴权公开服务。
  * 该字段（以及提示文案"留空 = 不鉴权"与现状不符的问题）单独处理。
  */
-const CLEARABLE_CFG = new Set(['user_agent', 'prompt_file']);
+const CLEARABLE_CFG = new Set(['user_agent', 'prompt_file', 'alerting_webhook_url']);
 
 function dig(obj, path) { return path.reduce((o, k) => (o == null ? undefined : o[k]), obj); }
 function put(obj, path, val) {
@@ -2043,6 +2085,16 @@ async function loadConfig() {
       else if (Array.isArray(v)) el.value = v.join(', ');
       else el.value = v == null ? '' : v;
     }
+    // model_aliases 是 map[string]string：序列化成 "from=to" 每行一条填到 textarea。
+    const aliases = dig(cfgLoaded, ['model_aliases']);
+    const aliasesEl = f.elements['model_aliases'];
+    if (aliasesEl) {
+      if (aliases && typeof aliases === 'object') {
+        aliasesEl.value = Object.entries(aliases).map(([k, v]) => `${k}=${v}`).join('\n');
+      } else {
+        aliasesEl.value = '';
+      }
+    }
     markDurationFields(); // 回填后重置校验态（清掉残留红框；现值来自后端必然合法）
     // 回填即"与后端一致"→ 清掉脏标记（避免刚加载就被判为有未保存改动）。
     clearCfgDirty();
@@ -2064,6 +2116,21 @@ function collectConfig() {
       else v = raw;
     }
     if (v !== undefined) put(out, path, v);
+  }
+  // model_aliases：解析 "from=to" 每行一条。空 = 显式清空 map（照发空 map）。
+  const aliasesEl = f.elements['model_aliases'];
+  if (aliasesEl) {
+    const map = {};
+    aliasesEl.value.split('\n').forEach(line => {
+      const t = line.trim();
+      if (!t) return;
+      const eq = t.indexOf('=');
+      if (eq <= 0) return;
+      const from = t.slice(0, eq).trim();
+      const to = t.slice(eq + 1).trim();
+      if (from && to) map[from] = to;
+    });
+    out.model_aliases = map;
   }
   return out;
 }

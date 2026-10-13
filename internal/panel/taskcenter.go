@@ -127,7 +127,7 @@ type queueItem struct {
 	Kind     string `json:"kind"` // growth
 	Code     string `json:"code"`
 	Title    string `json:"title,omitempty"` // 中文任务名（扫描时带出，刷新后仍可见）
-	Status   string `json:"status"` // pending | running | done | skipped | error
+	Status   string `json:"status"`          // pending | running | done | skipped | error
 	Message  string `json:"message,omitempty"`
 }
 

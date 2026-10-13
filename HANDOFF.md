@@ -269,6 +269,68 @@ sticky_paid_hits / ewma_samples 字段透出正常。
 2. 粘性会话详情面板加成本层列（如需更直观）
 3. 其他用户反馈
 
+## 六之五、中转站能力对齐 P0（2026-10-13）
+
+**起因**：调研市面主流中转站（one-api / new-api / Veloera / workbuddy 系）后，
+按"小团队自用也刚需"原则挑出 4 项功能对齐。SaaS 化重功能（多用户/充值/兑换码/
+OIDC 登录/多语言）刻意不抄——保持 yg-gateway"自托管养号池"定位。
+
+**改了什么**：
+1. **模型映射 `model_aliases`**：config 加 `map[string]string`，客户端写短名（如 `glm`）
+   网关转发前替换成上游实际名（如 `glm-5.3-flash`）。只影响出站 body；选号/白名单/
+   用量/回包 delta.Model 全部沿用客户端原始裸名（观测口径不分裂）。热生效（走 livecfg）。
+2. **白名单通配符**：`api_keys[].models` 现有精确匹配基础上加 `*` 后缀通配
+   （`glm-*` 放行整个 GLM 族；裸 `*` 放行全部）。抽成纯函数 `modelAllowedByWhitelist` 便于单测。
+3. **Per-Key RPM 限流**：`api_keys[].rpm` 字段（0=不限，零回归）。每把 key 独立
+   1 分钟固定窗口计数，超限返 429 + Retry-After 60。挂在 withAuth 鉴权后、业务前，
+   未配置 rpm 的 key 恒放行。新文件 `internal/server/keyrpm.go`。
+4. **Webhook 异常告警**：新包 `internal/alerting`。config `alerting` 段：
+   `webhook_url`（空=关闭）、`min_credit_threshold`（余额告急，0=关）、
+   `dedup_minutes`（去重窗口，默认 60）。触发点：余额耗尽（ErrHardCredit）、
+   会话死（ErrSessionDead/Disable）、账号被上游封（11140 request illegal）。
+   POST 通用 JSON `{text,type,account_uid,credits,...}`，fire-and-forget 异步，
+   Server酱/TG/飞书自定义机器人通用格式可直接接，特定平台格式走 n8n 中转。
+
+**面板配套**：
+- Key 管理弹窗加 RPM 输入框 + 卡片 RPM badge；models 字段 hint 加通配符说明。
+- 配置页加「模型映射」textarea（`from=to` 每行一条）+「异常告警 Webhook」
+  （URL + 余额阈值）。model_aliases 是 map 类型，collectConfig 单独序列化。
+
+**测试**：新增 11 项断言（applyModelAliases 5 例 / modelAllowedByWhitelist 9 例 /
+keyrpm 隔离与上限 / notifier 去重与阈值），20 包全绿 + vet/gofmt 干净。
+**注意**：gofmt 顺带收了 5 个历史文件的格式差异（Go 1.27 与旧版 gofmt 风格漂移），
+不是本轮功能改动。
+
+**未做（P1/P2 候选，下一轮再议）**：
+- P1：账号池分组（国内/国际版多池）、Per-Key 月 token 配额硬上限
+- P2：多上游级联（CodeBuddy 全挂时切备用 OpenAI 兼容源，架构级重构）
+
+## 六之六、P1 落地（2026-10-13 晚）
+
+**P1-A：Per-Key 月 token 配额硬上限**
+- `api_keys[].monthly_token_quota int64`，0=不限。
+- usage.Recorder 加 `monthly map["YYYY-MM|keyID"]int64`，Add() 按 keyID 累加（口径同 b.TT），
+  暴露 `MonthlyUsed(keyID)`；fileVersion 5→6，load/flush 序列化。
+- handler withAuth 里 RPM 检查后叠加：`used >= quota` 返 429 + `quota_exceeded` + Retry-After=86400。
+- 面板 Key 弹窗加「月 Token 配额」输入框 + 卡片 badge（`N.NM tok/月`）。
+
+**P1-B：账号池分组（多池路由）**
+- `auth.Auth.Group`：账号级分组标签，从 auth 文件顶层 `"group"` 键读取（嵌套/扁平形都读）；
+  SaveAtomic 非空才写回。空=default 池。
+- `api_keys[].group string`：key 级绑定，空=不限池。
+- pool.Pick 签名加 group 参数（保留 PickExcludingForRealm 旧 wrapper 零改测试），
+  新增 `PickExcludingForRealmGroup(tried, model, realm, group)`。
+  realmOK 闭包叠加 `group=="" || e.a.Group==group`。
+- handler 主选号（1106 行）改用新方法，传 `authKey.Group`。
+- 面板 Key 弹窗加「账号池分组」输入框 + 卡片 badge（`组：xxx`）。
+
+**验证**：20 包全绿，vet/gofmt/JS 语法干净；二进制 10.6MB。
+**兼容性**：group/quota 字段缺省零值（0/""）= 旧行为完全不变，老 config.json 直接跑。
+
+**下一轮候选**：
+1. P2 多上游级联（备用 OpenAI 兼容源）
+2. 其他用户反馈
+
 ## 六、关键架构事实（新对话必知）
 
 ### 鉴权（httpauth）

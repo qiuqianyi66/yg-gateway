@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="zh-CN" data-theme="dark">
+<html lang="zh-CN" data-theme="light">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -9,34 +9,24 @@
    冷石墨基调（仪表盘语言，非营销页）：底色分层 + 单一靛蓝强调（仅交互），
    语义色只给状态。等宽数字承载所有观测值，tabular-nums 对齐。 */
 :root {
-  --bg: #0c0e14; --surface: #14171f; --surface-2: #1a1e28; --raise: #202531;
-  --line: #262c3a; --line-soft: #1e232e;
-  --ink: #e8ebf2; --ink-2: #a8b0c2; --ink-3: #7d8699;
-  --accent: #6366f1; --accent-2: #8b5cf6; --accent-ink: #ffffff; --accent-soft: rgba(99,102,241,.15);
-  --accent-gradient: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
-  --ok: #10b981; --ok-soft: rgba(16,185,129,.14);
-  --warn: #f59e0b; --warn-soft: rgba(245,158,11,.14);
-  --bad: #ef4444; --bad-soft: rgba(239,68,68,.14);
-  --shadow: 0 1px 3px rgba(0,0,0,.4), 0 8px 24px -8px rgba(99,102,241,.15);
+  --bg: #f0f4f3; --surface: #ffffff; --surface-2: #f7f9f8; --raise: #ffffff;
+  --line: #e5eae8; --line-soft: #eef2f0;
+  --ink: #1a2332; --ink-2: #5a6a7a; --ink-3: #9aa8b5;
+  --accent: #10b981; --accent-2: #059669; --accent-ink: #ffffff; --accent-soft: rgba(16,185,129,.1);
+  --accent-gradient: linear-gradient(135deg, #10b981 0%, #059669 100%);
+  --ok: #10b981; --ok-soft: rgba(16,185,129,.12);
+  --warn: #f59e0b; --warn-soft: rgba(245,158,11,.12);
+  --bad: #ef4444; --bad-soft: rgba(239,68,68,.1);
+  --shadow: 0 1px 3px rgba(0,0,0,.04), 0 4px 16px -4px rgba(0,0,0,.06);
   --mono: ui-monospace, "Cascadia Mono", "SF Mono", Consolas, monospace;
   --sans: system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
-}
-[data-theme="light"] {
-  --bg: #f8fafc; --surface: #ffffff; --surface-2: #f1f5f9; --raise: #ffffff;
-  --line: #e2e8f0; --line-soft: #f1f5f9;
-  --ink: #0f172a; --ink-2: #475569; --ink-3: #64748b;
-  --accent: #4f46e5; --accent-2: #7c3aed; --accent-ink: #ffffff; --accent-soft: rgba(79,70,229,.08);
-  --accent-gradient: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%);
-  --ok: #059669; --ok-soft: rgba(5,150,105,.1);
-  --warn: #d97706; --warn-soft: rgba(217,119,6,.1);
-  --bad: #dc2626; --bad-soft: rgba(220,38,38,.08);
-  --shadow: 0 1px 3px rgba(15,23,42,.08), 0 8px 24px -12px rgba(79,70,229,.12);
 }
 * { box-sizing: border-box; margin: 0; padding: 0; }
 [hidden] { display: none !important; }
 html, body { height: 100%; }
 body {
-  background: var(--bg); color: var(--ink); font: 14px/1.55 var(--sans);
+  background: linear-gradient(180deg, #e8f5f0 0%, #f0f4f3 200px);
+  color: var(--ink); font: 14px/1.55 var(--sans);
   -webkit-font-smoothing: antialiased;
 }
 ::selection { background: var(--accent-soft); }
@@ -58,7 +48,7 @@ body {
 .skel-row .skel { height: 12px; }
 .skel-row .w-1 { width: 18%; } .skel-row .w-2 { width: 26%; }
 .skel-row .w-3 { width: 14%; } .skel-row .w-4 { width: 22%; }
-.skel-card { padding: 14px 16px; border: 1px solid var(--line-soft); border-radius: 10px; background: var(--surface-2); }
+.skel-card { padding: 14px 16px; border: 1px solid var(--line-soft); border-radius: 16px; background: var(--surface-2); }
 .skel-card .skel { height: 12px; margin-bottom: 9px; }
 .skel-card .skel:last-child { margin-bottom: 0; }
 .skel-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px; padding: 14px 17px; }
@@ -84,7 +74,7 @@ body {
 /* ── 壳层：左侧导航 + 主区 ─────────────────────────────────────────── */
 .shell { display: grid; grid-template-columns: 208px 1fr; min-height: 100vh; }
 .nav {
-  background: var(--surface); border-right: 1px solid var(--line);
+  background: #ffffff; border-right: 1px solid var(--line);
   display: flex; flex-direction: column; position: sticky; top: 0; height: 100vh;
 }
 .brand { padding: 20px 18px 16px; border-bottom: 1px solid var(--line-soft); }
@@ -97,10 +87,10 @@ body {
   position: relative; transition: all .15s;
 }
 .nav a:hover { background: var(--surface-2); color: var(--ink); }
-.nav a.on { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.nav a.on { background: #e8f5e9; color: #059669; font-weight: 600; }
 .nav a.on::before {
   content: ''; position: absolute; left: -11px; top: 50%; transform: translateY(-50%);
-  width: 3px; height: 20px; background: var(--accent-gradient); border-radius: 0 2px 2px 0;
+  width: 3px; height: 20px; background: #10b981; border-radius: 0 2px 2px 0;
 }
 .nav a svg { width: 15px; height: 15px; flex: none; opacity: .85; }
 .nav .sig { padding: 12px 16px; border-top: 1px solid var(--line-soft); font-size: 11.5px; color: var(--ink-3); }
@@ -183,7 +173,7 @@ body {
 .main { min-width: 0; display: flex; flex-direction: column; }
 .topbar {
   display: flex; align-items: center; gap: 14px; padding: 14px 24px;
-  border-bottom: 1px solid var(--line); background: var(--surface); position: sticky; top: 0; z-index: 20;
+  border-bottom: 1px solid var(--line); background: #ffffff; position: sticky; top: 0; z-index: 20;
 }
 .topbar h2, .topbar h1 { font-size: 15.5px; font-weight: 620; letter-spacing: -.01em; }
 .topbar .sep { color: var(--ink-3); }
@@ -235,7 +225,7 @@ button {
 }
 button:hover:not(:disabled) { border-color: var(--accent); }
 button:disabled { opacity: .5; cursor: default; }
-button.primary { background: var(--accent-gradient); border: none; color: var(--accent-ink); font-weight: 600; box-shadow: 0 2px 8px -2px rgba(99,102,241,.4); }
+button.primary { background: var(--accent-gradient); border: none; color: var(--accent-ink); font-weight: 600; box-shadow: 0 2px 8px -2px rgba(16,185,129,.3); }
 button.primary:hover:not(:disabled) { filter: brightness(1.1); box-shadow: 0 4px 12px -2px rgba(99,102,241,.5); }
 button.ghost { background: transparent; }
 button.danger { color: var(--bad); }
@@ -427,8 +417,9 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
     纯 CSS 实现，不依赖任何 UI 库（适配 go:embed 单文件）。 */
 #view-keys .key-list { display: flex; flex-direction: column; gap: 10px; }
 #view-keys .key-card {
-  background: var(--surface-2); border: 1px solid var(--line-soft);
-  border-radius: 10px; padding: 14px 17px; transition: border-color .15s, box-shadow .15s;
+  background: var(--surface); border: 1px solid var(--line-soft);
+  border-radius: 16px; padding: 16px 20px; transition: border-color .15s, box-shadow .15s;
+  box-shadow: var(--shadow);
 }
 #view-keys .key-card:hover { border-color: var(--line); box-shadow: var(--shadow); }
 #view-keys .key-card.disabled { opacity: .65; }
@@ -543,9 +534,9 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
   font-size: 12px; color: var(--ink-3); }
 .vc-acct:first-child { margin-top: 4px; }
 .vc-acct .nm { font-weight: 650; font-size: 13px; color: var(--ink-2); }
-.vc { border: 1px solid var(--line); border-radius: 11px; overflow: hidden; margin: 0 0 10px;
-  background: var(--surface); transition: border-color .15s; }
-.vc:hover { border-color: var(--accent); }
+.vc { border: 1px solid var(--line-soft); border-radius: 16px; overflow: hidden; margin: 0 0 12px;
+  background: var(--surface); box-shadow: var(--shadow); transition: border-color .15s; }
+.vc:hover { border-color: var(--line); }
 .vc .hd { display: flex; align-items: center; gap: 8px; padding: 12px 14px 4px; }
 .vc .hd .nm { font-weight: 640; font-size: 14px; }
 .vc .hd .tag { margin-left: auto; }
@@ -596,8 +587,9 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
   @media (max-width: 700px) { .kpis, .kpis.k4 { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
   .kpi {
     position: relative; min-width: 0; overflow: hidden;
-    background: var(--surface-2); border: 1px solid var(--line-soft);
-    border-radius: 10px; padding: 11px 14px 12px 16px;
+    background: var(--surface); border: 1px solid var(--line-soft);
+    border-radius: 16px; padding: 16px 18px;
+    box-shadow: var(--shadow);
   }
   .kpi::before {
     content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 3px;
@@ -1224,7 +1216,22 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
               <label class="fld">
                 <span class="lb">模型白名单</span>
                 <input id="kfModels" placeholder="留空 = 不限，逗号分隔（如 deepseek-v4-flash, glm-5.2）">
-                <span class="models-hint">留空 = 不限制（可调用全部模型）；填入模型 ID = 白名单</span>
+                <span class="models-hint">支持 * 后缀通配（如 glm-* 放行整个 GLM 族）；留空 = 不限制</span>
+              </label>
+              <label class="fld">
+                <span class="lb">速率限制 RPM</span>
+                <input id="kfRpm" type="number" min="0" placeholder="0 = 不限流">
+                <span class="models-hint">该 Key 每分钟最大请求数；0 = 不限（默认）。防止单 Key 打穿账号池</span>
+              </label>
+              <label class="fld">
+                <span class="lb">月 Token 配额</span>
+                <input id="kfMonthlyQuota" type="number" min="0" placeholder="0 = 不限">
+                <span class="models-hint">该 Key 当月累计 token 硬上限；0 = 不限（默认）。跨月自动重置</span>
+              </label>
+              <label class="fld">
+                <span class="lb">账号池分组</span>
+                <input id="kfGroup" type="text" placeholder="留空 = 不限池">
+                <span class="models-hint">该 Key 只能使用同组账号（在 auth 文件里写 <code>"group": "组名"</code>）；留空 = 所有号都能用</span>
               </label>
             </div>
           </div>
@@ -1451,6 +1458,27 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
             <label class="fld"><span class="lb">积分兑人民币汇率</span>
               <input name="usage_credit_cny_rate" type="number" step="0.001" min="0" placeholder="0.01">
               <span class="hint">1 积分 = 多少元；0 = 不显示 ¥ 折算。需重启生效</span></label>
+          </div>
+        </div>
+
+        <div class="box">
+          <header><h3>模型映射</h3></header>
+          <div class="pad">
+            <label class="fld"><span class="lb">客户端短名 → 上游实际名</span>
+              <textarea name="model_aliases" rows="4" placeholder="每行一条：客户端名=上游名&#10;glm=glm-5.3-flash&#10;ds=deepseek-v4-flash"></textarea>
+              <span class="hint">客户端写短名，网关转发前自动替换成上游认识的名；选号/白名单/用量仍按客户端原名统计</span></label>
+          </div>
+        </div>
+
+        <div class="box">
+          <header><h3>异常告警 Webhook</h3></header>
+          <div class="pad">
+            <label class="fld"><span class="lb">Webhook URL</span>
+              <input name="alerting_webhook_url" type="text" placeholder="https://sctapi.ftqq.com/xxx.send 或飞书/TG bot webhook">
+              <span class="hint">账号余额告急 / 被禁用 / 会话失效时 POST JSON 到该地址；留空 = 不告警</span></label>
+            <label class="fld"><span class="lb">余额告急阈值（积分）</span>
+              <input name="alerting_min_credit_threshold" type="number" min="0" placeholder="0 = 关闭">
+              <span class="hint">账号积分低于该值时发告警；0 = 关闭该触发</span></label>
           </div>
         </div>
 
