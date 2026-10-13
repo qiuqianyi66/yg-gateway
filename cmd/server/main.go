@@ -283,6 +283,7 @@ func main() {
 		Pool:           p,
 		Usage:          rec,
 		CreditCNYRate:  cfg.Usage.CreditCNYRate,
+		Pricing:        buildUSDPriceMap(cfg.Usage.Pricing),
 		RequestLog:     requestLog,
 		Upstream:    up,
 		Scheduler:   sch,
@@ -449,6 +450,19 @@ func panelListenPath(listen string) string {
 		}
 	}
 	return listen
+}
+
+// buildUSDPriceMap 把 config.ModelPrice 表转成 usage.USDPrice 表（装配期一次性）。
+// 两者同形但分属不同包，避免 usage 包依赖 cmd/server 的配置结构。
+func buildUSDPriceMap(in map[string]ModelPrice) map[string]usage.USDPrice {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]usage.USDPrice, len(in))
+	for k, v := range in {
+		out[k] = usage.USDPrice{Input: v.Input, Output: v.Output, CacheRead: v.CacheRead}
+	}
+	return out
 }
 
 // saveConfig 面板保存配置：校验 → 落盘 → 热应用 → 返回需重启的字段列表。

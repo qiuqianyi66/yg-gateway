@@ -1,4 +1,4 @@
-package server
+﻿package server
 
 import (
 	"crypto/sha256"
@@ -128,7 +128,7 @@ func TestE2EUsageKeyAttribution(t *testing.T) {
 		t.Fatalf("Key B 应 200, got %d body=%s", r.Code, r.Body.String())
 	}
 
-	snap := rec.SnapshotWindow(usage.Window{}, nil, map[string]string{"key-a": "甲", "key-b": "乙"}, nil)
+	snap := rec.SnapshotWindow(usage.Window{}, nil, map[string]string{"key-a": "甲", "key-b": "乙"}, nil, nil)
 	if len(snap.ByKey) != 2 {
 		t.Fatalf("by_key 应 2 行（key-a/key-b），got %+v", snap.ByKey)
 	}

@@ -82,6 +82,38 @@ type file struct {
 	Buckets []bucket `json:"buckets"`
 }
 
+// USDPrice 一个模型的 OpenRouter 公开参考价（$/1M tokens）。
+// 零值（全 0）表示该模型无定价 → 不折算美元，前端不显示 $ 列。
+// 仅用于展示"这些 token 按公开价买要花多少美元"（白嫖感知），
+// 不参与选号/计费/路由决策。
+type USDPrice struct {
+	Input     float64 // $/1M 非缓存 prompt tokens
+	Output    float64 // $/1M completion tokens
+	CacheRead float64 // $/1M 前缀缓存命中 tokens（0 = 不区分缓存，按 Input 全量计）
+}
+
+// bucketUSD 按桶内 token 量与给定价格折算美元价值。
+// 口径：prompt_tokens 通常包含 cached_tokens（OpenAI 兼容惯例），
+// 故非缓存 prompt = PT - CH，命中部分按 CacheRead 计价。
+// CacheRead 为 0 时不区分缓存（退化为 PT×Input + CT×Output）。
+// 价格全 0 → 返回 0（不伪造美元价值）。
+func bucketUSD(b *bucket, p USDPrice) float64 {
+	if p.Input == 0 && p.Output == 0 {
+		return 0
+	}
+	usd := float64(b.CT) * p.Output / 1e6
+	prompt := float64(b.PT)
+	if p.CacheRead > 0 && b.CH > 0 {
+		usd += float64(b.CH) * p.CacheRead / 1e6
+		prompt -= float64(b.CH)
+		if prompt < 0 {
+			prompt = 0
+		}
+	}
+	usd += prompt * p.Input / 1e6
+	return usd
+}
+
 // Recorder 并发安全的用量记录器。
 type Recorder struct {
 	mu      sync.Mutex
@@ -377,6 +409,10 @@ type Agg struct {
 	CacheHitRate       float64 `json:"cache_hit_rate,omitempty"`
 	AvgLatencyMs       float64 `json:"avg_latency_ms"`
 	AvgTPS             float64 `json:"avg_tokens_per_second"`
+	// USDValue 按 OpenRouter 参考价折算的美元价值（仅展示）。
+	// 0 = 该窗口内所有模型均无定价（不折算）。omitempty 让无定价的部署
+	// 响应体不出现这个键（向后兼容：旧前端不认识也不报错）。
+	USDValue float64 `json:"usd_value,omitempty"`
 }
 
 // aggAcc 是聚合过程中的累加器：Agg 只放已算好的结果，均值需要样本数才能
@@ -389,7 +425,7 @@ type aggAcc struct {
 	tpsSamples int64
 }
 
-func (g *aggAcc) add(b *bucket) {
+func (g *aggAcc) add(b *bucket, usd float64) {
 	g.Requests += b.Req
 	g.Errors += b.Err
 	g.PromptTokens += b.PT
@@ -404,6 +440,7 @@ func (g *aggAcc) add(b *bucket) {
 	g.latSamples += b.LatN
 	g.tpsSum += b.TPS
 	g.tpsSamples += b.TPSN
+	g.USDValue += usd
 }
 
 func (g *aggAcc) finish() Agg {
@@ -557,7 +594,7 @@ func (r *Recorder) Snapshot(hours int, nicks map[string]string) Snapshot {
 // SnapshotWithRates 与 Snapshot 相同，但允许为缺少历史倍率的旧桶提供当前
 // 模型倍率回填。currentRate 返回空串时该行按“未知倍率”聚合，不伪造价格。
 func (r *Recorder) SnapshotWithRates(hours int, nicks map[string]string, currentRate func(realm, model string) string) Snapshot {
-	return r.SnapshotWindow(Window{Hours: hours}, nicks, nil, currentRate)
+	return r.SnapshotWindow(Window{Hours: hours}, nicks, nil, currentRate, nil)
 }
 
 // SnapshotWindow 聚合**所选窗口内**的桶，产出面板一次拉取的全部用量视图数据。
@@ -570,7 +607,10 @@ func (r *Recorder) SnapshotWithRates(hours int, nicks map[string]string, current
 //
 // keyNames 是下游 Key ID→展示名映射（来自 livecfg 快照，仅用于展示，不含明文）。
 // nil 或缺失的 ID 展示为空名，前端回落显示 ID 本身。
-func (r *Recorder) SnapshotWindow(w Window, nicks map[string]string, keyNames map[string]string, currentRate func(realm, model string) string) Snapshot {
+// currentRate 同 SnapshotWithRates。
+// pricing 按**裸模型名**返回 OpenRouter 参考价（$/1M tokens），折算美元价值；
+// nil 或返回零值 = 该模型不折算（不伪造 $ 数）。纯展示层，不影响任何 token 计数。
+func (r *Recorder) SnapshotWindow(w Window, nicks map[string]string, keyNames map[string]string, currentRate func(realm, model string) string, pricing func(model string) USDPrice) Snapshot {
 	if r == nil {
 		return Snapshot{Generated: time.Now().Format(time.RFC3339)}
 	}
@@ -621,17 +661,24 @@ func (r *Recorder) SnapshotWindow(w Window, nicks map[string]string, keyNames ma
 			}
 		}
 		matched++
-		total.add(b)
+		// 美元折算（纯展示）：按桶内模型查 OpenRouter 参考价，无定价则 usd=0。
+		// 每桶只算一次，传给所有维度的累加器，保证 total/byModel/byAccount/
+		// byKey/时序的美元值同源。
+		var usd float64
+		if pricing != nil {
+			usd = bucketUSD(b, pricing(canonicalUsageModel(b.Model)))
+		}
+		total.add(b, usd)
 
 		if realmAgg[b.Realm] == nil {
 			realmAgg[b.Realm] = &aggAcc{}
 		}
-		realmAgg[b.Realm].add(b)
+		realmAgg[b.Realm].add(b, usd)
 
 		if acctAgg[b.UID] == nil {
 			acctAgg[b.UID] = &aggAcc{}
 		}
-		acctAgg[b.UID].add(b)
+		acctAgg[b.UID].add(b, usd)
 		// 一个账号只属于一个 realm，这里记下来供前端展示「域」列；
 		// keyed() 的 Realm 字段默认是空的（它按 key 分组，不知道 realm）。
 		if acctRealm[b.UID] == "" {
@@ -641,27 +688,27 @@ func (r *Recorder) SnapshotWindow(w Window, nicks map[string]string, keyNames ma
 		if modelAgg[b.Model] == nil {
 			modelAgg[b.Model] = &aggAcc{}
 		}
-		modelAgg[b.Model].add(b)
+		modelAgg[b.Model].add(b, usd)
 
 		// 按下游 Key 归因（ADR-001 F-005 二期）。空 Key（旧桶 / 未启用鉴权的放行
 		// 请求）统一落在同一个空键分组，由 label 函数翻成「未归因」展示名。
 		if keyAgg[b.Key] == nil {
 			keyAgg[b.Key] = &aggAcc{}
 		}
-		keyAgg[b.Key].add(b)
+		keyAgg[b.Key].add(b, usd)
 
 		if strings.HasPrefix(b.Scope, "h:") {
 			scope := strings.TrimPrefix(b.Scope, "h:")
 			if hourSeries[scope] == nil {
 				hourSeries[scope] = &aggAcc{}
 			}
-			hourSeries[scope].add(b)
+			hourSeries[scope].add(b, usd)
 		} else {
 			scope := strings.TrimPrefix(b.Scope, "d:")
 			if daySeries[scope] == nil {
 				daySeries[scope] = &aggAcc{}
 			}
-			daySeries[scope].add(b)
+			daySeries[scope].add(b, usd)
 		}
 		if b.CRN > 0 {
 			ca := creditAcctAgg[b.UID]

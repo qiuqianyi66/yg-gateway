@@ -1,4 +1,4 @@
-package usage
+﻿package usage
 
 import (
 	"encoding/json"
@@ -216,7 +216,7 @@ func TestSnapshotExplicitWindow(t *testing.T) {
 	s := r.SnapshotWindow(Window{
 		From: base.Add(2 * time.Hour),
 		To:   base.Add(3 * time.Hour),
-	}, nil, nil, nil)
+	}, nil, nil, nil, nil)
 	if s.Totals.Requests != 2 || s.Totals.PromptTokens != 20 {
 		t.Fatalf("显式区间 totals = %d/%d, want 2/20", s.Totals.Requests, s.Totals.PromptTokens)
 	}
@@ -231,7 +231,7 @@ func TestSnapshotExplicitWindow(t *testing.T) {
 	}
 
 	// 只有 From（「今天」的形态）：从该点起到最新，全量命中。
-	only := r.SnapshotWindow(Window{From: base.Add(4 * time.Hour)}, nil, nil, nil)
+	only := r.SnapshotWindow(Window{From: base.Add(4 * time.Hour)}, nil, nil, nil, nil)
 	if only.Totals.Requests != 2 {
 		t.Fatalf("仅 From 的 totals = %d, want 2", only.Totals.Requests)
 	}
@@ -240,7 +240,7 @@ func TestSnapshotExplicitWindow(t *testing.T) {
 	}
 
 	// 空窗口（From/To 全零且 Hours<=0）= 全部历史，与 Snapshot(0) 等价。
-	all := r.SnapshotWindow(Window{}, nil, nil, nil)
+	all := r.SnapshotWindow(Window{}, nil, nil, nil, nil)
 	if all.Totals.Requests != 6 {
 		t.Fatalf("全零窗口 totals = %d, want 6（全部历史）", all.Totals.Requests)
 	}
@@ -370,7 +370,7 @@ func TestByKeyAttribution(t *testing.T) {
 	// 未启用鉴权时放行的请求（无 KeyID）。
 	r.Add(base.Add(3*time.Minute), "cn", "u2", "glm-5.2", Delta{KeyID: ""}, true)
 
-	snap := r.SnapshotWindow(Window{}, nil, map[string]string{"friend-a": "朋友A", "friend-b": ""}, nil)
+	snap := r.SnapshotWindow(Window{}, nil, map[string]string{"friend-a": "朋友A", "friend-b": ""}, nil, nil)
 
 	if len(snap.ByKey) != 3 {
 		t.Fatalf("by_key 分组数 = %d, want 3（friend-a / friend-b / 未归因）: %+v", len(snap.ByKey), snap.ByKey)
@@ -433,7 +433,7 @@ func TestRollupPreservesKeyDimension(t *testing.T) {
 	r.Rollup(time.Now())
 
 	// 全部历史口径：折叠后的日桶必须仍按 Key 分开。
-	snap := r.SnapshotWindow(Window{}, nil, nil, nil)
+	snap := r.SnapshotWindow(Window{}, nil, nil, nil, nil)
 	if len(snap.ByKey) != 2 {
 		t.Fatalf("折叠后 by_key 分组数 = %d, want 2（k1/k2 不得合并）: %+v", len(snap.ByKey), snap.ByKey)
 	}
@@ -460,7 +460,7 @@ func TestKeyDimensionPersistRoundtrip(t *testing.T) {
 	r.Save()
 
 	r2 := New(dir + "/usage.json")
-	snap := r2.SnapshotWindow(Window{}, nil, nil, nil)
+	snap := r2.SnapshotWindow(Window{}, nil, nil, nil, nil)
 	if len(snap.ByKey) != 2 {
 		t.Fatalf("落盘往返后 by_key 分组数 = %d, want 2: %+v", len(snap.ByKey), snap.ByKey)
 	}
@@ -473,11 +473,50 @@ func TestKeyDimensionPersistRoundtrip(t *testing.T) {
 		t.Fatalf("写旧版文件失败: %v", err)
 	}
 	r3 := New(legacyPath)
-	old := r3.SnapshotWindow(Window{}, nil, nil, nil)
+	old := r3.SnapshotWindow(Window{}, nil, nil, nil, nil)
 	if len(old.ByKey) != 1 || old.ByKey[0].Key != "(未归因)" {
 		t.Fatalf("旧文件应全部归入未归因: %+v", old.ByKey)
 	}
 	if old.Totals.PromptTokens != 42 {
 		t.Fatalf("旧文件 token 应完整保留, got %d", old.Totals.PromptTokens)
+	}
+}
+
+// TestUSDValuePricing：pricing 参数生效时美元值正确折算，nil pricing 时为 0。
+func TestUSDValuePricing(t *testing.T) {
+	r := New("")
+	base := time.Date(2026, 10, 1, 10, 0, 0, 0, time.Local)
+	// 1000 prompt + 200 completion，其中 400 为 cache hit。
+	r.Add(base, "cn", "u1", "glm-5.2", Delta{
+		PromptTokens:     1000, HasPromptTokens: true,
+		CompletionTokens: 200, HasCompletion: true,
+		CacheHitTokens:   400, HasCacheTokens: true,
+	}, true)
+
+	// 无 pricing → 美元值为 0。
+	s0 := r.SnapshotWindow(Window{}, nil, nil, nil, nil)
+	if s0.Totals.USDValue != 0 {
+		t.Fatalf("nil pricing 时 USDValue 应为 0, got %f", s0.Totals.USDValue)
+	}
+
+	// 有 pricing：input $0.6/1M, output $2.4/1M, cache_read $0.06/1M。
+	// 非缓存 prompt = 1000-400 = 600 → 600*0.6/1e6 = 0.00036
+	// cache hit 400*0.06/1e6 = 0.000024
+	// completion 200*2.4/1e6 = 0.00048
+	// 合计 = 0.000864
+	pricing := func(model string) USDPrice {
+		return USDPrice{Input: 0.6, Output: 2.4, CacheRead: 0.06}
+	}
+	s := r.SnapshotWindow(Window{}, nil, nil, nil, pricing)
+	want := 0.00036 + 0.000024 + 0.00048
+	if diff := s.Totals.USDValue - want; diff > 1e-9 || diff < -1e-9 {
+		t.Fatalf("USDValue = %f, want %f", s.Totals.USDValue, want)
+	}
+	// 按模型维度也应带同一值。
+	if len(s.ByModel) != 1 {
+		t.Fatalf("by_model 行数 = %d, want 1", len(s.ByModel))
+	}
+	if s.ByModel[0].USDValue != want {
+		t.Fatalf("by_model USDValue = %f, want %f", s.ByModel[0].USDValue, want)
 	}
 }
