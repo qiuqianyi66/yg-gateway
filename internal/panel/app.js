@@ -1588,6 +1588,11 @@ let keyEditing = null;    // 当前编辑中的 Key 对象（null=未编辑）
 let keyIsNew = false;     // true=新增模式, false=编辑模式
 let keySaving = false;    // 提交锁：防连点建重复 Key
 let keyLoadFailed = false; // 取数失败标记（区分空状态）
+// 明文缓存：创建/重置后本会话内可找回完整接入配置（刷新即清）。
+// 服务端只存哈希，关弹窗后只有这里还能拿到明文，是「接入配置」弹窗状态 A 的依据。
+let lastKeyPlaintext = null;
+let lastKeyPlaintextKid = null; // 明文对应的 Key id（防止串卡）
+let keyCfgKid = null;     // 当前「接入配置」弹窗打开的 Key id
 
 async function loadKeys() {
   try {
@@ -1696,6 +1701,7 @@ function keyCardHTML(k) {
           <input type="checkbox" data-action="toggle" data-kid="${id}" ${en ? 'checked' : ''}>
           <span class="switch-track"></span>
         </label>
+        <button class="xs" data-action="importcfg" data-kid="${id}">接入配置</button>
         <button class="xs" data-action="edit" data-kid="${id}">编辑</button>
         <button class="xs danger" data-action="delete" data-kid="${id}">删除</button>
       </div>
@@ -1707,6 +1713,9 @@ function attachKeyCardEvents() {
   const list = $('keyBody');
   list.querySelectorAll('[data-action="toggle"]').forEach(el => {
     el.onchange = () => toggleKeyEnabled(el.dataset.kid, el.checked);
+  });
+  list.querySelectorAll('[data-action="importcfg"]').forEach(el => {
+    el.onclick = () => openKeyCfg(el.dataset.kid);
   });
   list.querySelectorAll('[data-action="edit"]').forEach(el => {
     el.onclick = () => openKeyDialog(el.dataset.kid);
@@ -1865,7 +1874,7 @@ async function saveKeyFromDialog() {
     // 新增且有明文返回 → 展示一次性明文弹窗
     if (keyIsNew && entry.key) {
       closeKeyDialog();
-      showKeyPlaintext(entry.key);
+      showKeyPlaintext(entry.key, entry.id);
     } else {
       closeKeyDialog();
     }
@@ -1934,11 +1943,14 @@ function buildKeyImportConfigs(plaintext, baseURL) {
   };
 }
 
-function showKeyPlaintext(plaintext) {
+function showKeyPlaintext(plaintext, kid) {
   $('keyPlaintext').textContent = plaintext;
   const cfgs = buildKeyImportConfigs(plaintext, location.protocol + '//' + location.host);
   $('cfgOpenAI').textContent = cfgs.openai;
   $('cfgAnthropic').textContent = cfgs.anthropic;
+  // 缓存明文：创建/重置后本会话内，Key 卡片「接入配置」可直接回看，不依赖弹窗。
+  lastKeyPlaintext = plaintext;
+  lastKeyPlaintextKid = kid || null;
   showVeil('keyShowVeil');
 }
 
@@ -1975,6 +1987,78 @@ async function copyCfgText(elId) {
   } catch (e) { toast('复制失败：' + e.message, 'err'); }
 }
 
+/* ── 接入配置弹窗（Key 卡片入口）────────────────────────────────── */
+
+// 打开某把 Key 的「接入配置」弹窗。
+// 状态 A：本会话缓存了该 Key 的明文（刚创建/刚重置）→ 直接展示完整配置；
+// 状态 B：明文已不可恢复（服务端只存哈希）→ 提示 + 提供「重置密钥」找回。
+function openKeyCfg(kid) {
+  const k = keyData.find(x => x.id === kid);
+  if (!k) return;
+  keyCfgKid = kid;
+  const label = (k.name || k.id);
+  $('keyCfgHint').textContent = 'Key「' + label + '」# ' + kid;
+  const plain = (lastKeyPlaintextKid === kid && lastKeyPlaintext) ? lastKeyPlaintext : null;
+  if (plain) {
+    $('keyCfgLost').hidden = true;
+    $('keyCfgHas').hidden = false;
+    $('keyCfgPlaintext').textContent = plain;
+    const cfgs = buildKeyImportConfigs(plain, location.protocol + '//' + location.host);
+    $('keyCfgOpenAI').textContent = cfgs.openai;
+    $('keyCfgAnthropic').textContent = cfgs.anthropic;
+  } else {
+    $('keyCfgHas').hidden = true;
+    $('keyCfgLost').hidden = false;
+  }
+  showVeil('keyCfgVeil');
+}
+
+// 重置密钥：生成新密钥并调后端专用接口（服务端只改目标条目，其他 Key 不动）。
+// 成功后缓存明文，弹窗立即切到状态 A 展示新配置；旧密钥已失效。
+async function resetKeySecret() {
+  const kid = keyCfgKid;
+  const k = keyData.find(x => x.id === kid);
+  const label = (k && (k.name || k.id)) || kid;
+  if (!confirm(`重置 Key「${label}」的密钥？\n\n将生成新密钥并立即生效，旧密钥作废——已配置到其他 agent / 客户端里的旧 Key 将无法再用。`)) return;
+  const newKey = genApiKey();
+  try {
+    await api('key-reset', { method: 'POST', body: JSON.stringify({ id: kid, key: newKey }) });
+    lastKeyPlaintext = newKey;
+    lastKeyPlaintextKid = kid;
+    $('keyCfgLost').hidden = true;
+    $('keyCfgHas').hidden = false;
+    $('keyCfgPlaintext').textContent = newKey;
+    const cfgs = buildKeyImportConfigs(newKey, location.protocol + '//' + location.host);
+    $('keyCfgOpenAI').textContent = cfgs.openai;
+    $('keyCfgAnthropic').textContent = cfgs.anthropic;
+    toast('密钥已重置，旧 Key 已失效', 'ok');
+    loadKeys();
+  } catch (e) {
+    toast('重置失败：' + e.message, 'err');
+  }
+}
+
+// 生成 .env 配置文件内容（OpenAI + Anthropic 两段合并），供「下载配置文件」落盘。
+function buildEnvFile(plaintext, baseURL) {
+  const cfgs = buildKeyImportConfigs(plaintext, baseURL);
+  return '# yg-gateway 接入配置（OpenAI + Anthropic 协议）\n' + cfgs.openai + '\n\n' + cfgs.anthropic + '\n';
+}
+
+// 创建弹窗「下载 .env」：把一次性明文落成可随时导入的配置文件。
+function downloadEnvFile() {
+  const plain = $('keyPlaintext').textContent;
+  if (!plain) return;
+  const env = buildEnvFile(plain, location.protocol + '//' + location.host);
+  const blob = new Blob([env], { type: 'text/plain;charset=utf-8' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'yg-gateway-import.env';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(a.href);
+}
+
 /* ── 弹窗辅助（veil 切换）────────────────────────────────────────── */
 
 function showVeil(id) { $(id).classList.add('on'); }
@@ -1996,6 +2080,11 @@ $('btnKeyCopy').onclick = copyKeyPlaintext;
 $('btnKeyShowClose').onclick = () => hideVeil('keyShowVeil');
 $('btnCopyCfgOpenAI').onclick = () => copyCfgText('cfgOpenAI');
 $('btnCopyCfgAnthropic').onclick = () => copyCfgText('cfgAnthropic');
+$('btnCfgDownload').onclick = downloadEnvFile;
+$('btnKeyCfgClose').onclick = () => hideVeil('keyCfgVeil');
+$('btnKeyReset').onclick = resetKeySecret;
+$('btnCopyKeyCfgOpenAI').onclick = () => copyCfgText('keyCfgOpenAI');
+$('btnCopyKeyCfgAnthropic').onclick = () => copyCfgText('keyCfgAnthropic');
 
 // realm 胶囊切换
 $('kfRealmPills').querySelectorAll('.realm-pill').forEach(p => {
@@ -2020,6 +2109,7 @@ const VEIL_CLOSERS = {
   vcVeil: () => $('vcVeil').classList.remove('on'),
   keyEditVeil: () => closeKeyDialog(),
   keyShowVeil: () => hideVeil('keyShowVeil'),
+  keyCfgVeil: () => hideVeil('keyCfgVeil'),
   keyVeil: () => $('keyVeil').classList.remove('on'), // data-lock 时由下方逻辑跳过
   pgVeil: () => { pgStop(); $('pgVeil').classList.remove('on'); },
 };

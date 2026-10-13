@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -322,6 +323,11 @@ func main() {
 		SaveConfig: func(raw []byte) ([]string, error) {
 			return saveConfig(raw, *cfgPath, live, p, up, sch)
 		},
+		// Key 重置（面板 Key 卡片「接入配置 → 重置密钥」）：前端不持有明文，
+		// 走服务端直接改目标条目（见 resetAPIKey），其他 Key 原样保留。
+		ResetKey: func(id, newKey string) error {
+			return resetAPIKey(*cfgPath, id, newKey, live, p, up, sch)
+		},
 	})
 	// 成长任务队列每日自动执行（与「执行全部待办」同管线）：Sequential 族零点解锁后
 	// 无需手动扫描；hook 返回即启动（异步执行），已在跑时内部跳过。
@@ -592,6 +598,58 @@ func saveConfig(raw []byte, path string, live *livecfg.Holder, p *pool.Pool, up 
 	sch.SetIncludeDisabledInTasks(newCfg.Schedule.IncludeDisabledInTasks)
 
 	return restartRequiredFields(newCfg), nil
+}
+
+// resetAPIKey 重置指定 Key 的密钥（面板 Key 卡片「接入配置 → 重置密钥」）。
+// 前端不持有明文（loadConfigMasked 脱敏），全量提交 api_keys 会误删其他 Key
+// （normalizeAPIKeys 过滤空 key 条目），故由服务端直接从 config 文件改目标条目：
+// 读文件 → 改该 id 的 key → 序列化 → saveConfig（同一套校验+落盘+热应用，
+// 鉴权索引重建走 buildAuthSnapshot）。其他 Key 与顶层 api_key 原样保留。
+func resetAPIKey(path, id, newKey string, live *livecfg.Holder, p *pool.Pool, up *upstream.Client, sch *scheduler.Scheduler) error {
+	id = strings.TrimSpace(id)
+	newKey = strings.TrimSpace(newKey)
+	if id == "" {
+		return fmt.Errorf("id 不能为空")
+	}
+	if newKey == "" {
+		return fmt.Errorf("新密钥不能为空")
+	}
+	if id == httpauth.SingleKeyID {
+		return fmt.Errorf("id %q 是保留名（旧版单 api_key 的合成身份），不可重置", id)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("read config: %w", err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return fmt.Errorf("parse config: %w", err)
+	}
+	keys, ok := m["api_keys"].([]any)
+	if !ok {
+		return fmt.Errorf("未找到 Key %q（config 无 api_keys）", id)
+	}
+	found := false
+	for _, k := range keys {
+		km, ok := k.(map[string]any)
+		if !ok {
+			continue
+		}
+		if km["id"] == id {
+			km["key"] = newKey
+			found = true
+			break
+		}
+	}
+	if !found {
+		return fmt.Errorf("未找到 id=%q 的 Key", id)
+	}
+	out, err := json.MarshalIndent(m, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal config: %w", err)
+	}
+	_, err = saveConfig(out, path, live, p, up, sch)
+	return err
 }
 
 // loadConfigMasked 加载配置并脱敏密钥明文，供面板 GET /panel/api/config 回显。

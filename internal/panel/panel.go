@@ -54,6 +54,12 @@ type Config struct {
 	// ApplyConfig 闭包完成热生效（池参数/排程/密钥/脱敏）。error 时配置不写盘。
 	SaveConfig func(raw []byte) (restartRequired []string, err error)
 
+	// ResetKey 重置指定 Key 的密钥（生成新密钥替代旧的，旧密钥立即失效）：
+	// 只在服务端 config 里改目标条目，其他 Key 与顶层 api_key 原样保留。
+	// 前端不持有明文，不能走 SaveConfig 全量提交（会误删其他 Key），故单独注入。
+	// nil 时对应接口返回 501。
+	ResetKey func(id, newKey string) error
+
 	// StickyCount 返回粘性会话绑定数；nil 时报告 0。
 	StickyCount func() int
 	// SessionSnapshot 返回当前粘性会话详情列表（key → uid + last_active）；nil 时不返回。
@@ -196,6 +202,7 @@ func (p *Panel) routes() {
 	p.mux.HandleFunc("GET /panel/api/model_probes", p.withAuth(p.modelProbes))
 	p.mux.HandleFunc("GET /panel/api/config", p.withAuth(p.getConfig))
 	p.mux.HandleFunc("POST /panel/api/config", p.withAuth(p.saveConfig))
+	p.mux.HandleFunc("POST /panel/api/key-reset", p.withAuth(p.keyReset))
 }
 
 // ServeHTTP 统一入口：先写安全响应头再分发，保证页面、静态资源、API
