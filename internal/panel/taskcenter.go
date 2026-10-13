@@ -126,6 +126,7 @@ type queueItem struct {
 	Nickname string `json:"nickname"`
 	Kind     string `json:"kind"` // growth
 	Code     string `json:"code"`
+	Title    string `json:"title,omitempty"` // 中文任务名（扫描时带出，刷新后仍可见）
 	Status   string `json:"status"` // pending | running | done | skipped | error
 	Message  string `json:"message,omitempty"`
 }
@@ -265,7 +266,7 @@ func (p *Panel) startGrowthQueue(concurrency int, growth bool) (started bool, to
 	var items []queueItem
 	for _, one := range accts {
 		for _, t := range one.grow {
-			items = append(items, queueItem{UID: one.a.UID, Nickname: one.a.Nickname, Kind: "growth", Code: t.TaskCode, Status: "pending"})
+			items = append(items, queueItem{UID: one.a.UID, Nickname: one.a.Nickname, Kind: "growth", Code: t.TaskCode, Title: t.Title, Status: "pending"})
 		}
 	}
 	if len(items) == 0 {
