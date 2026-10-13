@@ -1236,3 +1236,83 @@ func TestIndexHTMLKeyImportBlocks(t *testing.T) {
 		}
 	}
 }
+
+// 「下载 .env」纯函数：OpenAI + Anthropic 两段配置合并成一个 .env 文件内容，
+// 段与段之间空行分隔、头部有说明行，key 原样注入（不可被转义或截断）。
+func TestAppJSBuildEnvFile(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node not installed; env file test skipped")
+	}
+	script := `const fs = require('fs');
+const vm = require('vm');
+const src = fs.readFileSync(process.argv[2], 'utf8');
+const start = src.indexOf('function buildKeyImportConfigs');
+const end = src.indexOf('function downloadEnvFile');
+if (start < 0 || end < 0) throw new Error('buildEnvFile block not found');
+const ctx = { String };
+vm.createContext(ctx);
+vm.runInContext(src.slice(start, end) + '\nthis.buildKeyImportConfigs = buildKeyImportConfigs; this.buildEnvFile = buildEnvFile;', ctx);
+const out = ctx.buildEnvFile('sk-test-key-123', 'http://127.0.0.1:7863/');
+process.stdout.write(JSON.stringify(out));`
+	f, err := os.CreateTemp(t.TempDir(), "key-env-file-*.cjs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString(script); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	out, err := exec.Command(node, f.Name(), "app.js").CombinedOutput()
+	if err != nil {
+		t.Fatalf("buildEnvFile node test failed: %v\n%s", err, out)
+	}
+	const want = `"# yg-gateway 接入配置（OpenAI + Anthropic 协议）\n# 可用模型：GET http://127.0.0.1:7863/v1/models 查看\nOPENAI_BASE_URL=http://127.0.0.1:7863/v1\nOPENAI_API_KEY=sk-test-key-123\n\n# 可用模型：GET http://127.0.0.1:7863/v1/models 查看\nANTHROPIC_BASE_URL=http://127.0.0.1:7863\nANTHROPIC_AUTH_TOKEN=sk-test-key-123\n"`
+	if strings.TrimSpace(string(out)) != want {
+		t.Fatalf("buildEnvFile=%s\nwant %s", out, want)
+	}
+}
+
+// 「接入配置」兜底（本轮功能）：卡片入口按钮、两态弹窗（有明文/无明文）、
+// 重置密钥按钮与下载 .env 按钮必须存在于 index.html，且 app.js 有对应
+// 逻辑片段与绑定——防止「弹窗误关后配置拿不回」的缺口回归。
+func TestIndexHTMLKeyCfgAndReset(t *testing.T) {
+	html, err := os.ReadFile("index.html")
+	if err != nil {
+		t.Fatalf("read index.html: %v", err)
+	}
+	h := string(html)
+	for _, id := range []string{
+		`id="keyCfgVeil"`, `id="keyCfgHas"`, `id="keyCfgLost"`,
+		`id="btnKeyReset"`, `id="btnKeyCfgClose"`, `id="btnCfgDownload"`,
+		`id="keyCfgOpenAI"`, `id="keyCfgAnthropic"`,
+		`id="btnCopyKeyCfgOpenAI"`, `id="btnCopyKeyCfgAnthropic"`,
+	} {
+		if !strings.Contains(h, id) {
+			t.Errorf("index.html 缺接入配置元素 %s", id)
+		}
+	}
+
+	raw, err := os.ReadFile("app.js")
+	if err != nil {
+		t.Fatalf("read app.js: %v", err)
+	}
+	js := string(raw)
+	for _, frag := range []string{
+		`data-action="importcfg"`,
+		"function openKeyCfg",
+		"function resetKeySecret",
+		"function downloadEnvFile",
+		"function buildEnvFile",
+		"api('key-reset'",
+		"lastKeyPlaintextKid",
+		"$('btnKeyReset').onclick",
+		"$('btnCfgDownload').onclick",
+		"$('btnCopyKeyCfgOpenAI').onclick",
+		"keyCfgVeil: () => hideVeil('keyCfgVeil')",
+	} {
+		if !strings.Contains(js, frag) {
+			t.Errorf("app.js 缺接入配置兜底逻辑片段：%s", frag)
+		}
+	}
+}

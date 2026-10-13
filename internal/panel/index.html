@@ -1260,7 +1260,7 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
         <div class="dlg key-dlg">
           <header>
             <h3>Key 已创建</h3>
-            <div class="hint">请立即复制保存，关闭后无法再次查看完整密钥</div>
+            <div class="hint">请立即复制或下载保存，关闭后无法再次查看完整密钥</div>
           </header>
           <div class="body">
             <code class="key-plaintext" id="keyPlaintext"></code>
@@ -1283,8 +1283,47 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
           </div>
           <footer>
             <span class="grow"></span>
+            <button id="btnCfgDownload">下载 .env</button>
             <button id="btnKeyCopy">复制密钥</button>
             <button class="primary" id="btnKeyShowClose">已保存，关闭</button>
+          </footer>
+        </div>
+      </div>
+
+      <!-- 接入配置弹窗（Key 卡片入口；无明文时提供重置密钥） -->
+      <div class="veil" id="keyCfgVeil">
+        <div class="dlg key-dlg">
+          <header>
+            <h3>接入配置</h3>
+            <div class="hint" id="keyCfgHint"></div>
+          </header>
+          <div class="body">
+            <div id="keyCfgHas">
+              <code class="key-plaintext" id="keyCfgPlaintext"></code>
+              <div class="key-cfg-block">
+                <div class="key-cfg-head">OpenAI 协议（Codex / Cursor / OpenWebUI / SDK）
+                  <button type="button" class="xs" id="btnCopyKeyCfgOpenAI">复制 OpenAI 配置</button>
+                </div>
+                <pre class="key-cfg-pre" id="keyCfgOpenAI"></pre>
+              </div>
+              <div class="key-cfg-block">
+                <div class="key-cfg-head">Anthropic 协议（Claude Code）
+                  <button type="button" class="xs" id="btnCopyKeyCfgAnthropic">复制 Anthropic 配置</button>
+                </div>
+                <pre class="key-cfg-pre" id="keyCfgAnthropic"></pre>
+              </div>
+            </div>
+            <div id="keyCfgLost" hidden>
+              <div class="key-plaintext-warning">
+                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M8 1.8 14 13H2z"/><path d="M8 6v3M8 11.5v.5"/></svg>
+                <span>该 Key 的密钥明文仅创建时展示一次，服务端只存哈希，已不可恢复。如需接入配置，可重置密钥重新生成（旧密钥立即失效）。</span>
+              </div>
+            </div>
+          </div>
+          <footer>
+            <span class="grow"></span>
+            <button id="btnKeyReset">重置密钥</button>
+            <button class="primary" id="btnKeyCfgClose">关闭</button>
           </footer>
         </div>
       </div>

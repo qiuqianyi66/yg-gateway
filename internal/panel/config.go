@@ -6,9 +6,11 @@
 package panel
 
 import (
+	"encoding/json"
 	"io"
 	"log"
 	"net/http"
+	"strings"
 )
 
 // getConfig 返回当前配置文件内容与路径（前端按 schema 渲染表单）。
@@ -54,4 +56,43 @@ func (p *Panel) saveConfig(w http.ResponseWriter, r *http.Request) {
 		"ok":               true,
 		"restart_required": restartRequired,
 	})
+}
+
+// keyReset 重置某把 Key 的密钥：body {id, key}（key 为新密钥明文，前端生成）。
+// 经注入的 ResetKey 闭包在服务端 config 里只改目标条目并走完整校验+落盘+热应用；
+// 旧密钥立即失效。不回显新密钥（前端自持），只确认 ok。
+func (p *Panel) keyReset(w http.ResponseWriter, r *http.Request) {
+	if p.cfg.ResetKey == nil {
+		writeErr(w, http.StatusNotImplemented, "key reset api not available")
+		return
+	}
+	raw, err := io.ReadAll(io.LimitReader(r.Body, 64<<10))
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "read body: "+err.Error())
+		return
+	}
+	var req struct {
+		ID  string `json:"id"`
+		Key string `json:"key"`
+	}
+	if err := json.Unmarshal(raw, &req); err != nil {
+		writeErr(w, http.StatusBadRequest, "parse body: "+err.Error())
+		return
+	}
+	req.ID = strings.TrimSpace(req.ID)
+	req.Key = strings.TrimSpace(req.Key)
+	if req.ID == "" {
+		writeErr(w, http.StatusBadRequest, "id 不能为空")
+		return
+	}
+	if req.Key == "" {
+		writeErr(w, http.StatusBadRequest, "新密钥不能为空")
+		return
+	}
+	if err := p.cfg.ResetKey(req.ID, req.Key); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	log.Printf("panel: Key %q 密钥已重置（旧密钥立即失效）", req.ID)
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "id": req.ID})
 }
