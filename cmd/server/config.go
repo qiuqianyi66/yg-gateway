@@ -86,6 +86,26 @@ type Config struct {
 		DedupMinutes int `json:"dedup_minutes"`
 	} `json:"alerting"`
 
+	// Fallback 备用上游级联（P2）：CodeBuddy 账号池全挂（选号耗尽）时，
+	// 把请求原样转发到一个独立的 OpenAI 兼容端点（DeepSeek 官方 / OpenRouter /
+	// 任意 OpenAI 兼容 API）。空配置 = 关闭（零回归）。
+	//
+	// 触发条件：选号走完所有账号仍未拿到可用号（acct==nil 出循环）。
+	// 只对 Models 白名单里列出的模型生效（避免把 CodeBuddy 专属模型发到备用源 404）。
+	Fallback struct {
+		// Enabled 是否启用备用级联。
+		Enabled bool `json:"enabled"`
+		// BaseURL 备用端点 base URL（如 https://api.deepseek.com/v1）。
+		// 最终请求 = {BaseURL}/chat/completions。
+		BaseURL string `json:"base_url"`
+		// APIKey 备用端点的 Bearer token（sk-xxx）。
+		APIKey string `json:"api_key"`
+		// Models 备用源支持的模型白名单。请求模型不在列表里 → 不切备用，照旧报错。
+		Models []string `json:"models"`
+		// TimeoutSeconds 备用源请求超时。<=0 回落 120。
+		TimeoutSeconds int `json:"timeout_seconds"`
+	} `json:"fallback"`
+
 	Panel struct {
 		// PackageDetailLimit 积分构成页单账号默认展示的最近到期包数；<=0 回落 5。
 		PackageDetailLimit int `json:"package_detail_limit"`
