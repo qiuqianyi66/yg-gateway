@@ -97,6 +97,9 @@ type Pool struct {
 	// lastUsed 墙钟会全等）。atomic（ADR-005 D-500）：pick 改读锁后由读锁路径
 	// Add(1) 分配序号，普通字段跨读锁写会成数据竞争。
 	pickSeq atomic.Uint64
+	// stickyPaidHits 粘性命中"已实测收费号且池里有免费/未知号"的累计次数。
+	// 纯观测：不自动换号（保上游 prompt 缓存），只让面板看到"哪些会话钉在收费号上"。
+	stickyPaidHits atomic.Int64
 	// stopCh 关闭信号：Close 关闭它使 startFlusher 的后台 goroutine 退出。
 	// nil = 未启动 flusher（stateFp 为空时 New 不起 flusher）。
 	stopCh chan struct{}

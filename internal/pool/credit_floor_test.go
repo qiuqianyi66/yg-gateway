@@ -385,3 +385,30 @@ func TestCreditFloorStickyBlockedByCatalogRate(t *testing.T) {
 		t.Fatal("回血越过 floor 后粘性号应恢复可选，got nil")
 	}
 }
+
+// TestStickyPaidHitsCounter 粘性命中收费号且池里有免费/未知号时计数器 +1。
+func TestStickyPaidHitsCounter(t *testing.T) {
+	p := New("")
+	// sticky 号在 paid-model 上实测收费（CostPer1k>0），且积分充足不触发 floor。
+	p.Add(&auth.Auth{UID: "sticky"})
+	p.SetCredits("sticky", 5000, 0)
+	p.NoteModelCost("sticky", "paid-model", 2.9, 1000)
+	// free 号在该模型上免费（tier 0），是"更便宜的健康号"。
+	p.Add(&auth.Auth{UID: "free"})
+	p.SetCredits("free", 5000, 0)
+	p.NoteModelCost("free", "paid-model", 0, 1000)
+
+	if a := p.PickByUIDForModel("sticky", "paid-model"); a == nil {
+		t.Fatal("粘性号应出票（积分充足）")
+	}
+	if got := p.StickyPaidHits(); got != 1 {
+		t.Fatalf("StickyPaidHits = %d, want 1（收费号命中且有免费号存在）", got)
+	}
+
+	// 绑定号在 free-model 上免费 → 不计数。
+	p.NoteModelCost("sticky", "free-model", 0, 1000)
+	p.PickByUIDForModel("sticky", "free-model")
+	if got := p.StickyPaidHits(); got != 1 {
+		t.Fatalf("免费号命中不应计数，StickyPaidHits = %d, want 1", got)
+	}
+}
