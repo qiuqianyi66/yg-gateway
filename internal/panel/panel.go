@@ -64,6 +64,9 @@ type Config struct {
 	// CreditCNYRate 积分兑人民币汇率（1 积分 = 多少元）。纯展示层：
 	// 用量页积分旁折成人民币。0 = 不折算（前端不显示 ¥）。
 	CreditCNYRate float64
+	// Pricing 模型美元参考价（$/1M tokens），key 为裸模型名。nil/空 = 不折算
+	// 美元（前端不显示 $）。纯展示层，不参与选号/计费。
+	Pricing map[string]usage.USDPrice
 	// RequestLog 请求指标与归档（nil = 对应接口返回 501）。
 	RequestLog *reqlog.Recorder
 
@@ -813,12 +816,19 @@ func (p *Panel) usage(w http.ResponseWriter, r *http.Request) {
 	if p.cfg.Upstream != nil {
 		currentRate = p.cfg.Upstream.ModelRate
 	}
+	// 美元折算 lookup：按裸模型名查参考价，无定价返回零值（不折算）。
+	var pricing func(model string) usage.USDPrice
+	if p.cfg.Pricing != nil {
+		pricing = func(model string) usage.USDPrice {
+			return p.cfg.Pricing[model]
+		}
+	}
 	writeJSON(w, http.StatusOK, struct {
 		usage.Snapshot
 		// CNYRate 积分兑人民币汇率（1 积分 = 多少元）。嵌入 Snapshot 后前端
 		// 原有字段不变，只多一个 cny_rate 供折算显示。
 		CNYRate float64 `json:"cny_rate"`
-	}{p.cfg.Usage.SnapshotWindow(win, nicks, keyNames, currentRate), p.cfg.CreditCNYRate})
+	}{p.cfg.Usage.SnapshotWindow(win, nicks, keyNames, currentRate, pricing), p.cfg.CreditCNYRate})
 }
 
 // keyNameMap 当前生效的下游 Key ID→展示名映射（livecfg 快照，无明文）。

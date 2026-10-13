@@ -2939,6 +2939,7 @@ function usRow(name, sub, a, mid, withPerf) {
     '<td class="num">' + fmtTok(a.completion_tokens) + '</td>' +
     '<td class="num">' + fmtTok(a.total_tokens) +
       usMixBar(a.prompt_tokens, a.completion_tokens, a.total_tokens) + '</td>' +
+    '<td class="num">' + fmtUSD(a.usd_value) + '</td>' +
     (withPerf
       ? '<td class="num">' + fmtMs(a.avg_latency_ms) + '</td>' +
         '<td class="num">' + fmtRate(a.avg_tokens_per_second) + '</td>'
@@ -2946,15 +2947,25 @@ function usRow(name, sub, a, mid, withPerf) {
     '</tr>';
 }
 
+/* fmtUSD 把美元参考价折算值格式化为紧凑字符串。
+   无定价（0/缺失）→ "—"；小额保留两位小数；大额（≥$100）一位小数 + k 后缀。 */
+function fmtUSD(v) {
+  const n = Number(v || 0);
+  if (!Number.isFinite(n) || n <= 0) return '<span class="muted">—</span>';
+  if (n >= 1000) return '$' + (n / 1000).toFixed(1) + 'k';
+  if (n >= 100) return '$' + n.toFixed(1);
+  return '$' + n.toFixed(3);
+}
+
 /* ── 用量明细：三个维度共用一张表 + 页内切换 ──────────────────────────
    账号 / 模型 / 域三张表此前各自占一个 box，页面纵向拉得很长且表头结构几乎一样。
    现在合成一个 box：表头由维度定义生成，行渲染复用 usRow，切换零请求。 */
 const US_DIMS = {
-  account: { key: 'by_account', title: '账号', withRealm: true, withPerf: true, span: 10 },
-  model: { key: 'by_model', title: '模型', withRealm: false, withPerf: false, span: 7 },
-  realm: { key: 'by_realm', title: 'realm', withRealm: false, withPerf: false, span: 7 },
-  // Key 维度带性能两列（谁在拖慢网关，按 Key 看得出来），故 span 与 account 同为 9+1。
-  key: { key: 'by_key', title: 'API Key', withRealm: false, withPerf: true, span: 9 },
+  account: { key: 'by_account', title: '账号', withRealm: true, withPerf: true, span: 11 },
+  model: { key: 'by_model', title: '模型', withRealm: false, withPerf: false, span: 8 },
+  realm: { key: 'by_realm', title: 'realm', withRealm: false, withPerf: false, span: 8 },
+  // Key 维度带性能两列（谁在拖慢网关，按 Key 看得出来），故 span 与 account 同口径。
+  key: { key: 'by_key', title: 'API Key', withRealm: false, withPerf: true, span: 10 },
 };
 
 // usSortRows 按当前排序字段降序（默认合计 Token，最大者最相关）。
@@ -2975,6 +2986,7 @@ function usDimHead(dim) {
     (m.withRealm ? '<th>域</th>' : '') +
     '<th class="num">请求</th><th class="num">失败</th>' +
     '<th class="num">Prompt</th><th class="num">Completion</th><th class="num">合计</th>' +
+    '<th class="num">参考价 $</th>' +
     (m.withPerf ? '<th class="num">均延迟</th><th class="num">均速率</th>' : '') +
     '</tr>';
 }
@@ -3146,12 +3158,17 @@ function renderUsage(d) {
 
   // 积分扣除的四张卡片与说明。
   // cny_rate > 0 时在「扣除积分」卡副标题折算人民币（1 积分 = rate 元）。
+  // usd_value > 0 时附带 OpenRouter 参考价折算（白嫖感知）。
   const cnyRate = Number(usageData.cny_rate || 0);
+  const usdVal = Number(t.usd_value || 0);
   const cnyText = (cnyRate > 0 && Number.isFinite(Number(t.credits)))
     ? '≈ ¥' + (Number(t.credits) * cnyRate).toFixed(2) + '（按 1 积分 = ¥' + cnyRate + '）'
     : '按上游 usage.credit 累计';
+  const usdText = usdVal > 0
+    ? ' · 若按 OpenRouter 公开价 ≈ ' + fmtUSD(usdVal)
+    : '';
   $('usCreditStats').innerHTML =
-    usKpi(fmtCredit(t.credits), '扣除积分', 'c-accent', cnyText) +
+    usKpi(fmtCredit(t.credits), '扣除积分', 'c-accent', cnyText + usdText) +
     usKpi(fmtTok(t.credit_tokens), '匹配 Token', 'c-mute', '与积分同时观测到的 Token') +
     usKpi(fmtCreditRatio(t.credits_per_1m_tokens, t.credit_samples, t.credit_tokens),
       '平均积分 / 1M Token', 'c-ok', '越低越划算') +

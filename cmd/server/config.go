@@ -16,6 +16,13 @@ import (
 	"yg-gateway/internal/prompt"
 )
 
+// ModelPrice 一个模型的 OpenRouter 美元参考价（$/1M tokens）。纯展示层。
+type ModelPrice struct {
+	Input     float64 `json:"input"`
+	Output    float64 `json:"output"`
+	CacheRead float64 `json:"cache_read,omitempty"`
+}
+
 // Config 顶层配置。
 // defaultBreakerProbeGap 熔断 half-open 试探间隔缺省值（ADR-003 D-400）。
 // 30s：坏号被重新熔断前的最大暴露窗口，同时给"已恢复的好号"足够快的回归速度。
@@ -79,6 +86,13 @@ type Config struct {
 		// 0 = 不折算（前端不显示 ¥ 列）。默认 0.01（1 积分 ≈ ¥0.01）。
 		// 纯展示层配置：不改选号/计费，只在面板用量页把积分旁折成人民币。
 		CreditCNYRate float64 `json:"credit_cny_rate"`
+
+		// Pricing 模型 OpenRouter 美元参考价（$/1M tokens），key 为裸模型名
+		// （不含 cn:/global: 前缀）。用于在面板用量页折算"这些 token 按公开价买
+		// 要花多少美元"（白嫖感知）。纯展示层，不参与选号/计费。
+		// 内置默认表覆盖常见 CodeBuddy 模型族；此处可覆盖/补充。
+		// 未知模型不在表中 → 不折算美元（前端不显示 $ 数，不伪造）。
+		Pricing map[string]ModelPrice `json:"pricing,omitempty"`
 	} `json:"usage"`
 
 	Server struct {
@@ -413,6 +427,38 @@ func Default() *Config {
 	return c
 }
 
+// defaultPricing 内置 OpenRouter 美元参考价（$/1M tokens）。
+// 数值为 2025-2026 年公开价的近似值，仅供"白嫖感知"展示——不是实时报价，
+// 用户应在 config.json usage.pricing 里按实际模型覆盖。
+// key 为裸模型名（不含 cn:/global: 前缀），与 usage 桶的 Model 字段同口径。
+func defaultPricing() map[string]ModelPrice {
+	return map[string]ModelPrice{
+		// GLM 系列（智谱）
+		"glm-5.3-flash": {Input: 0.15, Output: 0.6, CacheRead: 0.015},
+		"glm-5.3":       {Input: 0.6, Output: 2.4, CacheRead: 0.06},
+		"glm-5.2":       {Input: 0.6, Output: 2.4, CacheRead: 0.06},
+		"glm-5.1":       {Input: 0.6, Output: 2.4, CacheRead: 0.06},
+		"glm-5v-turbo":  {Input: 0.6, Output: 2.4, CacheRead: 0.06},
+		// MiniMax
+		"minimax-m3": {Input: 0.3, Output: 1.2, CacheRead: 0.03},
+		// DeepSeek
+		"deepseek-v4-flash":    {Input: 0.15, Output: 0.6, CacheRead: 0.015},
+		"deepseek-v4.1-flash":  {Input: 0.15, Output: 0.6, CacheRead: 0.015},
+		"deepseek-v4-pro":      {Input: 0.6, Output: 2.4, CacheRead: 0.06},
+		// Kimi（月之暗面）
+		"kimi-k2.6":          {Input: 0.6, Output: 2.4, CacheRead: 0.06},
+		"kimi-k2.7":          {Input: 0.6, Output: 2.4, CacheRead: 0.06},
+		"kimi-k2.8-preview":  {Input: 0.6, Output: 2.4, CacheRead: 0.06},
+		"kimi-k3-1":          {Input: 0.6, Output: 2.4, CacheRead: 0.06},
+		// 混元（腾讯）
+		"hy3":       {Input: 0.1, Output: 0.1, CacheRead: 0.01},
+		"hy3-x":     {Input: 0.1, Output: 0.1, CacheRead: 0.01},
+		"hy4-preview": {Input: 1.1, Output: 1.1, CacheRead: 0.11},
+		// 阶跃
+		"step-5-preview": {Input: 0.6, Output: 2.4, CacheRead: 0.06},
+	}
+}
+
 // Load 从文件读，再用 WB2A_* env 覆盖。
 func Load(path string) (*Config, error) {
 	c := Default()
@@ -577,6 +623,17 @@ func applyEnv(c *Config) {
 
 func (c *Config) normalize() error {
 	var err error
+	// 美元参考价合并：内置默认表为底，用户 usage.pricing 按 key 覆盖同名模型。
+	// 不区分"用户没配"与"用户配了空表"——空表 = 用户显式不要默认价。
+	if c.Usage.Pricing == nil {
+		c.Usage.Pricing = defaultPricing()
+	} else {
+		for k, v := range defaultPricing() {
+			if _, ok := c.Usage.Pricing[k]; !ok {
+				c.Usage.Pricing[k] = v
+			}
+		}
+	}
 	if err := c.normalizeAPIKeys(); err != nil {
 		return err
 	}
