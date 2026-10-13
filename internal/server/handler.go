@@ -467,6 +467,9 @@ func (h *Handler) status(w http.ResponseWriter, r *http.Request) {
 		// global_in_flight 全局在途计数（ADR-003 D-401）：与 gateway.max_in_flight
 		// 对照可判断是否触顶（触顶时新请求收 429）。
 		"global_in_flight": h.cfg.Pool.GlobalInFlight(),
+		// sticky_paid_hits 粘性命中收费号且池里有免费/未知号的累计次数
+		// （ADR-004 遗留轻量版）。纯观测，不自动换号。
+		"sticky_paid_hits": h.cfg.Pool.StickyPaidHits(),
 	})
 }
 

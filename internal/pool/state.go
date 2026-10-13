@@ -420,11 +420,42 @@ func (p *Pool) PickByUIDForModel(uid, model string) *auth.Auth {
 	if p.inFlightFull(e) {
 		return nil
 	}
+	// 粘性成本可见性（ADR-004 遗留轻量版）：绑定号已实测收费（tier 2）且
+	// 池里存在 tier 0/1 健康号时计数。**不自动换号**（保上游 prompt 缓存）。
+	if model != "" {
+		if mc, ok := e.modelCostOf(model, now); ok && mc.CostPer1k > 0 {
+			if p.hasCheaperHealthyForModel(model, e, now) {
+				p.stickyPaidHits.Add(1)
+			}
+		}
+	}
 	// 原子写回（ADR-005 D-500）：粘性命中改读锁 + 原子选中标记（与 pick 同口径）。
 	e.setLastUsed(now)
 	seq := p.pickSeq.Add(1)
 	e.usedSeq.Store(seq)
 	return e.a
+}
+
+// hasCheaperHealthyForModel 报告池里除 except 外是否存在在该模型上 tier 0/1
+// （免费或未知）的健康号。在读锁下调用。
+func (p *Pool) hasCheaperHealthyForModel(model string, except *entry, now time.Time) bool {
+	for _, o := range p.byUID {
+		if o == except {
+			continue
+		}
+		if !o.healthy(now) {
+			continue
+		}
+		if mc, ok := o.modelCostOf(model, now); !ok || mc.CostPer1k <= 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// StickyPaidHits 返回粘性命中收费号且存在更便宜健康号的累计次数（纯观测）。
+func (p *Pool) StickyPaidHits() int64 {
+	return p.stickyPaidHits.Load()
 }
 
 // PickByUID 若 uid 当前 healthy 且未占满在途名额，返回其凭证（记录 lastUsed 防撞号）；
