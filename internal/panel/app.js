@@ -2764,7 +2764,7 @@ function groupItems(d) {
 const ST_WORDS = { done: '完成', running: '执行中', error: '失败', skipped: '跳过', pending: '排队', scan: '待执行' };
 function qrowHTML(it) {
   const isSchool = it.kind === 'school';
-  const title = isSchool ? '开学季闭环' : (GROWTH_TITLES[it.code] || it.code);
+  const title = isSchool ? '开学季闭环' : (it.title || GROWTH_TITLES[it.code] || it.code);
   const dotCls = it.status === 'scan' ? 'wait' : it.status === 'running' ? 'run' : it.status === 'error' ? 'err' : it.status === 'skipped' ? 'skip' : it.status === 'done' ? 'done' : 'wait';
   const stWord = it.status === 'scan' ? '待执行' : (ST_WORDS[it.status] || it.status);
   return '<div class="qrow" title="' + esc(it.message || '') + '">' +
@@ -2802,7 +2802,7 @@ function updateProgress(q) {
   const done = q.items.filter(it => it.status === 'done' || it.status === 'error' || it.status === 'skipped').length;
   $('qProg').hidden = false;
   $('qBarFill').style.width = (total ? Math.round(done / total * 100) : 0) + '%';
-  $('qProgText').textContent = (q.running ? '执行中 ' : '已结束 ') + done + ' / ' + total;
+  $('qProgText').textContent = (q.running ? '进度 ' : '已完成 ') + done + ' / ' + total;
 }
 // 队列状态 → 分组（执行时轮询）
 function groupsFromQueue(items) {
@@ -2810,7 +2810,7 @@ function groupsFromQueue(items) {
   for (const it of items) {
     if (!by.has(it.uid)) by.set(it.uid, { uid: it.uid, nick: it.nickname, rows: [] });
     by.get(it.uid).rows.push({
-      kind: it.kind, code: it.code,
+      kind: it.kind, code: it.code, title: it.title || '',
       prog: it.kind === 'school' ? '—' : '',
       status: it.status, message: it.message,
     });
@@ -2823,8 +2823,8 @@ function startQueuePolling() {
     let q;
     try { q = await api('tasks/queue'); } catch (e) { return; }
     if (!q.started) return;
-    // 只渲染本页启动过的那轮队列（刷新页面后不再接管旧队列）。
-    if (lastQueueSeq && q.seq !== lastQueueSeq) return;
+    // seq 变化（调度器自动启动了新队列）时接管新一轮——用户应看到最新进度而非卡住。
+    if (lastQueueSeq && q.seq !== lastQueueSeq) lastQueueSeq = q.seq;
     if (q.running) {
       renderQueue(groupsFromQueue(q.items || []), q);
       return;
