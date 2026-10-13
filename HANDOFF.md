@@ -394,6 +394,41 @@ API 链路实测创建/删除 key 正常；生产 config.json 已还原（无 ap
 1. 若需「已存在 key」也能复制接入配置：需服务端存明文（当前只存哈希，与 ADR-002 安全设计冲突，不建议）
 2. 其他用户反馈
 
+## 六之九、面板 Key「接入配置」兜底（2026-10-13 深夜）
+
+**起因**：用户截图指出 Key 卡片操作区只有 开关/编辑/删除，没有「接入配置」入口——
+担心创建 key 后明文弹窗误关就永久拿不回配置（服务端 loadConfigMasked 只回显空 key +
+key_configured，明文仅创建时展示一次）。方案被接受后授权实施。
+
+**改了什么**：
+1. **Key 卡片新增「接入配置」按钮**（data-action="importcfg"）→ 打开 keyCfgVeil 两态弹窗：
+   - 状态 A：本会话缓存了明文（创建/重置后 lastKeyPlaintext/lastKeyPlaintextKid 模块级缓存）
+     → 直接展示密钥 + OpenAI/Anthropic 两段配置 + 各自复制按钮（可复用回看）；
+   - 状态 B：明文不可恢复（刷新/换浏览器）→ 提示"服务端只存哈希" + 引导「重置密钥」。
+2. **后端专用接口 `POST /panel/api/key-reset`**（body `{id,key}`，与 /panel/api/config 同鉴权）：
+   - 关键设计判断：前端不持明文，全量 POST /panel/api/config 会因 normalizeAPIKeys 过滤空 key
+     条目 + 数组整体替换语义**误删其他 Key**，故必须由服务端直改目标条目；
+   - main 注入 `ResetKey` 闭包 → `resetAPIKey`（读 config.json → 定位 id 条目改 key → 序列化 →
+     复用 saveConfig 全链路：校验+落盘+热应用，鉴权索引重建走 buildAuthSnapshot）；
+   - 其他 Key 与顶层 api_key 原样保留；id=SingleKeyID 保留名拒绝；新 key 与 api_key 重复会被
+     normalize 拒绝并透传错误。实测：旧 key 鉴权 /v1/models 立即 401，新 key 200（20 模型）。
+3. **创建弹窗新增「下载 .env」**（btnCfgDownload）：`buildEnvFile` 纯函数把 OpenAI+Anthropic
+   两段配置合并成一个 `yg-gateway-import.env`（Blob 落盘，实测触发真实下载）。
+
+**测试**：TestKeyResetEndpoint（6 例：501/成功/空 id/空 key/坏 body/错误透传）+ TestKeyResetRequiresAuth
+（401）+ TestAppJSBuildEnvFile（node 精确断言 .env 文本）+ TestIndexHTMLKeyCfgAndReset（弹窗元素 +
+app.js 逻辑片段 + 绑定 + VEIL_CLOSERS）；20 包全绿 + vet 干净 + node --check 通过。
+
+**验证（真机）**：7863 已部署（备份 `yg-gateway.exe.pre-keycfg.bak`），healthz 4/4；
+Playwright 实测主路径全通：卡片按钮 → 状态 A 回看配置 → 重置密钥（confirm → 后端 → 立即切新密钥）→
+刷新后状态 B（提示 + 重置入口）→ 下载 .env 落盘；生产 config.json 已还原（无 api_keys 残留）。
+
+**当前 HEAD**：`276b17b`（已 push GitHub；本轮 7 文件 +376/-3）
+
+**下一轮候选**：
+1. 用户如需要：重置密钥时可选「自定义新密钥」（当前固定 genApiKey 生成）
+2. 其他用户反馈
+
 ## 六、关键架构事实（新对话必知）
 
 ### 鉴权（httpauth）
