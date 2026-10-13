@@ -2839,15 +2839,19 @@ function startQueuePolling() {
 // reattachQueueView 切回任务中心视图时恢复队列进度：仅当本页启动的队列仍在
 // 执行才重新开轮询（残留态/别页队列不接管——视图不被旧结果冲掉）。
 function reattachQueueView() {
-  // 全程异步：go() 在顶层（app.js ~143 行）被调用时，本文件下方 let/const
-  //（queueTimer/lastQueueSeq 等）尚未初始化——同步读取即 TDZ ReferenceError
-  // 使整个脚本中断。await 之后才碰它们（旧 pollQueueOnce 正是靠开头的 await
-  // 侥幸安全）。queueTimer 的"已在跑"判定也挪到 await 后，语义不变。
   (async () => {
     try {
       const q = await api('tasks/queue');
       if (queueTimer) return; // 轮询已在跑（跨视图不中断）
-      if (q.started && q.running && (!lastQueueSeq || q.seq === lastQueueSeq)) startQueuePolling();
+      // 立即渲染一次当前队列状态（不等 3 秒 tick）：刷新页面后用户立刻看到进度。
+      if (q.started && q.items && q.items.length) {
+        if (lastQueueSeq && q.seq !== lastQueueSeq) lastQueueSeq = q.seq;
+        renderQueue(groupsFromQueue(q.items), q);
+        if (q.running) startQueuePolling();
+        return;
+      }
+      // 没有在跑的队列且页面空白：自动扫描一次待办，避免刷新后白屏。
+      if (!q.running) runScanAll();
     } catch (e) { /* 静默 */ }
   })();
 }
