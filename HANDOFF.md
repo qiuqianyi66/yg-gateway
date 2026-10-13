@@ -363,6 +363,37 @@ Stream 透传 / UpstreamError 回落），20 包全绿 + vet/gofmt 干净。
 1. 如需启用 fallback：生产 config.json 配 `fallback.base_url` / `api_key` / `models`
 2. 其他用户反馈
 
+## 六之八、面板「接入配置导出」（2026-10-13 晚）
+
+**起因**：用户要把分出去的 API Key 做成「可直接导入其他 agent」的东西——创建 Key 时
+一键复制 OpenAI / Anthropic 两协议的接入配置。
+
+**改了什么**：
+1. **创建 Key 后的明文弹窗升级**：除密钥外，同时展示两段可复制的接入配置：
+   - OpenAI 协议（Codex / Cursor / OpenWebUI / SDK）：`OPENAI_BASE_URL=http://<host>/v1` + `OPENAI_API_KEY=...`
+   - Anthropic 协议（Claude Code）：`ANTHROPIC_BASE_URL=http://<host>` + `ANTHROPIC_AUTH_TOKEN=...`
+   - base_url 用面板实际访问地址（location.protocol + host）动态拼，不写死；配置内含一行
+     `# 可用模型：GET <base>/v1/models 查看`（客户端自动发现模型，不写死模型名）。
+2. **纯函数 `buildKeyImportConfigs`**（app.js）：输入明文 key + baseURL → 输出两段配置文本，
+   尾部斜杠归一。**不破坏安全模型**：明文仍仅创建时一次性展示，服务端只存哈希。
+3. **复制**：抽出 `writeClipboardText`（clipboard API + execCommand 降级），密钥与两段配置
+   各带复制按钮（btnCopyCfgOpenAI / btnCopyCfgAnthropic）。
+
+**测试**：新增 TestAppJSKeyImportConfigs（node 精确断言两段配置文本）+ TestIndexHTMLKeyImportBlocks
+（弹窗结构元素 + app.js 填充/绑定存在断言）；20 包全绿 + vet 干净。
+**注**：gofmt 检查仍有 3 个历史文件格式差异（cmd/server/config.go、internal/httpauth/index.go、
+internal/panel/panel.go），为 pre-existing（六之五记录过同类漂移），本轮未动。
+
+**验证（真机）**：7863 已部署（备份 `yg-gateway.exe.pre-importcfg.bak`），healthz 4/4；
+面板 HTML 含 cfgOpenAI/cfgAnthropic 元素；/v1/models 200（20 模型）供客户端自动发现；
+API 链路实测创建/删除 key 正常；生产 config.json 已还原（无 api_keys 残留）。
+
+**当前 HEAD**：`85f4ad3`（已 push GitHub；本轮面板改动将随下个 commit 推送）
+
+**下一轮候选**：
+1. 若需「已存在 key」也能复制接入配置：需服务端存明文（当前只存哈希，与 ADR-002 安全设计冲突，不建议）
+2. 其他用户反馈
+
 ## 六、关键架构事实（新对话必知）
 
 ### 鉴权（httpauth）
