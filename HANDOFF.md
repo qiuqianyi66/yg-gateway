@@ -239,6 +239,36 @@ $0.00094），折算链路端到端通。
 3. EWMA 参数调优观测（/status 已透出信号）
 4. 客户端生态深化（Codex / 其他 SDK 直连）
 
+## 六之四、三路推进（2026-10-13）
+
+**路线盘点结论**：路线2（JSONL落库）已由 reqlog 完整落地跳过；本轮做路线4→1→3。
+
+**1. 客户端生态实测（路线4）**：
+- /v1/chat/completions 非流式+流式 SSE ✅；/v1/messages 非流式 ✅
+- 不存在模型名返回 400（合理，网关不做任意映射）
+- Codex 用户需在配置里指定 `cn:glm-5.3-flash` 这类模型名
+- 无需代码修复
+
+**2. 粘性命中收费号计数器（路线1，轻量版）**：
+- `stickyPaidHits` 原子计数器：PickByUIDForModel 命中时若绑定号已实测收费
+  （tier 2, CostPer1k>0）且池里有 tier 0/1 健康号则 +1
+- **不自动换号**（保上游 prompt 缓存）；/status 透出 `sticky_paid_hits`
+- TestStickyPaidHitsCounter 固化口径
+
+**3. 7863 开启 EWMA（路线3）**：
+- config.json pool.ewma = {enabled:true, alpha:0.1, min_samples:5}
+- 与 eval 实例同口径；需一周流量积累后观察 ewma_success/ewma_latency_ms
+
+**验证**：20 包全绿 + vet/fmt 干净；7863 已热替换（PID 13112），4/4 健康；
+sticky_paid_hits / ewma_samples 字段透出正常。
+
+**当前 HEAD**：`f450f2c`（已 push GitHub）
+
+**下一轮候选**：
+1. EWMA 一周后观察调参（看 /status ewma_* 数据）
+2. 粘性会话详情面板加成本层列（如需更直观）
+3. 其他用户反馈
+
 ## 六、关键架构事实（新对话必知）
 
 ### 鉴权（httpauth）
