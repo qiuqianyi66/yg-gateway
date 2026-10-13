@@ -58,7 +58,7 @@ func stateSibling(stateFile, name string) string {
 }
 
 // buildFallbackConfig 组装备用上游级联配置（P2）。未启用时返回 nil。
-func buildFallbackConfig(cfg *config.Config) *server.FallbackConfig {
+func buildFallbackConfig(cfg *Config) *server.FallbackConfig {
 	if !cfg.Fallback.Enabled || cfg.Fallback.BaseURL == "" || cfg.Fallback.APIKey == "" {
 		return nil
 	}

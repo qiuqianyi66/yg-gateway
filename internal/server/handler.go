@@ -1864,10 +1864,45 @@ func (h *Handler) fallbackForward(w http.ResponseWriter, r *http.Request, body [
 	}
 	defer resp.Body.Close()
 
-	// 透传状态码 + Content-Type + body（含 SSE stream）。
+	// 透传状态码 + Content-Type。
 	w.Header().Set("Content-Type", resp.Header.Get("Content-Type"))
 	w.WriteHeader(resp.StatusCode)
-	_, _ = io.Copy(w, resp.Body)
+
+	// SSE stream 直接 io.Copy 透传（缓冲会破坏流式体验）；非 stream 读全部 body
+	// 以便解析 usage 字段做用量归因（P2：备用源烧了多少 token 要看得见）。
+	ct := resp.Header.Get("Content-Type")
+	if strings.Contains(ct, "text/event-stream") {
+		_, _ = io.Copy(w, resp.Body)
+		log.Printf("[fallback] 已转发(stream) model=%s status=%d", model, resp.StatusCode)
+		return true
+	}
+	// 非 stream：读全部 body → 解析 usage → 写回。
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return true // 已写 header，不能再改状态码
+	}
+	// 200 才解析 usage（错误响应没有 usage 字段）。
+	if resp.StatusCode == http.StatusOK && h.cfg.Usage != nil {
+		var u struct {
+			Usage struct {
+				PromptTokens     int64 `json:"prompt_tokens"`
+				CompletionTokens int64 `json:"completion_tokens"`
+				TotalTokens      int64 `json:"total_tokens"`
+			} `json:"usage"`
+		}
+		if json.Unmarshal(respBody, &u) == nil && u.Usage.TotalTokens > 0 {
+			h.cfg.Usage.Add(time.Now(), "fallback", "fallback", model, usage.Delta{
+				PromptTokens:     u.Usage.PromptTokens,
+				HasPromptTokens:  u.Usage.PromptTokens > 0,
+				CompletionTokens: u.Usage.CompletionTokens,
+				HasCompletion:    u.Usage.CompletionTokens > 0,
+				TotalTokens:      u.Usage.TotalTokens,
+				HasTotal:         true,
+				KeyID:            "fallback",
+			}, true)
+		}
+	}
+	_, _ = w.Write(respBody)
 	log.Printf("[fallback] 已转发 model=%s status=%d", model, resp.StatusCode)
 	return true
 }

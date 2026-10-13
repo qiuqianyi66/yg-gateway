@@ -202,6 +202,62 @@ go run golang.org/x/vuln/cmd/govulncheck@latest ./...
 
 ---
 
+## 进阶配置（小团队自用刚需）
+
+### 模型映射 `model_aliases`
+
+客户端写短名，网关转发前自动替换成上游实际模型名：
+
+```json
+"model_aliases": {
+  "glm": "glm-5.3-flash",
+  "ds": "deepseek-v4-flash"
+}
+```
+
+只影响出站 body；选号 / 白名单 / 用量统计仍按客户端原始名，观测口径不分裂。热生效。
+
+### Per-Key 精细约束
+
+每把 API Key 可单独配置（面板「API Key」页直接改，热生效）：
+
+| 字段 | 说明 |
+|---|---|
+| `models` | 模型白名单，支持通配符：`glm-*` 放行整个 GLM 族，`*` 放行全部 |
+| `rpm` | 每分钟最大请求数，超限 429；0 = 不限 |
+| `monthly_token_quota` | 当月 token 硬上限（跨重启持久化，跨月自动重置），超限 429；0 = 不限 |
+| `group` | 账号池分组标签：该 Key 只能用同组账号（在 auth 文件里写 `"group": "team-a"`） |
+
+### 异常告警 Webhook
+
+```json
+"alerting": {
+  "webhook_url": "https://sctapi.ftqq.com/SENDKEY.send",
+  "min_credit_threshold": 100,
+  "dedup_minutes": 60
+}
+```
+
+账号余额告急 / 被禁用 / 会话失效 / 触发熔断时 POST 通用 JSON 到 webhook，Server酱 / TG bot / 飞书自定义机器人直接接。
+
+### 备用上游级联 `fallback`
+
+CodeBuddy 账号池全挂时，自动把请求转发到独立 OpenAI 兼容端点：
+
+```json
+"fallback": {
+  "enabled": true,
+  "base_url": "https://api.deepseek.com/v1",
+  "api_key": "sk-xxx",
+  "models": ["deepseek-v4-flash"],
+  "timeout_seconds": 120
+}
+```
+
+只对白名单里的模型生效；SSE stream 原样透传。不配 = 完全关闭。
+
+---
+
 ## 开发
 
 ```bash
