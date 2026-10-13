@@ -678,10 +678,11 @@ function renderAccountsUnsafe(list) {
     const rate = formatRate(tu.last_tokens_per_second);
     const avatar = (s.nickname || '?').charAt(0).toUpperCase();
     const realmTag = s.realm === 'global' ? '<span class="realm-tag">国际</span>' : (s.enterprise ? '<span class="realm-tag">企业</span>' : '');
+    const groupTag = s.group ? '<span class="realm-tag" style="background:var(--accent,#4a9)">组:' + esc(s.group) + '</span>' : '';
     return '<div class="acc-card ' + cls + '" title="uid: ' + esc(s.uid) + '">' +
       '<div class="acc-card-head">' +
         '<div class="acc-avatar">' + esc(avatar) + '</div>' +
-        '<div><div class="acc-name">' + (s.nickname ? esc(s.nickname) : '<span style="color:var(--ink-3)">未命名</span>') + ' ' + realmTag + '</div>' +
+        '<div><div class="acc-name">' + (s.nickname ? esc(s.nickname) : '<span style="color:var(--ink-3)">未命名</span>') + ' ' + realmTag + ' ' + groupTag + '</div>' +
         '<div class="acc-uid">' + esc(short) + '</div></div>' +
         '<div class="acc-status">' + tag + '</div>' +
       '</div>' +
