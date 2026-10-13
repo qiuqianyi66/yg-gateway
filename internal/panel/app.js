@@ -2850,8 +2850,8 @@ function reattachQueueView() {
         if (q.running) startQueuePolling();
         return;
       }
-      // 没有在跑的队列且页面空白：自动扫描一次待办，避免刷新后白屏。
-      if (!q.running) runScanAll();
+      // 无队列在跑：显示空状态（不自动扫描，避免刷新时打上游 API）。
+      renderQueue([], null, '点击「扫描待办」查看任务', '扫描全部账号的成长任务，或点「执行全部待办」自动完成。');
     } catch (e) { /* 静默 */ }
   })();
 }
