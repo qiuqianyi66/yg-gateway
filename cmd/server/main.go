@@ -57,6 +57,23 @@ func stateSibling(stateFile, name string) string {
 	return filepath.Join(dir, name)
 }
 
+// buildFallbackConfig 组装备用上游级联配置（P2）。未启用时返回 nil。
+func buildFallbackConfig(cfg *config.Config) *server.FallbackConfig {
+	if !cfg.Fallback.Enabled || cfg.Fallback.BaseURL == "" || cfg.Fallback.APIKey == "" {
+		return nil
+	}
+	models := make(map[string]bool, len(cfg.Fallback.Models))
+	for _, m := range cfg.Fallback.Models {
+		models[m] = true
+	}
+	return &server.FallbackConfig{
+		BaseURL:        cfg.Fallback.BaseURL,
+		APIKey:         cfg.Fallback.APIKey,
+		Models:         models,
+		TimeoutSeconds: cfg.Fallback.TimeoutSeconds,
+	}
+}
+
 func main() {
 	cfgPath := flag.String("config", "config.json", "配置文件路径（默认当前目录 config.json；不存在时自动生成推荐配置）")
 	flag.Parse()
@@ -352,6 +369,8 @@ func main() {
 			MinCreditThreshold: cfg.Alerting.MinCreditThreshold,
 			DedupWindow:        time.Duration(cfg.Alerting.DedupMinutes) * time.Minute,
 		}),
+		// 备用上游级联（P2）：enabled=false 或 base_url 空 = 不启用（零回归）。
+		Fallback: buildFallbackConfig(cfg),
 	})
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

@@ -2,6 +2,7 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -108,6 +109,18 @@ type Config struct {
 	// Alerting 异常外发告警（可选；nil = 不告警）。账号余额告急/被禁用/会话死/触发
 	// 熔断时 POST 到配置的 webhook。fire-and-forget，不阻塞业务路径。
 	Alerting *alerting.Notifier
+
+	// Fallback 备用上游级联（P2，可选；nil = 关闭）。
+	// CodeBuddy 选号全失败时，把请求原样转发到独立 OpenAI 兼容端点。
+	Fallback *FallbackConfig
+}
+
+// FallbackConfig 备用上游级联配置（P2）。
+type FallbackConfig struct {
+	BaseURL        string
+	APIKey         string
+	Models         map[string]bool // 白名单（set）
+	TimeoutSeconds int
 }
 
 // loadLive 返回当前运行期快照；Live 为 nil 时用静态字段合成。
@@ -1475,6 +1488,16 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+	// P2 fallback：CodeBuddy 账号池全挂（选号耗尽 + 轮转失败）时，
+	// 若请求模型在备用源白名单里，把请求原样转发到备用 OpenAI 兼容端点。
+	// 转发成功（非错误响应）就直接 return，不走下面的错误构造。
+	if h.cfg.Fallback != nil && h.cfg.Fallback.Models[bareModel] {
+		if h.fallbackForward(w, r, body, bareModel) {
+			st.status = http.StatusOK
+			st.outcome = reqlog.OutcomeSuccess
+			return
+		}
+	}
 	// 末端错误透传（error-passthrough）：上游返回的错误原样透传，不再规范化成固定文案。
 	// 上游返回（*upstream.Error）→ error.message 装**上游 body 原文**（code/msg/
 	// requestId 原样保留）。HTTP 状态码按 OpenAI 兼容口径映射类别：ErrSoftRate → 429
@@ -1806,6 +1829,48 @@ func (h *Handler) applyErrorPolicy(uid string, kind upstream.ErrKind, body, mode
 // ---------------------------------------------------------------------------
 // helpers
 // ---------------------------------------------------------------------------
+
+// fallbackForward 把请求体原样转发到备用 OpenAI 兼容端点（P2）。
+// 返回 true = 转发成功（已写响应）；false = 转发失败（调用方继续走错误路径）。
+func (h *Handler) fallbackForward(w http.ResponseWriter, r *http.Request, body []byte, model string) bool {
+	fc := h.cfg.Fallback
+	if fc == nil || fc.BaseURL == "" || fc.APIKey == "" {
+		return false
+	}
+	timeout := time.Duration(fc.TimeoutSeconds) * time.Second
+	if timeout <= 0 {
+		timeout = 120 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), timeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		strings.TrimRight(fc.BaseURL, "/")+"/chat/completions",
+		bytes.NewReader(body))
+	if err != nil {
+		return false
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+fc.APIKey)
+	// 透传 Accept（SSE 客户端会带 text/event-stream）
+	if acc := r.Header.Get("Accept"); acc != "" {
+		req.Header.Set("Accept", acc)
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		log.Printf("[fallback] 转发到备用源失败 model=%s err=%v", model, err)
+		return false
+	}
+	defer resp.Body.Close()
+
+	// 透传状态码 + Content-Type + body（含 SSE stream）。
+	w.Header().Set("Content-Type", resp.Header.Get("Content-Type"))
+	w.WriteHeader(resp.StatusCode)
+	_, _ = io.Copy(w, resp.Body)
+	log.Printf("[fallback] 已转发 model=%s status=%d", model, resp.StatusCode)
+	return true
+}
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	raw, _ := json.Marshal(v)
