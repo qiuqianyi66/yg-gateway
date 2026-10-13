@@ -331,6 +331,38 @@ keyrpm 隔离与上限 / notifier 去重与阈值），20 包全绿 + vet/gofmt 
 1. P2 多上游级联（备用 OpenAI 兼容源）
 2. 其他用户反馈
 
+## 六之七、P2 备用上游级联落地（2026-10-13）
+
+**起因**：P1 后的下一轮候选第 1 条——CodeBuddy 账号池全挂时切备用 OpenAI 兼容源。
+
+**改了什么**：
+1. **`fallback` 备用上游级联**：config 加 `fallback` 段（`enabled` / `base_url` / `api_key` /
+   `models` 白名单 / `timeout_seconds`）。选号走完所有账号仍未拿到可用号时，若请求模型
+   在备用源白名单里 → 把请求 body **原样**转发到 `{base_url}/chat/completions`
+   （OpenAI 兼容，DeepSeek 官方 / OpenRouter / 任意兼容端点）。空配置 = 关闭（零回归），
+   只对白名单模型生效（CodeBuddy 专属模型不发备用源 404）。
+2. **SSE 透传**：Content-Type 为 `text/event-stream` 时直接 io.Copy 透传不缓冲；
+   Accept 头透传。非流式读全 body 解析 usage 字段。
+3. **用量归因 realm=fallback**：非流式 200 响应解析 usage →
+   `Usage.Add(realm="fallback", keyID="fallback")`，面板用量/积分页可见备用源烧的 token
+   （流式不解析，仅透传）。
+4. **reqlog 口径**：转发成功记 `status=200 / outcome=success`，直接 return 不走错误路径。
+
+**装配**：`cmd/server/main.go buildFallbackConfig`（未启用 / 缺 base_url 或 api_key → nil）；
+`internal/server/handler.go fallbackForward`（超时 <=0 回落 120s）。
+
+**测试**：`internal/server/fallback_test.go` 5 例（Disabled / EmptyConfig / JSON 归因 /
+Stream 透传 / UpstreamError 回落），20 包全绿 + vet/gofmt 干净。
+
+**验证（真机）**：7863 已部署最终二进制（12:29:53 构建，10.6MB）并重启，healthz 通过、
+4/4 健康（fallback 未启用 = 零回归，config.json 未配即关闭）。
+
+**当前 HEAD**：`7fcb3af`（已 push GitHub，a183f55 → 69b2a65 → 7fcb3af）
+
+**下一轮候选**：
+1. 如需启用 fallback：生产 config.json 配 `fallback.base_url` / `api_key` / `models`
+2. 其他用户反馈
+
 ## 六、关键架构事实（新对话必知）
 
 ### 鉴权（httpauth）
