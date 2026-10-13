@@ -1922,26 +1922,55 @@ async function saveKeys(keys, successMsg) {
 
 /* ── 明文展示弹窗 ────────────────────────────────────────────────── */
 
+// 生成可直接导入客户端的两段接入配置（OpenAI / Anthropic 协议）。
+// baseURL 用面板实际访问地址（location.protocol + host）动态拼，不写死；
+// 网关 /v1/models 会自动暴露模型，客户端自行发现，配置里不写死模型名。
+function buildKeyImportConfigs(plaintext, baseURL) {
+  const b = String(baseURL || '').replace(/\/+$/, '');
+  const models = '可用模型：GET ' + b + '/v1/models 查看';
+  return {
+    openai: '# ' + models + '\nOPENAI_BASE_URL=' + b + '/v1\nOPENAI_API_KEY=' + plaintext,
+    anthropic: '# ' + models + '\nANTHROPIC_BASE_URL=' + b + '\nANTHROPIC_AUTH_TOKEN=' + plaintext,
+  };
+}
+
 function showKeyPlaintext(plaintext) {
   $('keyPlaintext').textContent = plaintext;
+  const cfgs = buildKeyImportConfigs(plaintext, location.protocol + '//' + location.host);
+  $('cfgOpenAI').textContent = cfgs.openai;
+  $('cfgAnthropic').textContent = cfgs.anthropic;
   showVeil('keyShowVeil');
+}
+
+// clipboard API 只在 secure context（https/localhost）可用，远程 http 面板
+// 拿不到 navigator.clipboard → 降级 execCommand（textarea 选中复制）。
+async function writeClipboardText(text) {
+  if (navigator.clipboard && window.isSecureContext) {
+    await navigator.clipboard.writeText(text);
+  } else {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand('copy');
+    document.body.removeChild(ta);
+  }
 }
 
 async function copyKeyPlaintext() {
   const text = $('keyPlaintext').textContent;
   try {
-    if (navigator.clipboard && window.isSecureContext) {
-      await navigator.clipboard.writeText(text);
-    } else {
-      const ta = document.createElement('textarea');
-      ta.value = text;
-      ta.style.position = 'fixed';
-      ta.style.opacity = '0';
-      document.body.appendChild(ta);
-      ta.select();
-      document.execCommand('copy');
-      document.body.removeChild(ta);
-    }
+    await writeClipboardText(text);
+    toast('已复制到剪贴板', 'ok');
+  } catch (e) { toast('复制失败：' + e.message, 'err'); }
+}
+
+async function copyCfgText(elId) {
+  const text = $(elId).textContent;
+  try {
+    await writeClipboardText(text);
     toast('已复制到剪贴板', 'ok');
   } catch (e) { toast('复制失败：' + e.message, 'err'); }
 }
@@ -1965,6 +1994,8 @@ $('btnKeyGen').onclick = () => {
 };
 $('btnKeyCopy').onclick = copyKeyPlaintext;
 $('btnKeyShowClose').onclick = () => hideVeil('keyShowVeil');
+$('btnCopyCfgOpenAI').onclick = () => copyCfgText('cfgOpenAI');
+$('btnCopyCfgAnthropic').onclick = () => copyCfgText('cfgAnthropic');
 
 // realm 胶囊切换
 $('kfRealmPills').querySelectorAll('.realm-pill').forEach(p => {

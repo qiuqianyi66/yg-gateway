@@ -490,6 +490,18 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
 }
 #view-keys .key-plaintext-warning svg { width: 15px; height: 15px; flex: none; margin-top: 1px; }
 #view-keys .key-copy-row { display: flex; gap: 8px; margin-top: 12px; }
+/* 创建后「接入配置」块（OpenAI / Anthropic 两协议，明文一次性展示弹窗内） */
+#view-keys .key-cfg-block { margin-top: 14px; }
+#view-keys .key-cfg-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  font-size: 12px; font-weight: 600; color: var(--ink-2); margin-bottom: 6px;
+}
+#view-keys .key-cfg-head button { flex: none; }
+#view-keys .key-cfg-pre {
+  display: block; font: 12.5px/1.6 var(--mono); white-space: pre-wrap; word-break: break-all;
+  background: var(--surface-2); border: 1px solid var(--line-soft); border-radius: 8px;
+  padding: 10px 12px; color: var(--ink); user-select: all; margin: 0;
+}
 .savebar {
   display: flex; align-items: center; gap: 12px; padding: 13px 17px;
   border-top: 1px solid var(--line-soft); background: var(--surface-2);
@@ -1255,6 +1267,18 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
             <div class="key-plaintext-warning">
               <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M8 1.8 14 13H2z"/><path d="M8 6v3M8 11.5v.5"/></svg>
               <span>面板只存哈希，明文仅此一次展示。关闭弹窗后连服务端也拿不回完整密钥。</span>
+            </div>
+            <div class="key-cfg-block">
+              <div class="key-cfg-head">OpenAI 协议（Codex / Cursor / OpenWebUI / SDK）
+                <button type="button" class="xs" id="btnCopyCfgOpenAI">复制 OpenAI 配置</button>
+              </div>
+              <pre class="key-cfg-pre" id="cfgOpenAI"></pre>
+            </div>
+            <div class="key-cfg-block">
+              <div class="key-cfg-head">Anthropic 协议（Claude Code）
+                <button type="button" class="xs" id="btnCopyCfgAnthropic">复制 Anthropic 配置</button>
+              </div>
+              <pre class="key-cfg-pre" id="cfgAnthropic"></pre>
             </div>
           </div>
           <footer>

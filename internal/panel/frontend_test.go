@@ -1164,3 +1164,75 @@ func TestAppJSKeyDialogValueNotEscaped(t *testing.T) {
 		t.Fatal("kfName/kfId 赋值语句未找到，测试可能已失效")
 	}
 }
+
+// 创建 Key 后的「接入配置」生成：OpenAI / Anthropic 两协议文本必须精确、
+// base_url 尾部斜杠归一、key 原样注入、/v1/models 提示行可复核。
+func TestAppJSKeyImportConfigs(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node not installed; key import configs test skipped")
+	}
+	script := `const fs = require('fs');
+const vm = require('vm');
+const src = fs.readFileSync(process.argv[2], 'utf8');
+const start = src.indexOf('function buildKeyImportConfigs');
+const end = src.indexOf('function showKeyPlaintext');
+if (start < 0 || end < 0) throw new Error('buildKeyImportConfigs not found');
+const ctx = { String };
+vm.createContext(ctx);
+vm.runInContext(src.slice(start, end) + '\nthis.buildKeyImportConfigs = buildKeyImportConfigs;', ctx);
+const out = ctx.buildKeyImportConfigs('sk-test-key-123', 'http://127.0.0.1:7863/');
+process.stdout.write(JSON.stringify(out));`
+	f, err := os.CreateTemp(t.TempDir(), "key-import-cfgs-*.cjs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString(script); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	out, err := exec.Command(node, f.Name(), "app.js").CombinedOutput()
+	if err != nil {
+		t.Fatalf("key import configs node test failed: %v\n%s", err, out)
+	}
+	const want = `{"openai":"# 可用模型：GET http://127.0.0.1:7863/v1/models 查看\nOPENAI_BASE_URL=http://127.0.0.1:7863/v1\nOPENAI_API_KEY=sk-test-key-123","anthropic":"# 可用模型：GET http://127.0.0.1:7863/v1/models 查看\nANTHROPIC_BASE_URL=http://127.0.0.1:7863\nANTHROPIC_AUTH_TOKEN=sk-test-key-123"}`
+	if strings.TrimSpace(string(out)) != want {
+		t.Fatalf("key import configs=%s\nwant %s", out, want)
+	}
+}
+
+// 创建 Key 的明文弹窗必须渲染两个协议配置块，且 app.js 有对应填充与绑定——
+// 防止弹窗结构或绑定被误删后「接入配置」静默消失。
+func TestIndexHTMLKeyImportBlocks(t *testing.T) {
+	html, err := os.ReadFile("index.html")
+	if err != nil {
+		t.Fatalf("read index.html: %v", err)
+	}
+	h := string(html)
+	for _, id := range []string{`id="cfgOpenAI"`, `id="cfgAnthropic"`, `id="btnCopyCfgOpenAI"`, `id="btnCopyCfgAnthropic"`} {
+		if !strings.Contains(h, id) {
+			t.Errorf("index.html 缺接入配置元素 %s", id)
+		}
+	}
+	if !strings.Contains(h, "key-cfg-pre") {
+		t.Error("index.html 缺 .key-cfg-pre 样式（配置块）")
+	}
+
+	raw, err := os.ReadFile("app.js")
+	if err != nil {
+		t.Fatalf("read app.js: %v", err)
+	}
+	js := string(raw)
+	for _, frag := range []string{
+		"function buildKeyImportConfigs",
+		"$('cfgOpenAI').textContent = cfgs.openai",
+		"$('cfgAnthropic').textContent = cfgs.anthropic",
+		"$('btnCopyCfgOpenAI').onclick",
+		"$('btnCopyCfgAnthropic').onclick",
+		"function copyCfgText",
+	} {
+		if !strings.Contains(js, frag) {
+			t.Errorf("app.js 缺接入配置逻辑片段：%s", frag)
+		}
+	}
+}
