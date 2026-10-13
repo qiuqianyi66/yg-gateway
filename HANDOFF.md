@@ -208,6 +208,37 @@ if ($start.HasExited) { "进程退出 码=" + $start.ExitCode } else { "PID: " +
 healthz 200 + 4/4 健康；overview/models 带鉴权 200；`/v1/chat/completions`
 非流式 200 + 流式 SSE 全链路（delta 逐块 → usage → `[DONE]`）与前端解析逻辑一致。
 
+## 六之三、OpenRouter 费率折算（2026-10-13）
+
+**起因**：竞品路线图第 2 条——用户想知道"白嫖了多少美元"。当前只有积分→人民币
+折算（credit_cny_rate），看不到这些 token 按 OpenRouter 公开价值多少钱。
+
+**改了什么**：
+1. **后端定价表**：`usage.USDPrice{Input,Output,CacheRead}`（$/1M tokens）；
+   `SnapshotWindow` 多一个 `pricing func(model) USDPrice` 参数；`bucketUSD` 区分
+   缓存命中（prompt_tokens 含 cached_tokens，命中部分按 cache_read 计价）。
+2. **配置**：`usage.pricing` 段（map[裸模型名]→价格）；内置默认表覆盖 GLM/
+   DeepSeek/Kimi/MiniMax/混元/阶跃常见模型族，用户 config 可覆盖同名 key；
+   未知模型不折算（omitempty，不伪造 $）。
+3. **面板**：用量明细表加「参考价 $」列（所有维度）；扣除积分卡副标题附
+   "若按 OpenRouter 公开价 ≈ $X"；`fmtUSD` 紧凑格式化（<$0.01 三位小数）。
+4. **纯展示层**：不参与选号/计费/路由，热路径零影响。
+
+**测试**：`TestUSDValuePricing` 固化折算口径（缓存命中按 cache_read 计价）；
+20 包全绿 + vet/gofmt 干净。
+
+**验证（真机）**：7863 已热替换（备份 `yg-gateway.exe.pre-usd.bak`）；
+healthz 4/4；72h 窗口 13247 tokens → $0.005（deepseek-v4.1-flash 5762 tok →
+$0.00094），折算链路端到端通。
+
+**当前 HEAD**：`0ff8c01`（已 push GitHub）
+
+**下一轮候选**：
+1. 粘性路径成本分层（ADR-004 遗留，需折中设计）
+2. 增量用量落库（JSONL 逐条审计，当前仅聚合桶）
+3. EWMA 参数调优观测（/status 已透出信号）
+4. 客户端生态深化（Codex / 其他 SDK 直连）
+
 ## 六、关键架构事实（新对话必知）
 
 ### 鉴权（httpauth）
