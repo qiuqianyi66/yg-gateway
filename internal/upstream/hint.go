@@ -25,9 +25,14 @@ import (
 //   - Model / ModelInCatalog / ModelSupportsImages：模型目录对该模型的
 //     supports_images 声明（目录未收录 → 不做「不支持」判定，防查不到误判成不支持）。
 //
-// 判定次序：11133/11135 上游业务码**先于** Kind 表——实测这两族归 ErrClient/
-// ErrBadParams 皆有可能（Classify 词表不含 11133），hint 层自带判定（hint 是补充
-// 说明非权威分类，误判代价只是多一条中性补充说明）；其余走 Kind 一对一映射。
+// 判定次序：11133/11135 上游业务码**先于** Kind 表——这两族的 hint 口径比 Kind 更
+// 具体（如 11133 要区分「模型不支持图片」与「任意参数被拒」），hint 层自带判定；
+// 其余走 Kind 一对一映射。
+//
+// 与 Classify 的关系（2026-10-15 对齐）：Classify 现已把 11133 归 ErrBadParams
+// （请求级、不轮转），与这里的 isModelParamInvalid 共用同一判定函数，避免出现
+//「提示说请求问题、分类却轮转所有账号」的分裂。此处的独立判定保留，因为它还要
+// 区分「带图 + 目录声明不支持」这一更细的分支，Kind 本身表达不了。
 func GatewayHint(kind ErrKind, msg string, ctx HintContext) string {
 	// 11133 model_param_invalid 家族（图片回归实测：不支持图片的模型传图，或任意
 	// 参数被模型供应商拒绝）。只有请求确实带图、且目录能对该模型做出「不支持图片」

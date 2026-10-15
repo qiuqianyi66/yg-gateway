@@ -56,8 +56,20 @@ func TestClassify(t *testing.T) {
 		// 11135 业务码须容忍 JSON 空白（5d5223d：字面量 marker 只覆盖紧凑形态）。
 		{400, `{"code": 11135, "msg":"image data invalid"}`, ErrImageInvalid},
 		{400, `{"error":{"code": "11135", "message":"image invalid"}}`, ErrImageInvalid},
-		// 防过宽：11133（模型不支持图片）不进 image_invalid。
-		{400, `{"code": 11133, "msg":"model does not support image"}`, ErrClient},
+		// 防过宽：11133 不进 image_invalid（11133 不特指图片——任意参数被模型供应商
+		// 拒绝都可能是它）。
+		//
+		// 11133 归 ErrBadParams（2026-10-15 图片回归实测修正）：与 11101 同属**请求级**
+		// 问题——同一个 body 换任何账号结果不变。此前它落通用 4xx 兜底 → ErrClient →
+		// 网关轮转全池账号后报 no_healthy_account，而错误信息明确写着「这次对话的内容
+		// 这个模型不接受，与网络无关」。误导用户以为账号挂了，还白烧一圈健康号配额。
+		// hint.go 的 isModelParamInvalid 早已按请求级语义给它写提示——分类与提示必须
+		// 同一口径，否则就会出现「提示说请求问题、行为却轮转所有账号」的分裂。
+		{400, `{"code": 11133, "msg":"model does not support image"}`, ErrBadParams},
+		{400, `{"code":11133,"msg":"Invalid request parameters"}`, ErrBadParams},
+		{400, `{"code": 11133, "msg": "model_param_invalid"}`, ErrBadParams},
+		// 实测原文形态（图片 URL 上游拉不到时上游返回的完整 body）。
+		{400, `{"code":11133,"msg":"Invalid request parameters","requestId":"b0b28043fef8dc726a97fd91240eda54","extError":{"code":"invalid_request_error","message":"the request parameters were rejected by the model provider","param":"","type":"invalid_request_error","StatusCode":400,"Request":null,"Response":null},"displayMsg":{"en":"The model cannot handle this request. Please retry","zh":"模型无法处理此请求，请重试"}}`, ErrBadParams},
 		{200, `quota exceeded`, ErrHardCredit},
 		// session 死亡优先于限流文案（401+12153 需人工重登，短冷却无意义）。
 		{401, `{"code":12153,"msg":"Offline user session not found, rate limit"}`, ErrSessionDead},
