@@ -81,6 +81,17 @@ type Config struct {
 	// 自实现固定分桶（internal/metrics），零新依赖。
 	Latency *metrics.Registry
 
+	// TTFB 首 token 延迟分位数观测（可选；nil = 不观测）。
+	// 与 Latency 的区别：Latency 记端到端（含 TTFB + 生成），这里只记「请求进来到
+	// 上游首帧到达」——网关要回答的两个问题不同（"总共等多久" vs "上游多快开始吐"）。
+	// 只在流式路径有观测（非流式无首帧概念）。
+	TTFB *metrics.Registry
+
+	// ErrKinds 上游错误分类计数（可选；nil = 不计数）。
+	// 分类逻辑本就齐全（upstream.Classify 13 种 ErrKind），此前只落单行日志；
+	// 挂上计数器后可在 /metrics 直接回答「最近是限流多了还是 WAF 多了」。
+	ErrKinds *metrics.KindCounters
+
 	// RequestLog 请求指标与脱敏 JSONL 归档（可选；nil = 不记录）。
 	RequestLog *reqlog.Recorder
 
@@ -1462,6 +1473,11 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 					logfmt.Label(acct.UID, acct.Nickname), bareModel, m, len(declaredTools))
 			}
 			st.ttfb = stats.TTFB()
+			// TTFB 分位数观测（可观测补齐）：只在真拿到首帧时记（0 = 无观测，
+			// 空流/断连不该把 0 当成「首帧 0 毫秒就到了」）。
+			if h.cfg.TTFB != nil && st.ttfb > 0 {
+				h.cfg.TTFB.Observe(bareModel, st.ttfb)
+			}
 			// usage 缺失时保留 chatStat.toks 的 -1 哨兵（观测缺失 → 显示 "-"），
 			// 不写入零值——否则「没观测到 usage」被伪造成「测得 0 token」，
 			// 与非流式走 completionTokens 返回 -1 的口径不一致。
@@ -1761,7 +1777,14 @@ func isUpstreamTimeout(err error, clientGone bool) bool {
 // body 仅在 ErrSoftRate/ErrAccountFault 分支用于解析重置时间/分野；model 为请求
 // 携带的模型名。uerr 是 ChatStreamContext 返回的分类信封（可携带 RetryAfter）；
 // 零值/防御路径下为 nil，冷却时长回落既有计算。
+//
+// 本函数同时是**上游错误分类计数的唯一汇聚点**：所有轮转失败分支都经过这里，
+// 故在开头按 kind 计数一次即覆盖全部分类（不用在每个调用点各写一遍，避免漏记
+// 与口径漂移）。
 func (h *Handler) applyErrorPolicy(uid string, kind upstream.ErrKind, body, model string, uerr *upstream.Error) {
+	if h.cfg.ErrKinds != nil {
+		h.cfg.ErrKinds.Inc(kind.String())
+	}
 	switch kind {
 	case upstream.ErrHardCredit:
 		// 402 + 余额关键词即积分耗尽：同步冷却到次日 04:00（签到任务 09/21 点恢复），
@@ -1872,6 +1895,35 @@ func (h *Handler) applyErrorPolicy(uid string, kind upstream.ErrKind, body, mode
 // helpers
 // ---------------------------------------------------------------------------
 
+// flushWriter 把每次 Write 立即刷给客户端（io.Writer 包装）。
+//
+// 用途：备用上游的 SSE 透传要「来一块吐一块」——默认的 io.Copy 会攒到缓冲满才
+// 写，流式体验被破坏（客户端看到的是一坨延迟到达的数据）。与 StreamHint 的
+// 逐帧 flush 同口径。
+//
+// Flusher 缺失时不报错：退化成缓冲写（比直接失败好，且网关前置无反代时
+// ResponseWriter 恒实现 Flusher）。
+type flushWriter struct {
+	w  http.ResponseWriter
+	fl http.Flusher
+	n  int64
+}
+
+func (fw *flushWriter) Write(p []byte) (int, error) {
+	n, err := fw.w.Write(p)
+	fw.n += int64(n)
+	if fw.fl != nil {
+		fw.fl.Flush()
+	}
+	return n, err
+}
+
+// flushWriter 构造：从 ResponseWriter 取 Flusher（取不到则只写不刷）。
+func newFlushWriter(w http.ResponseWriter) *flushWriter {
+	fl, _ := w.(http.Flusher)
+	return &flushWriter{w: w, fl: fl}
+}
+
 // fallbackForward 把请求体原样转发到备用 OpenAI 兼容端点（P2）。
 // 返回 true = 转发成功（已写响应）；false = 转发失败（调用方继续走错误路径）。
 func (h *Handler) fallbackForward(w http.ResponseWriter, r *http.Request, body []byte, model string) bool {
@@ -1910,18 +1962,30 @@ func (h *Handler) fallbackForward(w http.ResponseWriter, r *http.Request, body [
 	w.Header().Set("Content-Type", resp.Header.Get("Content-Type"))
 	w.WriteHeader(resp.StatusCode)
 
-	// SSE stream 直接 io.Copy 透传（缓冲会破坏流式体验）；非 stream 读全部 body
-	// 以便解析 usage 字段做用量归因（P2：备用源烧了多少 token 要看得见）。
+	// SSE stream 逐块 flush 透传（缓冲会破坏流式体验）；**不再静默吞掉 io.Copy
+	// 的错误**——R10 红线。此前 `_, _ = io.Copy(...)` 把「客户端断连 / 备用源半截流」
+	// 一律记成成功：调用方据此 return true，于是把一次实际上没走完的转发当成
+	// 已完成的成功响应（观测里看不到备用源的传输故障）。
 	ct := resp.Header.Get("Content-Type")
 	if strings.Contains(ct, "text/event-stream") {
-		_, _ = io.Copy(w, resp.Body)
-		log.Printf("[fallback] 已转发(stream) model=%s status=%d", model, resp.StatusCode)
+		fw := newFlushWriter(w)
+		n, cerr := io.Copy(fw, resp.Body)
+		if cerr != nil {
+			// 已写 header，不能再改状态码；但必须让调用方知道这次转发没走完。
+			log.Printf("[fallback] 备用源流式转发中断 model=%s status=%d bytes=%d err=%v",
+				model, resp.StatusCode, n, cerr)
+			return false
+		}
+		log.Printf("[fallback] 已转发(stream) model=%s status=%d bytes=%d", model, resp.StatusCode, n)
 		return true
 	}
 	// 非 stream：读全部 body → 解析 usage → 写回。
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return true // 已写 header，不能再改状态码
+		// 同上：读不全不是成功。返回 false 让调用方走既有错误路径
+		// （返回值语义：true = 已写出完整响应）。
+		log.Printf("[fallback] 备用源响应读取失败 model=%s err=%v", model, err)
+		return false
 	}
 	// 200 才解析 usage（错误响应没有 usage 字段）。
 	if resp.StatusCode == http.StatusOK && h.cfg.Usage != nil {

@@ -9,6 +9,7 @@ import (
 
 	"yg-gateway/internal/auth"
 	"yg-gateway/internal/metrics"
+	"yg-gateway/internal/upstream"
 )
 
 // TestMetricsEndpointExposition GET /metrics 返回 Prometheus 文本格式（F-710）。
@@ -113,6 +114,57 @@ func TestMetricsDegradesWithoutOptionalDeps(t *testing.T) {
 	// 必备族仍在（账号池是无条件依赖）。
 	if !strings.Contains(body, "yg_gateway_accounts") {
 		t.Errorf("account gauges must always be present\n---\n%s", body)
+	}
+}
+
+// TestMetricsTTFBAndErrorKinds TTFB 分桶与上游错误分类计数都出现在 /metrics（可观测补齐）。
+//
+// 牙齿：把 /metrics 里 TTFB 段或错误分类段去掉 → 对应用例 FAIL。
+func TestMetricsTTFBAndErrorKinds(t *testing.T) {
+	p := testPoolWith(&auth.Auth{UID: "u1", AccessToken: "at1", ExpiresAt: 9999999999})
+	ttfb := metrics.NewRegistry()
+	ttfb.Observe("glm-5.2", 800*time.Millisecond)
+	errs := metrics.NewKindCounters()
+	errs.Inc("soft_rate")
+	errs.Inc("soft_rate")
+	errs.Inc("waf_block")
+
+	h := NewHandler(Config{Pool: p, TTFB: ttfb, ErrKinds: errs})
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("GET", "/metrics", nil))
+	body := rec.Body.String()
+
+	for _, want := range []string{
+		"yg_gateway_ttfb_ms_bucket",
+		`yg_gateway_ttfb_ms_count{model="glm-5.2"} 1`,
+		`yg_gateway_upstream_errors_total{kind="soft_rate"} 2`,
+		`yg_gateway_upstream_errors_total{kind="waf_block"} 1`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("exposition missing %q\n---\n%s", want, body)
+		}
+	}
+}
+
+// TestErrKindCountedOnErrorPolicy 错误分类计数由 applyErrorPolicy 统一汇聚：
+// 调用一次即计一次，覆盖全部分类（不用在每个调用点各写一遍）。
+//
+// 牙齿：把 applyErrorPolicy 开头的 Inc 去掉 → 本测试 FAIL。
+func TestErrKindCountedOnErrorPolicy(t *testing.T) {
+	p := testPoolWith(&auth.Auth{UID: "u1", AccessToken: "at1", ExpiresAt: 9999999999})
+	errs := metrics.NewKindCounters()
+	h := NewHandler(Config{Pool: p, ErrKinds: errs})
+
+	h.applyErrorPolicy("u1", upstream.ErrSoftRate, "", "glm-5.2", nil)
+	h.applyErrorPolicy("u1", upstream.ErrSoftRate, "", "glm-5.2", nil)
+	h.applyErrorPolicy("u1", upstream.ErrWafBlock, "", "glm-5.2", nil)
+
+	snap := errs.Snapshot()
+	if snap["soft_rate"] != 2 {
+		t.Errorf("soft_rate=%d want 2", snap["soft_rate"])
+	}
+	if snap["waf_block"] != 1 {
+		t.Errorf("waf_block=%d want 1", snap["waf_block"])
 	}
 }
 
