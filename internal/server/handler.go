@@ -1194,6 +1194,14 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		}
 		heldUID = acct.UID
 
+		// 成本未知跟踪（AGENTS.md「Unknown 消解纪律」）：选中即意味着这个
+		// (账号,模型) 组合即将被使用，而它的成本可能还没摸清。登记为可消解的
+		// 未知（幂等去重，命中路径只是一次原子读），由后续 NoteModelCost 自动消解。
+		//
+		// 为什么在这里而不是 pick 内部：pick 在 pool 写锁/读锁的临界区里，
+		// 不该再碰别的锁（ADR-005 特意让 pick 走读锁以避免串行化）。
+		h.cfg.Pool.TrackCostUnknown(acct.UID, bareModel)
+
 		// token 临近过期 → 先 refresh（失败冷却换号）
 		// 继承请求 ctx（F-708）：客户端断开/停机时刷新随之取消，不再占满 30s。
 		if acct.NeedsRefresh(h.cfg.RefreshSkew) {

@@ -9,6 +9,7 @@ import (
 
 	"yg-gateway/internal/auth"
 	"yg-gateway/internal/metrics"
+	"yg-gateway/internal/unknown"
 	"yg-gateway/internal/upstream"
 )
 
@@ -165,6 +166,24 @@ func TestErrKindCountedOnErrorPolicy(t *testing.T) {
 	}
 	if snap["waf_block"] != 1 {
 		t.Errorf("waf_block=%d want 1", snap["waf_block"])
+	}
+}
+
+// TestMetricsUnknownsGauge 未消解未知数暴露为 gauge（可观测性的诚实度指标）。
+//
+// 牙齿：把 unknowns_open 那一段去掉 → 本测试 FAIL。
+func TestMetricsUnknownsGauge(t *testing.T) {
+	p := testPoolWith(&auth.Auth{UID: "u1", AccessToken: "at1", ExpiresAt: 9999999999})
+	reg := unknown.NewRegistry()
+	p.SetUnknownRegistry(reg)
+	p.TrackCostUnknown("u1", "glm-5.2")
+
+	h := NewHandler(Config{Pool: p})
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("GET", "/metrics", nil))
+	body := rec.Body.String()
+	if !strings.Contains(body, "yg_gateway_unknowns_open 1") {
+		t.Errorf("missing unknowns_open gauge\n---\n%s", body)
 	}
 }
 
