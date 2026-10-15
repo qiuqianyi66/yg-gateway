@@ -851,139 +851,30 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	// deriveSessionKeys——它与粘性开关解耦，且必须在提示词改写之前取。
 	sessKey, stickyUID, turnKey := h.deriveSessionKeys(&reqView, modelStr)
 
-	// gateway_hint 判定所需的请求形态（image_url part）：**惰性求值**。
+	// 运行期状态载体：原 5 个闭包（hasImage / releaseHeld / unbindSticky / fail /
+	// recordAttempt）已改为 chatRun 的方法（chatrun.go）——它们共享 heldUID /
+	// stickyUID / sessKey / st 等状态，只有挂到结构体上才能跨阶段函数使用，
+	// 而不必（也不允许）提升为包级变量。
 	//
-	// 这个信息只在错误路径（hintOf / hintContext）用到，成功请求完全不需要；
-	// 而 hasImagePart 是一次全文档 json.Unmarshal——大上下文请求下与成功路径
-	// 的收益完全无关的纯浪费。改为首次调用时才解析，结果缓存（同请求内 hint
-	// 可能被调用多次，不重复解析）。
-	// 必须在 body 被改写之前捕获原始 body（改写会动 messages 内容）。
-	reqBodyForHint := body
-	var imageProbe struct {
-		done bool
-		val  bool
+	// imageRawBody 在此捕获**原始 body**：阶段③ 的提示词改写会动 messages 内容，
+	// 而带图判定必须针对客户端原始请求（改写在下方才执行）。
+	run := &chatRun{
+		h:            h,
+		st:           st,
+		sessKey:      sessKey,
+		bareModel:    bareModel,
+		modelStr:     modelStr,
+		modelRate:    modelRate,
+		authKey:      authKey,
+		stickyUID:    stickyUID,
+		imageViewOK:  viewOK,
+		imageReqView: &reqView,
+		imageRawBody: body,
 	}
-	reqHasImage := func() bool {
-		if !imageProbe.done {
-			// 视图可用时走视图（与请求其余消费方共用同一份 messages 子树，
-			// 不重复解析）；视图不可用时才回落字节路径（与旧行为一致）。
-			if viewOK {
-				imageProbe.val = hasImageView(&reqView)
-			} else {
-				imageProbe.val = hasImagePart(reqBodyForHint)
-			}
-			imageProbe.done = true
-		}
-		return imageProbe.val
-	}
-
-	// 在途租约：成功选中即占名额；函数出口（含成功 return 与 panic）统一释放。
-	var heldUID string
-	defer func() {
-		if heldUID != "" {
-			h.cfg.Pool.Release(heldUID)
-		}
-	}()
-	releaseHeld := func() {
-		if heldUID != "" {
-			h.cfg.Pool.Release(heldUID)
-			heldUID = ""
-		}
-	}
-	// unbindSticky 解绑当前会话粘性号（stickyUID 非空时）。供「粘性号不可用/被抢」与 fail 共用。
-	// 幂等：stickyUID 已空则空操作；不会误解绑其他轮的绑定。仅当 Session != nil 时 stickyUID 才会非空。
-	unbindSticky := func() {
-		if stickyUID != "" {
-			h.cfg.Session.Unbind(sessKey)
-			stickyUID = ""
-		}
-	}
-	// fail 在轮转失败分支统一：释放租约 + 若失败号正是粘性号则解绑（下次请求重新分配）。
-	fail := func(uid string) {
-		releaseHeld()
-		if stickyUID != "" && uid == stickyUID {
-			unbindSticky()
-		}
-	}
-	// ttfb 首 token 等待（仅流式有观测；非流式传 0 = 无观测，速率不扣减）。
-	// 显式入参而不是读 st.ttfb：后者在流式分支里是**调用之后**才赋值的，
-	// 靠顺序传递会让将来重排代码时静默把速率算回旧的错口径。
-	recordAttempt := func(uid string, delta pool.TokenUsageDelta, credit float64, hasCredit bool, started time.Time, ttfb time.Duration) {
-		st.attempts++
-		if delta.HasPromptTokens {
-			st.promptTokens = delta.PromptTokens
-		}
-		if delta.HasCompletionTokens {
-			st.completionTokens = delta.CompletionTokens
-		}
-		if delta.HasTotalTokens {
-			st.totalTokens = delta.TotalTokens
-		} else if delta.HasPromptTokens || delta.HasCompletionTokens {
-			st.totalTokens = st.promptTokens + st.completionTokens
-		}
-		delta.Model = bareModel
-		if delta.Model == "" {
-			delta.Model = modelStr
-		}
-		latency := time.Since(started)
-		latencyMs := latency.Milliseconds()
-		if latencyMs < 1 {
-			latencyMs = 1
-		}
-		// 延迟分位数观测（ADR-003 D-403）：与 usage 同汇聚点，全局 + 按模型。
-		// 观测完整延迟（含 TTFB），而非仅生成阶段——网关要回答的是"用户等了多久"。
-		if h.cfg.Latency != nil {
-			h.cfg.Latency.Observe(delta.Model, latency)
-		}
-		delta.HasLatencyMs = true
-		delta.LatencyMs = latencyMs
-
-		// HasCompletionTokens 是「本次有没有 token 观测」的独立判断，与速率怎么算
-		// 无关，所以留在调用点；速率本身的边界（TTFB 缺失/超界）收在 tokensPerSecond。
-		if delta.HasCompletionTokens {
-			if tps, ok := tokensPerSecond(delta.CompletionTokens,
-				time.Duration(latencyMs)*time.Millisecond, ttfb); ok {
-				delta.HasTokensPerSecond = true
-				delta.TokensPerSecond = tps
-			}
-		}
-		h.cfg.Pool.RecordTokenUsage(uid, delta)
-
-		// 用量时序记录。ok 以「上游是否给了 usage」判定：空 delta 意味着这次尝试
-		// 没拿到任何 token 统计（传输错误 / >=400 / 解析失败），计为失败尝试。
-		// 失败也计入请求数——否则重试放大在「用量」视图里看不见。
-		if h.cfg.Usage != nil {
-			// realm 只取一个字段：此前用 Pool.Status(uid) 会构造整个 Status
-			//（rate_limited_models / model_costs 切片 + 两次排序），每次尝试都白跑。
-			realm := h.cfg.Pool.RealmOf(uid)
-			if realm == "" {
-				realm = "cn"
-			}
-			keyID := ""
-			if authKey != nil {
-				keyID = authKey.ID
-			}
-			h.cfg.Usage.Add(time.Now(), realm, uid, delta.Model, usage.Delta{
-				PromptTokens:     delta.PromptTokens,
-				HasPromptTokens:  delta.HasPromptTokens,
-				CompletionTokens: delta.CompletionTokens,
-				HasCompletion:    delta.HasCompletionTokens,
-				TotalTokens:      delta.TotalTokens,
-				HasTotal:         delta.HasTotalTokens,
-				Credit:           credit,
-				HasCredit:        hasCredit,
-				HasCacheTokens:   st.hasCache,
-				CacheHitTokens:   st.cacheHit,
-				CacheMissTokens:  st.cacheMiss,
-				ModelRate:        modelRate,
-				KeyID:            keyID,
-				LatencyMs:        delta.LatencyMs,
-				HasLatency:       delta.HasLatencyMs,
-				TokensPerSecond:  delta.TokensPerSecond,
-				HasTPS:           delta.HasTokensPerSecond,
-			}, delta.HasTotalTokens || delta.HasCompletionTokens || delta.HasPromptTokens)
-		}
-	}
+	// 在途租约兜底释放：函数出口（含成功 return 与 panic）统一释放。
+	// 与原 defer 语义一致——原实现只 Release 不重置（出口即结束，重置无意义），
+	// releaseHeld 多一次赋空，无副作用。
+	defer run.releaseHeld()
 
 	// 阶段③（系统提示词改写 / outbound model 名重写 / 会话头族）已抽到 chatflow.go
 	// 的 prepareOutbound——三件事都在轮转循环之外只做一次，循环内每次出站复用同一
@@ -995,12 +886,12 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	for i := 0; i < h.cfg.MaxRotate; i++ {
 		// 选号：粘性号优先（PickByUIDForModel 已校验该模型可用性 + 在途未满），否则普通轮换。
 		var acct *auth.Auth
-		if stickyUID != "" {
-			acct = h.cfg.Pool.PickByUIDForModel(stickyUID, bareModel)
+		if run.stickyUID != "" {
+			acct = h.cfg.Pool.PickByUIDForModel(run.stickyUID, bareModel)
 			if acct == nil || (realm != "" && acct.Realm() != realm) {
 				// 粘性号在当前模型不可用（冷却/占满/该模型被 6004 限额）或 realm 不符 → 解绑，
 				// 本次回落普通轮换。
-				unbindSticky()
+				run.unbindSticky()
 				acct = nil
 			}
 		}
@@ -1037,8 +928,8 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		if !h.cfg.Pool.Acquire(acct.UID) {
 			// 若被抢的正是粘性号，立即解绑并回落普通轮换，避免下一轮仍撞同一个
 			// 满载粘性号再浪费一次 PickByUID 往返（语义与 fail()/PickByUID-nil 的解绑一致）。
-			if stickyUID != "" && acct.UID == stickyUID {
-				unbindSticky()
+			if run.stickyUID != "" && acct.UID == run.stickyUID {
+				run.unbindSticky()
 			}
 			if !rotateBackoff(i, r.Context()) {
 				// 客户端已断连：换号重试无意义，终止轮转走末端错误透传。
@@ -1046,7 +937,7 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 			}
 			continue // 最后一个名额被并发抢走 → 换号
 		}
-		heldUID = acct.UID
+		run.heldUID = acct.UID
 
 		// 成本未知跟踪（AGENTS.md「Unknown 消解纪律」）：选中即意味着这个
 		// (账号,模型) 组合即将被使用，而它的成本可能还没摸清。登记为可消解的
@@ -1067,7 +958,7 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 				} else {
 					h.cfg.Pool.NoteError(acct.UID)
 				}
-				fail(acct.UID)
+				run.fail(acct.UID)
 				if !rotateBackoff(i, r.Context()) {
 					break // ctx 取消：终止轮转（refresh 失败换号退避）
 				}
@@ -1102,7 +993,7 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 			// **客户端仍在但 ctx 被取消**——那只能是我们自己的空闲看门狗掐的流，
 			// 也就是上游停滞。客户端主动断连时 r.Context() 已取消，走下面的抖动分支。
 			if isUpstreamTimeout(terr, r.Context().Err() != nil) {
-				recordAttempt(acct.UID, pool.TokenUsageDelta{}, 0, false, attemptStarted, 0)
+				run.recordAttempt(acct.UID, pool.TokenUsageDelta{}, 0, false, attemptStarted, 0)
 				st.status = http.StatusServiceUnavailable
 				lastErr = fmt.Errorf("%w: %v", errUpstreamTimeout, terr)
 				log.Printf("WARN: [server] upstream timeout acct=%s: %v (rotation stopped, account not penalized)",
@@ -1113,18 +1004,18 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 			// 连败兜底（issue #114）：喂连败计数——连不上上游是「不知道原因的失败」，
 			// 连败 N 次临时出池，单次/偶发不罚（NoteFailures 内部达阈才动作）。
 			// 上游 client 已打 transport error 日志。
-			recordAttempt(acct.UID, pool.TokenUsageDelta{}, 0, false, attemptStarted, 0)
+			run.recordAttempt(acct.UID, pool.TokenUsageDelta{}, 0, false, attemptStarted, 0)
 			st.status = http.StatusServiceUnavailable
 			lastErr = terr
 			h.cfg.Pool.NoteFailures(acct.UID)
-			fail(acct.UID)
+			run.fail(acct.UID)
 			if !rotateBackoff(i, r.Context()) {
 				break // ctx 取消：终止轮转（传输层错误换号退避）
 			}
 			continue
 		}
 		if status >= 400 {
-			recordAttempt(acct.UID, pool.TokenUsageDelta{}, 0, false, attemptStarted, 0)
+			run.recordAttempt(acct.UID, pool.TokenUsageDelta{}, 0, false, attemptStarted, 0)
 			st.status = status
 			var kind upstream.ErrKind
 			if uerr != nil {
@@ -1143,7 +1034,7 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 				body = prompt.Rewrite(body, prompt.Degraded)
 				degradedApplied = true
 				delete(tried, acct.UID) // 单账号池也能拿到重试机会（降级重试占一次名额）
-				releaseHeld()
+				run.releaseHeld()
 				log.Printf("content-blocked (likely fingerprint false positive) -> degraded prompt retry")
 				continue
 			}
@@ -1153,14 +1044,14 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 				// error-passthrough：message 装上游 body 原文（code/msg/requestId 原样），
 				// 不再改写成网关固定文案——客户端必须看到真实错误才能排查。
 				h.applyErrorPolicy(acct.UID, kind, string(respBody), bareModel, uerr)
-				fail(acct.UID)
+				run.fail(acct.UID)
 				msg := string(respBody)
 				if strings.TrimSpace(msg) == "" {
 					// 空 body 兜底：无上游原文可透传，保留可读分类文案（不编造原文）。
 					msg = "content blocked by upstream content firewall"
 				}
 				writeOpenAIErrorHint(w, http.StatusBadRequest, "content_blocked", msg,
-					h.hintOf(upstream.ErrContentBlocked, string(respBody), bareModel, reqHasImage(), uerr))
+					h.hintOf(upstream.ErrContentBlocked, string(respBody), bareModel, run.hasImage(), uerr))
 				st.status = http.StatusBadRequest
 				st.outcome = reqlog.OutcomeHTTPError
 				return
@@ -1173,9 +1064,9 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 			// 的错误信息，客户端必须看到，禁止固定词覆盖）。
 			if kind == upstream.ErrPromptTooLong {
 				h.applyErrorPolicy(acct.UID, kind, string(respBody), bareModel, uerr)
-				fail(acct.UID)
+				run.fail(acct.UID)
 				writeOpenAIErrorHint(w, http.StatusBadRequest, "prompt_too_long", promptTooLongMessage(string(respBody)),
-					h.hintOf(upstream.ErrPromptTooLong, string(respBody), bareModel, reqHasImage(), uerr))
+					h.hintOf(upstream.ErrPromptTooLong, string(respBody), bareModel, run.hasImage(), uerr))
 				st.status = http.StatusBadRequest
 				st.outcome = reqlog.OutcomeHTTPError
 				return
@@ -1184,13 +1075,13 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 			// 同一 body 换账号仍是同样的解析结果，轮转只会放大无效请求。
 			if kind == upstream.ErrImageInvalid {
 				h.applyErrorPolicy(acct.UID, kind, string(respBody), bareModel, uerr)
-				fail(acct.UID)
+				run.fail(acct.UID)
 				msg := string(respBody)
 				if strings.TrimSpace(msg) == "" {
 					msg = "image request was rejected by upstream"
 				}
 				writeOpenAIErrorHint(w, http.StatusBadRequest, "image_invalid", msg,
-					h.hintOf(upstream.ErrImageInvalid, string(respBody), bareModel, reqHasImage(), uerr))
+					h.hintOf(upstream.ErrImageInvalid, string(respBody), bareModel, run.hasImage(), uerr))
 				st.status = http.StatusBadRequest
 				st.outcome = reqlog.OutcomeHTTPError
 				return
@@ -1202,13 +1093,13 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 			// 客户端于是对必然失败的请求无限重试。立即透传上游原文回 400。
 			if kind == upstream.ErrBadParams {
 				h.applyErrorPolicy(acct.UID, kind, string(respBody), bareModel, uerr)
-				fail(acct.UID)
+				run.fail(acct.UID)
 				msg := string(respBody)
 				if strings.TrimSpace(msg) == "" {
 					msg = "chat request body was rejected by upstream"
 				}
 				writeOpenAIErrorHint(w, http.StatusBadRequest, "bad_params", msg,
-					h.hintOf(upstream.ErrBadParams, string(respBody), bareModel, reqHasImage(), uerr))
+					h.hintOf(upstream.ErrBadParams, string(respBody), bareModel, run.hasImage(), uerr))
 				st.status = http.StatusBadRequest
 				st.outcome = reqlog.OutcomeHTTPError
 				return
@@ -1217,7 +1108,7 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 			// 要求原文全量）+ Kind/RetryAfter（末端映射与冷却时长共用）。
 			lastErr = &upstream.Error{Kind: kind, Status: status, Msg: string(respBody), RetryAfter: uerr.RetryAfter}
 			h.applyErrorPolicy(acct.UID, kind, string(respBody), bareModel, uerr)
-			fail(acct.UID)
+			run.fail(acct.UID)
 			// WAF IP 级 fail-fast（优先于 rotateBackoff 退避——IP 级拦截时退避无意义）：
 			// 该次 WAF 403 喂入 IP 级状态机，若激活（短窗多号命中，IP 被拦而非账号）
 			// 则立即终止轮转——继续换号只会把请求放大 MaxRotate 倍打同一出口 IP，
@@ -1259,7 +1150,7 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 				streamOpts = append(streamOpts, upstream.WithKeepAlive(ka))
 			}
 			sErr := upstream.StreamHint(w, stats, upstream.FrameHintFunc(func() upstream.HintContext {
-				return h.hintContext(bareModel, reqHasImage())
+				return h.hintContext(bareModel, run.hasImage())
 			}), streamOpts...)
 			switch {
 			case upstream.IsEmptyStreamError(sErr):
@@ -1318,7 +1209,7 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 			if hit, miss, ok := stats.CacheTokens(); ok {
 				st.cacheHit, st.cacheMiss, st.hasCache = hit, miss, true
 			}
-			recordAttempt(acct.UID, stats.Usage(), credit, hasCredit, attemptStarted, stats.TTFB())
+			run.recordAttempt(acct.UID, stats.Usage(), credit, hasCredit, attemptStarted, stats.TTFB())
 			// WARN 信号放 recordAttempt 之后：st.promptTokens 此时才是本次的观测值。
 			if st.hasCache {
 				cacheMissWarn.noteCacheTokens(bareModel, st.promptTokens, st.cacheHit, st.cacheMiss)
@@ -1361,7 +1252,7 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		resp, err := upstream.Aggregate(rc)
 		rc.Close()
 		if err != nil {
-			recordAttempt(acct.UID, pool.TokenUsageDelta{}, 0, false, attemptStarted, 0)
+			run.recordAttempt(acct.UID, pool.TokenUsageDelta{}, 0, false, attemptStarted, 0)
 			// 上游流解析失败：客户端还没看到任何输出，回 502 并告知原因。
 			writeOpenAIError(w, http.StatusBadGateway, "upstream_parse", err.Error())
 			st.status = http.StatusBadGateway
@@ -1386,7 +1277,7 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 				st.cacheHit, st.cacheMiss, st.hasCache = int64(hit), int64(miss), true
 			}
 		}
-		recordAttempt(acct.UID, usageDeltaFromResponse(resp), credit, hasCredit, attemptStarted, 0)
+		run.recordAttempt(acct.UID, usageDeltaFromResponse(resp), credit, hasCredit, attemptStarted, 0)
 		if st.hasCache {
 			cacheMissWarn.noteCacheTokens(bareModel, st.promptTokens, st.cacheHit, st.cacheMiss)
 		}
@@ -1428,7 +1319,7 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	// 这里只做写回。拆分的收益不只是行数——错误映射现在可脱离 HTTP 上下文单独测试，
 	// 且「分类/文案」与「轮转/响应写回」不再绞在一起（本轮修 11133 分类时正是被
 	// 这层绞合绊住的：想看分类得先穿过整个轮转循环）。
-	status, code, msg, hint := h.finalErrorOf(lastErr, modelBlock, groupFilteredOut, authKey, bareModel, reqHasImage())
+	status, code, msg, hint := h.finalErrorOf(lastErr, modelBlock, groupFilteredOut, authKey, bareModel, run.hasImage())
 	writeOpenAIErrorHint(w, status, code, msg, hint)
 	st.status = status
 	st.outcome = reqlog.OutcomeHTTPError
