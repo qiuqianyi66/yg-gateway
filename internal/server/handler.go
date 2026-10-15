@@ -905,7 +905,7 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	// 若请求模型在备用源白名单里，把请求原样转发到备用 OpenAI 兼容端点。
 	// 转发成功（非错误响应）就直接 return，不走下面的错误构造。
 	if h.cfg.Fallback != nil && h.cfg.Fallback.Models[bareModel] {
-		if h.fallbackForward(w, r, body, bareModel) {
+		if h.fallbackForward(w, r, run.body, bareModel) {
 			st.status = http.StatusOK
 			st.outcome = reqlog.OutcomeSuccess
 			return
