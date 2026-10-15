@@ -23,6 +23,7 @@ import (
 
 	"yg-gateway/internal/httpauth"
 	"yg-gateway/internal/pool"
+	"yg-gateway/internal/prompt"
 	"yg-gateway/internal/session"
 	"yg-gateway/internal/upstream"
 )
@@ -280,4 +281,111 @@ func (h *Handler) finalErrorOf(
 	}
 
 	return status, code, msg, hint
+}
+
+// deriveSessionKeys 阶段②「会话/轮级键派生」部分：会话级键、粘性绑定号、轮级键。
+//
+// 与粘性开关解耦：会话键的提取本身与是否启用粘性无关（关闭粘性时，会话头族的
+// 聚合主键仍按会话级生成，不悄悄退化成轮级——issue #35 侧语义）。
+//
+// 参数 reqView 传指针而非值：RequestView 的子树解析结果缓存在视图内，值传递会让
+// 每次调用各建一份缓存；本包多处消费同一份 messages 子树，共用才省。
+func (h *Handler) deriveSessionKeys(reqView *session.RequestView, modelStr string) (sessKey, stickyUID, turnKey string) {
+	// DisableSessionDerive 控制是否关闭「内容派生」回退（见 session.ExtractKeyOpt）。
+	// 反向命名是为了零值安全——本包的单测大量用 Config{...} 部分字面量构造，
+	// 正向命名（SessionDerive bool）会因零值 false 静默关掉派生、改变既有语义。
+	sessKey = session.ExtractKeyOptView(reqView, !h.cfg.DisableSessionDerive)
+	if h.cfg.Session != nil && sessKey != "" {
+		// 按模型解析：绑定号在**当前模型**被 6004 限额时视为不可用 → 重新分配，
+		// 而不是钉在限额号上反复失败（"限额后换不动号"的正解）。
+		if uid, ok := h.cfg.Session.ResolveForModel(sessKey, modelStr); ok {
+			stickyUID = uid
+		}
+	}
+
+	// 轮级聚合键：按 body 里最后一条 user 消息派生（同轮内所有上游调用同键，
+	// 换 user 消息换键）。#170 起带会话键的客户端也统一走轮级（对齐官方桌面 CLI
+	// 的 X-Conversation-Request-ID 轮级语义——TraceStartHook 每次 USER_PROMPT_SUBMIT
+	// 清空重生成），故不再限 sessKey=="" 才计算；sessKey 由调用方以复合键方式入键
+	// （防不同会话同轮文本互撞）。
+	// **必须在提示词改写之前取**——改写会动 messages 内容，之后取会让键漂移。
+	turnKey = session.TurnKeyView(reqView)
+	return sessKey, stickyUID, turnKey
+}
+
+// outboundPrep 阶段③（出站 body 准备）的产物。
+type outboundPrep struct {
+	body            []byte
+	degradedApplied bool
+	chatMeta        upstream.ChatMeta
+}
+
+// prepareOutbound 阶段③：系统提示词改写 → outbound model 名重写 → 会话头族构造。
+//
+// 三件事都在**轮转循环之外**做一次（每个请求一次）：循环内每次出站复用同一份
+// body 与同一组会话头，换号/重试/降级都不发散。
+//
+// 参数 conversationReqHeader / traceID 取入站头的原值（由调用方从 *http.Request
+// 取出后传入）——本函数不持有 *http.Request，依赖显式、可单独测试。
+func (h *Handler) prepareOutbound(
+	body []byte,
+	reqView *session.RequestView,
+	upstreamModel, modelStr, sessKey, turnKey string,
+	conversationReqHeader, traceID string,
+) outboundPrep {
+	// 系统提示词改写（出站前、轮转前；每个请求一次）。
+	//   - custom：用自有提示词替换客户端 system/developer（从源头消灭 system 指纹误报）。
+	//   - append：开头连续 system/developer 块后插自有提示词，既有消息逐字不动
+	//     （客户端项目规范/工具约定与网关提示词并用，issue #129）。
+	//   - passthrough + 降级期：换 Degraded 中性提示词直达，不再先撞 400。
+	//   - passthrough / append 非降级期：透传客户端原始 system（append 则再插一条网关 system）。
+	// 降级裁决：append 在降级期退化为 replace（Rewrite(Degraded)）——append 带
+	// 指纹原文重试是确定性再撞墙，replace 是一次性最小抢救（issue #129 设计 §4）。
+	degradedApplied := false
+	if h.cfg.PromptMode == "custom" && h.cfg.PromptText != "" {
+		body = prompt.Rewrite(body, h.cfg.PromptText)
+	} else if h.cfg.PromptMode == "append" && h.cfg.PromptText != "" && !h.degrade.Active() {
+		body = prompt.Append(body, h.cfg.PromptText)
+	} else if (h.cfg.PromptMode == "passthrough" || h.cfg.PromptMode == "append") && h.degrade.Active() {
+		body = prompt.Rewrite(body, prompt.Degraded)
+		degradedApplied = true
+	}
+
+	// outbound model 名重写：realm 前缀是网关侧路由协议，上游不认前缀；
+	// 若配置了 model_aliases，客户端短名也要替换成上游实际名。
+	// 回包给客户端的 delta.Model 仍用客户端原始名 bareModel（不暴露映射）。
+	if upstreamModel != modelStr {
+		body = rewriteModel(body, upstreamModel)
+	}
+
+	// 会话头族（issue #35）：后台按 X-Conversation-Request-ID（对话轮级）聚合请求，
+	// 官方客户端一次 user send 内所有 tool call/重试/换号复用同一个 ID。此处**轮转
+	// 循环外**生成一次，循环内每次出站原样复用 → 换号/重试/降级全部同 ID，后台不再
+	// 碎片化（此前网关一个都不发，上游按 HTTP 请求逐条记账，同一对话几十上百个
+	// RequestID）。
+	//   - conversationID：body 提取（透传客户端原值，缺省空串——不伪造）；
+	//   - conversationRequestID：入站 X-Conversation-Request-ID 透传优先，否则按
+	//     粘性 key 进程内稳定生成；粘性 key 也空时走轮级兜底（TurnKey/TurnRequestID），
+	//     无 user 消息时退化成本请求级随机——轮转内捕获一次即共享；
+	//   - messageID 在 ChatHeaders 内每条消息生成（消息级独立，无需外部可见）。
+	chatMeta := upstream.ChatMeta{ConversationID: session.ResolveConversationIDView(reqView)}
+	switch {
+	case conversationReqHeader != "":
+		chatMeta.ConversationRequestID = conversationReqHeader
+	case turnKey != "" && sessKey != "":
+		// 轮级复合键：sessKey 入键防跨会话同轮文本互撞（#170 统一轮级）。
+		chatMeta.ConversationRequestID = session.TurnRequestID(sessKey + ":" + turnKey)
+	case turnKey != "":
+		// 无会话键客户端：纯轮级键（既有兜底语义不变，存量会话键值零漂移）。
+		chatMeta.ConversationRequestID = session.TurnRequestID(turnKey)
+	case sessKey != "":
+		// 残留空态兜底（无 user 消息/无可签名内容）：会话级聚合，好于请求级随机。
+		chatMeta.ConversationRequestID = session.RequestIDForKey(sessKey)
+	default:
+		// 无会话键也无轮级键：请求级随机（轮转内捕获一次即共享）。
+		chatMeta.ConversationRequestID = session.TurnRequestID("")
+	}
+	chatMeta.TraceID = traceID
+
+	return outboundPrep{body: body, degradedApplied: degradedApplied, chatMeta: chatMeta}
 }
