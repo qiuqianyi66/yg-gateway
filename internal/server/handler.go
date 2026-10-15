@@ -819,103 +819,24 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	}
 	defer h.cfg.Pool.ReleaseGlobal()
 
-	// 客户端 IP 提取（F-002：按受信任代理判定；未配置受信任代理时不采信伪造的
-	// X-Forwarded-For，回落 TCP 对端）。透传与否由 upstream.PassthroughIP 决定，
-	// 但这里先保证「采信」这件事是安全的。
-	clientIP := extractClientIP(h.cfg.TrustedProxy, r)
-	// 入站请求体上限（F-001）：MaxBodyBytes > 0 时用 MaxBytesReader 截断，超大
-	// body 不会整体读进内存（否则 io.ReadAll 会把几 GB 的 body 一次性吞下——DoS）。
-	// 超限时 ReadAll 返回 *http.MaxBytesError，就地 413（语义精确，客户端可据此调整）。
-	// 缺省 0 = 不设上限（保留旧行为）。#41 的截断防御语义保留在读错误路径：
-	// 移除预拦截后，截断只可能来自客户端自己断流或 MaxBytesReader，读 body 出错
-	// 就地 4xx，不把半截 JSON 喂上游 unmarshal 报 unexpected EOF 冤枉罚号。
-	var body []byte
-	var err error
-	if h.cfg.MaxBodyBytes > 0 {
-		body, err = io.ReadAll(http.MaxBytesReader(w, r.Body, h.cfg.MaxBodyBytes))
-	} else {
-		body, err = io.ReadAll(r.Body)
-	}
-	if err != nil {
-		var mbe *http.MaxBytesError
-		if errors.As(err, &mbe) {
-			writeOpenAIError(w, http.StatusRequestEntityTooLarge, "request_too_large",
-				fmt.Sprintf("request body exceeds %d bytes", mbe.Limit))
-			return
-		}
-		writeOpenAIError(w, http.StatusBadRequest, "invalid_request", "read body: "+err.Error())
+	// 阶段①（clientIP / 读 body / 单次解析 / 模型与 Key 校验）已抽到
+	// chatflow.go 的 prepareChatRequest。**两个 defer 刻意留在本函数**：
+	// ReleaseGlobal 的作用域必须是整个请求（搬走会让全局在途名额提前释放），
+	// st.done 的作用域也必须是整个请求（搬走会让耗时统计在阶段①就落日志）。
+	prep, ok := h.prepareChatRequest(w, r)
+	if !ok {
 		return
 	}
-	// 入站请求体**只解析一次**（F-701）：顶层惰性视图 + 子树按需解析。
-	//
-	// 此前每个消费方各自全文档 json.Unmarshal（peek / 日志取 model / 工具名单 /
-	// 会话键 / 轮级键 / conversationId / 是否带图），大上下文请求下是纯 CPU+GC
-	// 支出。改成一次顶层解析后，messages / tools 子树只在真有消费方需要时才解析，
-	// 且同一请求内只解析一次（视图内缓存）。
-	//
-	// 解析失败（body 不是 JSON 对象）→ viewOK=false，各消费方回落既有空值语义，
-	// 与旧实现「各自解析失败」逐位一致（不引入新的失败模式）。
-	reqView, viewOK := session.ParseRequestView(body)
-	if !viewOK {
-		// 兜底：视图不可用时退化为零值视图（各取值方法返回空值，与旧语义一致）。
-		reqView = session.RequestView{}
-	}
-	// peek 只取 model 的原始字节与 stream 布尔：Model 声明为 json.RawMessage
-	// 是为了判定原始 JSON 类型（missing/null/string/other 四态），不需要对整份
-	// body 再解一遍。
-	peekModel := reqView.Model()
-	peekStream := reqView.Stream()
-	modelKind := modelKindOf(peekModel) // "missing" / "null" / "string" / "other"
-	// 字符串形态才解出裸值；missing/null/other 一律空串（与旧 peek.Model 同语义：
-	// json.Unmarshal 到 string 时非字符串会被静默置零，result 同样是空串）。
-	modelStr := ""
-	if modelKind == "string" {
-		_ = json.Unmarshal(peekModel, &modelStr)
-	}
-
-	// 工具名名单：上游在没有 tools 的请求里会把工具调用吐成原生标记文本
-	// （见 upstream/dsml.go），修复层用它做严格判定。名单来自「本请求声明的 tools」
-	// 与「会话历史里出现过的工具名」两个来源——实测 tools 声明会在中转环节丢失，
-	// 只认前者会让修复层在最需要它的场景下失效。
-	// 在提示词/模型名改写之前取（那些改写不动 tools / messages[].tool_calls 子树）。
-	// 走视图路径：与会话键/轮级键共用同一份 messages 子树，不重复解析。
-	declaredTools := upstream.ToolNameAllowlistView(&reqView)
-
-	// realm 前缀解析（D6）：model 名可能带 "[realm:]" 前缀。剥出 realm + bareModel，
-	// bareModel 用于选号/粘性/出站 body 重写（前缀是网关侧路由协议，上游只认裸名）。
-	// 裸名 → ("cn", 原串)，CN 现状零回归。
-	realm, bareModel := resolveModel(modelStr)
-	// 模型别名映射：bareModel 是客户端原始裸名（选号/白名单/用量/回包全用它）；
-	// upstreamModel 是出站 body 真正发给上游的名。无映射时二者相等（零回归）。
-	upstreamModel := applyModelAliases(bareModel, h.loadLive().ModelAliases)
-	modelRate := ""
-	if h.cfg.Upstream != nil {
-		modelRate = h.cfg.Upstream.ModelRate(realm, bareModel)
-	}
-
-	// 多 Key 约束校验（T6）：鉴权命中的 Key 的 realm / models 白名单，在选号/出站
-	// 之前执行（ADR-001 §五）。不符合即 400，零上游消耗。
-	// authKey 提到外层作用域：下方用量记录要用它的 ID 做归因（ADR-001 F-005 二期），
-	// 复用同一次匹配结果，不重新鉴权（身份一致性不变量）。
-	authKey := authKeyFrom(r)
-	if authKey != nil {
-		if code, msg := h.checkKeyConstraints(authKey, modelStr, realm, bareModel, modelKind); code != "" {
-			writeOpenAIError(w, http.StatusBadRequest, code, msg)
-			return
-		}
-	}
-
-	// 请求级统计：出口即打一行表格日志（任何路径都会走到）。
-	// model 直接复用已解析的 modelStr（省掉一次全文档解析）；不可解析时
-	// modelStr 为空 → 沿用 parseModelFromBody 的 "-" 兜底口径。
-	st := newChatStat(time.Now(), modelStr, peekStream)
-	if tr := requestTraceFrom(r); tr != nil {
-		tr.stat = st
-		// 来源在 ServeHTTP 入口采集（此时才知道开关与请求头），此处转交给统计对象，
-		// 让 stdout 流水行与归档事件共用同一份来源值，两处不会漂移。
-		st.clientIP, st.userAgent = tr.clientIP, tr.userAgent
-	}
+	st := prep.st
 	defer st.done()
+	// 过渡期解构：让主函数其余部分保持原有局部变量名，把「抽出阶段函数」与
+	// 「改变量引用方式」拆成两次独立改动——每次只动一件事，快照测试失败时
+	// 才能精确定位是哪一步引入的。
+	clientIP, body, reqView := prep.clientIP, prep.body, prep.reqView
+	viewOK := prep.viewOK
+	modelStr, bareModel, upstreamModel := prep.modelStr, prep.bareModel, prep.upstreamModel
+	realm, modelRate, authKey := prep.realm, prep.modelRate, prep.authKey
+	peekStream, declaredTools := prep.peekStream, prep.declaredTools
 
 	tried := map[string]bool{}
 	var lastErr error
