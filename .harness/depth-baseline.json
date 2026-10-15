@@ -1,0 +1,10 @@
+{
+    "_comment":  "工程深度基线（scripts/check-depth.ps1 维护）。指标只许变好；-Update 抬高棘轮。",
+    "updatedAt":  "2026-10-15",
+    "metrics":  {
+                    "maxFileLines":  2185,
+                    "oversizeFiles":  5,
+                    "oversizeFuncs":  17,
+                    "minCoverage":  13.6
+                }
+}
