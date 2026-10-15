@@ -1,6 +1,7 @@
 ---
 name: unit-test-ci
-description: CI 门禁验证——go build/vet/test + govulncheck + node --check，全绿才可进评审。对应十阶段流水线阶段 5-6。
+version: 1
+description: CI 门禁验证——go build/vet/test + govulncheck + node --check 全绿才可进评审。【跳过】只改文档/注释（仍建议跑一次 build 以防万一）；调查性阅读代码不改动。
 type: executable
 verification: go build ./... && go vet ./... && go test ./...
 ---

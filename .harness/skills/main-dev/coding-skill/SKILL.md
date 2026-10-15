@@ -1,6 +1,7 @@
 ---
 name: coding-skill
-description: 编码实现——Go 单仓库分层（cmd 入口 / internal 领域包）+ 内嵌面板前端，遵守红线 15 条，40% 分批编码批批验证。对应十阶段流水线阶段 4。
+version: 1
+description: 编码实现——Go 单仓库分层（cmd 入口 / internal 领域包）+ 内嵌面板前端，遵守红线 15 条，40% 分批编码批批验证。【跳过】纯文档/注释改动（L0）；只跑构建与部署不写代码；已由本技能的编码纪律覆盖的机械改名（用 gofmt/IDE 重命名即可，但改完仍要走 unit-test-ci）。
 ---
 
 # 编码技能（YG Gateway）

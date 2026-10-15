@@ -1,6 +1,7 @@
 ---
 name: bug-diagnose
-description: 难 bug 诊断总入口——先建 tight feedback loop（一条命令稳定变红），再按 6 阶段排查。当用户报 bug/报错/慢/异常且还不知道是哪个领域时触发；定位后分派到 upstream-fault。
+version: 1
+description: 难 bug 诊断总入口——先建 tight feedback loop（一条命令稳定变红），再按 6 阶段排查。当用户报 bug/报错/慢/异常且还不知道是哪个领域时触发。【跳过】已知根因且改动范围明确（直接修 + 写有牙齿的测试）；已确认是上游转发问题的（转 upstream-fault）。
 type: flow
 ---
 
