@@ -3,12 +3,14 @@
 package pool
 
 import (
+	"fmt"
 	"log"
 	"sort"
 	"strings"
 	"time"
 
 	"yg-gateway/internal/auth"
+	"yg-gateway/internal/evidence"
 	"yg-gateway/internal/logfmt"
 )
 
@@ -213,6 +215,10 @@ func (p *Pool) NoteModelCost(uid, model string, credit float64, tokens int) {
 	if uid == "" || model == "" || tokens <= 0 {
 		return
 	}
+	// 实测 credit 是"合格观察证据"：消解该组合的成本未知（AGENTS.md 消解纪律）。
+	// 放在 p.mu 之前：registry 有自己的锁，不嵌套进 p.mu（避免锁序问题）。
+	p.resolveCostUnknown(uid, model)
+
 	// 单价按每千 token 归一，消除请求长度差异。
 	per1k := credit / float64(tokens) * 1000
 	if per1k < 0 {
@@ -623,6 +629,7 @@ func (p *Pool) statusOf(uid string, e *entry) Status {
 		Until:                    e.until,
 		SoftStreak:               e.softStreak,
 		ModelCosts:               p.modelCostsStatusLocked(e, now),
+		Unknowns:                 p.openCostUnknownsLocked(e.a.UID),
 		ConsecutiveFails:         e.consecutiveFails,
 		DegradeUntil:             e.degradeUntil,
 		InFlight:                 int(e.inFlight.Load()),
@@ -633,9 +640,24 @@ func (p *Pool) statusOf(uid string, e *entry) Status {
 		// EWMA 表现信号透出（ADR-005 D-502）：仅开启且已有观测时输出，运维可直观
 		// 看到「成功率/延迟表现」；样本未达 minSamples 也透出（观测原始值，
 		// 是否参与加权由 ewmaWeightFactor 的样本门槛决定，两者独立）。
+		//
+		// 认识论标注（AGENTS.md 三态纪律，本轮新增）：**保留原始值**，但按样本数
+		// 分档标注可信度——这比"藏起数字"更符合 rea 的 "Preserve partial facts"：
+		// 不确定性应当被标注出来，而不是让运维失去观察手段。
+		//   - 样本 ≥ ewmaMinSamples → derivation（EWMA 是平滑**派生**值，不是真实成功率）
+		//   - 样本 <  ewmaMinSamples → unknown（冷启动，数值不可作事实使用）
 		if e.ewmaSuccessSamples > 0 {
 			sr := e.ewmaSuccess
 			st.EwmaSuccess = &sr
+			if e.ewmaSuccessSamples >= p.ewmaMinSamples {
+				prov := evidence.Derive(nil, "EWMA 平滑的成功率（非真实成功率）", int(e.ewmaSuccessSamples))
+				st.EwmaProvenance = &prov
+			} else {
+				prov := evidence.Unknown(fmt.Sprintf(
+					"成功率样本不足（%d/%d），数值不可作事实使用；需继续观测才可信",
+					e.ewmaSuccessSamples, p.ewmaMinSamples))
+				st.EwmaProvenance = &prov
+			}
 		}
 		if e.ewmaLatencySamples > 0 {
 			ms := float64(int64(e.ewmaLatencyMs*10+0.5)) / 10 // 保留 1 位小数
@@ -692,11 +714,18 @@ func (p *Pool) modelCostsStatusLocked(e *entry, now time.Time) []ModelCostStatus
 	rows := make([]ModelCostStatus, 0, len(models))
 	for _, m := range models {
 		mc := e.modelCost[m]
+		// 认识论标注（AGENTS.md 三态纪律）：tier 0/2 是**推断**，可信度由样本数表达。
+		// Samples 为 0 的条目不会走到这里（无观测即不在 modelCost 内 / 已过期被跳过），
+		// 故此处恒为 inference；basis 写明"凭 N 次实测 credit 外推"。
+		prov := evidence.Infer(nil,
+			fmt.Sprintf("凭 %d 次实测 credit 观测外推的每千 token 单价（EMA 平滑）", mc.Samples),
+			mc.Samples)
 		rows = append(rows, ModelCostStatus{
-			Model:     m,
-			CostPer1k: mc.CostPer1k,
-			LastSeen:  mc.LastSeen,
-			Samples:   mc.Samples,
+			Model:      m,
+			CostPer1k:  mc.CostPer1k,
+			LastSeen:   mc.LastSeen,
+			Samples:    mc.Samples,
+			Provenance: &prov,
 		})
 	}
 	return rows

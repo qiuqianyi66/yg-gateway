@@ -31,6 +31,7 @@ import (
 	"yg-gateway/internal/scheduler"
 	"yg-gateway/internal/server"
 	"yg-gateway/internal/session"
+	"yg-gateway/internal/unknown"
 	"yg-gateway/internal/upstream"
 	"yg-gateway/internal/usage"
 )
@@ -291,6 +292,12 @@ func main() {
 	// 开始吐"）；错误分类则把既有 Classify 的 13 种 ErrKind 导出成时序指标。
 	ttfbReg := metrics.NewRegistry()
 	errKinds := metrics.NewKindCounters()
+
+	// 未知条目注册表（AGENTS.md「Unknown 消解纪律」）：把「某号某模型成本未知」
+	// 这类可消解的事实变成一等公民实体——登记时写明还需要什么，实测 credit 时
+	// 自动消解。进程级单例（重启归零：未知本来就是"当前还不知道"的语义）。
+	unknownReg := unknown.NewRegistry()
+	p.SetUnknownRegistry(unknownReg)
 
 	// 请求指标始终启用；JSONL 归档只写脱敏元数据，写盘失败不影响聊天请求。
 	requestLog := reqlog.New(reqlog.Config{

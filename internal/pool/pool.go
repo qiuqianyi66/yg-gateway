@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"yg-gateway/internal/auth"
+	"yg-gateway/internal/unknown"
 )
 
 type Pool struct {
@@ -105,6 +106,17 @@ type Pool struct {
 	stopCh chan struct{}
 	// closeOnce 保证 Close 幂等（多次调用不重复 close channel）。
 	closeOnce sync.Once
+
+	// unknownReg 未知条目注册表（可选；nil = 不跟踪未知，零回归）。
+	// 见 SetUnknownRegistry / TrackCostUnknown / resolveCostUnknown。
+	unknownReg *unknown.Registry
+	// unknownSeen "uid|model" → 该组合在 registry 里的条目 ID。
+	//
+	// 为什么用 sync.Map 而不是复用 p.mu：TrackCostUnknown 在**请求路径**上被调用，
+	// 目的是「同一组合只登记一次」。用 p.mu 会让这个幂等检查与选号争锁（ADR-005
+	// 特意把 pick 改成读锁以避免串行化）；sync.Map 的 LoadOrStore 是原子且不碰
+	// p.mu，命中路径只有一次原子读。
+	unknownSeen sync.Map
 }
 
 // defaultBreaker* 熔断器默认参数（FreeBuff2API 参考口径）。

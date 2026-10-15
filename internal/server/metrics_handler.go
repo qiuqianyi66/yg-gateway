@@ -117,6 +117,13 @@ func (h *Handler) metricsHandler(w http.ResponseWriter, r *http.Request) {
 		Type(metricNamePrefix+"global_in_flight", "gauge")
 	p.Counter(metricNamePrefix+"global_in_flight", h.cfg.Pool.GlobalInFlight())
 
+	// ---- 未消解未知（AGENTS.md「Unknown 消解纪律」）----
+	// 这个 gauge 直接回答"还有多少事没摸清"——它**持续不为零**本身就是一个信号：
+	// 要么池子在扩（新号/新模型），要么某些未知永远消解不掉（requires 设计有问题）。
+	p.Help(metricNamePrefix+"unknowns_open", "Unresolved unknowns being tracked (e.g. cost tier of an account+model pair).").
+		Type(metricNamePrefix+"unknowns_open", "gauge")
+	p.Counter(metricNamePrefix+"unknowns_open", int64(h.cfg.Pool.OpenUnknownCount()))
+
 	// ---- token 用量（usage 聚合桶；未启用时缺省 0）----
 	if agg := h.usageTotals(); agg != nil {
 		p.Help(metricNamePrefix+"tokens_total", "Accumulated tokens by kind.").

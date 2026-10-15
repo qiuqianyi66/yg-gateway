@@ -40,8 +40,8 @@ $allow = @{
     # HTTP 适配层：装配并编排，依赖各领域包（实测）
     'server'   = @('alerting','auth','httpauth','livecfg','logfmt','metrics',
                    'pool','prompt','reqlog','session','upstream','usage')
-    # 领域层：账号池只依赖凭证与日志脱敏（实测）
-    'pool'     = @('auth','logfmt')
+    # 领域层：账号池依赖凭证、日志脱敏，以及 domain 层（四态标注 / 未知跟踪）
+    'pool'     = @('auth','evidence','logfmt','unknown')
     # 出站适配层：依赖凭证、日志脱敏、会话键解析（实测）
     'upstream' = @('auth','logfmt','session')
     # 会话键派生：依赖 redisstore（粘性绑定持久化）（实测）
