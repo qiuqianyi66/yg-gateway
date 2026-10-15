@@ -54,6 +54,11 @@ backups/
 /login.exe
 /credit.exe
 
+# 运行时日志与部署备份（本机运行产物，不入库）
+/.stderr.log
+/.stdout.log
+/yg-gateway.exe.*.bak
+
 # 本地验证工具（判据逆向过程脚本，结论沉淀于 data/desktop-task-protocol.md）
 /cmd/desktopverify*/
 *.zip
