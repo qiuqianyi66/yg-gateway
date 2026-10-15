@@ -4,7 +4,7 @@
     "metrics":  {
                     "maxFileLines":  2185,
                     "oversizeFiles":  5,
-                    "oversizeFuncs":  17,
+                    "oversizeFuncs":  8,
                     "minCoverage":  13.6
                 }
 }

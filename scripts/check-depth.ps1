@@ -58,13 +58,35 @@ $maxFileLines = ($fileStats | Measure-Object -Property Lines -Maximum).Maximum
 $oversizeFiles = @($fileStats | Where-Object { $_.Lines -gt $FILE_LIMIT })
 
 # ---------------------------------------------------------------------------
-# 度量 3：超长函数
+# 度量 3：超长函数（只统计**代码行**）
 #
-# 注：函数体按「本行 `^func ` 到下一个 `^func ` 的前一行」计算，包含其间的注释
-# 与空行。这与 Go 语法意义上的函数体长度**不完全等价**（注释多的函数会显得更长），
-# 但作为**趋势指标**足够稳定，且实现零依赖。不要把它当精确值引用。
+# 函数体按「本行 `^func ` 到下一个 `^func ` 的前一行」界定，但行数计算**排除空行
+# 与纯注释行**（`//` 开头；块注释内的行会被计入，这是接受的近似）。
+#
+# 为什么排除注释——这是对度量准确性的修正，不是放宽阈值：
+#   - 函数体量的意义是「认知负荷 / 能否在脑中保持上下文」；注释**降低**该负荷
+#     （它解释意图与约束），而非增加。
+#   - 含注释计数会**惩罚写注释**，与本仓编码规范「注释写 why、关键取值附实测
+#     依据」直接冲突——同一段逻辑，注释越详尽越早触发门禁，方向是反的。
+#   - 实测假阳性案例：本仓 prepareChatRequest 的代码行远少于注释行（注释在讲
+#     defer 作用域陷阱、body 上限来源等），含注释计数把它误判为「超长函数」。
+#   - 真阳性不受影响：chatCompletions 拆分前是**真**的 800+ 行代码，任何算法都
+#     会判它超长。
+#
+# 边界说明：块注释（/* */）内的行仍被计入；Go 里少见，不为此增加解析复杂度。
 # ---------------------------------------------------------------------------
 $longFuncs = New-Object System.Collections.ArrayList
+
+# Get-CodeLineCount 统计 [start,end] 区间内的代码行数（排除空行与 `//` 开头的行）。
+function Get-CodeLineCount($lines, $start, $end) {
+    $n = 0
+    for ($i = $start; $i -le $end; $i++) {
+        $t = $lines[$i].Trim()
+        if ($t -eq '' -or $t.StartsWith('//')) { continue }
+        $n++
+    }
+    return $n
+}
 
 foreach ($f in $prodFiles) {
     $lines = Get-Content $f.FullName
@@ -75,7 +97,7 @@ foreach ($f in $prodFiles) {
     for ($k = 0; $k -lt $starts.Count; $k++) {
         $s = $starts[$k]
         $e = if ($k + 1 -lt $starts.Count) { $starts[$k + 1] - 1 } else { $lines.Count - 1 }
-        $len = $e - $s
+        $len = Get-CodeLineCount $lines $s $e
         if ($len -gt $FUNC_LIMIT) {
             $sig = ($lines[$s] -replace '\s*\{\s*$', '').Trim()
             if ($sig.Length -gt 80) { $sig = $sig.Substring(0, 80) + '…' }
