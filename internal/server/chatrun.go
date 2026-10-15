@@ -218,14 +218,10 @@ func (r *chatRun) recordAttempt(uid string, delta pool.TokenUsageDelta, credit f
 // 搬迁与改名分两步，任何一步出问题都能精确定位。
 func (run *chatRun) rotateAndServe(w http.ResponseWriter, r *http.Request, chatMeta upstream.ChatMeta) (handled bool) {
 	h := run.h
-	st := run.st
-	bareModel := run.bareModel
 	clientIP := run.clientIP
 	peekStream := run.peekStream
-	degradedApplied := run.degradedApplied
-	tried, modelBlock, groupFilteredOut := run.tried, run.modelBlock, run.groupFilteredOut
+	modelBlock, groupFilteredOut := run.modelBlock, run.groupFilteredOut
 	lastErr := run.lastErr
-	body := run.body
 	for i := 0; i < h.cfg.MaxRotate; i++ {
 		// 选号 + 占租约 + token 就绪（含 continue/break 的三态控制流）已抽到
 		// chatrun.go 的 selectAccount。
@@ -243,153 +239,22 @@ func (run *chatRun) rotateAndServe(w http.ResponseWriter, r *http.Request, chatM
 
 		// 客户端 IP 按请求传递（PassthroughIP 开启时注入；消除共享字段竞态）。
 		attemptStarted := time.Now()
-		rc, status, respBody, terr := h.cfg.Upstream.ChatStreamContext(r.Context(), acct, body, clientIP, chatMeta)
+		rc, status, respBody, terr := h.cfg.Upstream.ChatStreamContext(r.Context(), acct, run.body, clientIP, chatMeta)
 		// 分类信封一次成型：upstream 已在错误路径返回 *upstream.Error（Kind +
 		// Retry-After 头解析）。传输层错误（非 *Error）走抖动换号分支；防御分支
 		// （terr 为 nil 但 status>=400，如 ErrNone 兜底）回落本地 Classify，双保险。
-		var uerr *upstream.Error
-		if errors.As(terr, &uerr) {
-			status = uerr.Status
+		// 错误分类与处置（传输层超时/抖动、上游 4xx/5xx）已抽到 chatrun.go
+		// 的 handleErrorPath。四态返回值：proceed/retry/abort/handled。
+		// **必须用 if 承接，不能用 switch**——switch 里的 break 只跳出 switch，
+		// 会让 errAbort 退化成"继续下一轮"（同名陷阱已在 selectAccount 踩过一次）。
+		eout := run.handleErrorPath(w, i, r, acct, status, respBody, terr, attemptStarted)
+		if eout == errHandled {
+			return true
 		}
-		if uerr == nil && terr != nil {
-			// 上游超时 / 停滞：**不换号、不罚号**。
-			//
-			// 超时不是账号的问题：同一份请求换到别的号，撞上的是同一个慢上游，
-			// 只会把客户端拖到 MaxRotate × header_timeout（部署值 600s 时最坏
-			// 约半小时），期间还给一串健康号喂连败计数。此前全仓没有任何超时
-			// 识别，超时和"网络抖动"共用同一条换号路径。
-			//
-			// 判定三态：net.Error.Timeout()（ResponseHeaderTimeout / Client.Timeout）、
-			// 显式 deadline（DeadlineExceeded / os.ErrDeadlineExceeded）、以及
-			// **客户端仍在但 ctx 被取消**——那只能是我们自己的空闲看门狗掐的流，
-			// 也就是上游停滞。客户端主动断连时 r.Context() 已取消，走下面的抖动分支。
-			if isUpstreamTimeout(terr, r.Context().Err() != nil) {
-				run.recordAttempt(acct.UID, pool.TokenUsageDelta{}, 0, false, attemptStarted, 0)
-				st.status = http.StatusServiceUnavailable
-				run.lastErr = fmt.Errorf("%w: %v", errUpstreamTimeout, terr)
-				log.Printf("WARN: [server] upstream timeout acct=%s: %v (rotation stopped, account not penalized)",
-					logfmt.Label(acct.UID, acct.Nickname), terr)
-				break
-			}
-			// 网络层抖动：只换号，不喂熔断计数（传输层错误对连续失败连坐熔断过于严苛）。
-			// 连败兜底（issue #114）：喂连败计数——连不上上游是「不知道原因的失败」，
-			// 连败 N 次临时出池，单次/偶发不罚（NoteFailures 内部达阈才动作）。
-			// 上游 client 已打 transport error 日志。
-			run.recordAttempt(acct.UID, pool.TokenUsageDelta{}, 0, false, attemptStarted, 0)
-			st.status = http.StatusServiceUnavailable
-			run.lastErr = terr
-			h.cfg.Pool.NoteFailures(acct.UID)
-			run.fail(acct.UID)
-			if !rotateBackoff(i, r.Context()) {
-				break // ctx 取消：终止轮转（传输层错误换号退避）
-			}
-			continue
+		if eout == errAbort {
+			break
 		}
-		if status >= 400 {
-			run.recordAttempt(acct.UID, pool.TokenUsageDelta{}, 0, false, attemptStarted, 0)
-			st.status = status
-			var kind upstream.ErrKind
-			if uerr != nil {
-				kind = uerr.Kind
-			} else {
-				kind = upstream.Classify(status, string(respBody))
-				uerr = &upstream.Error{Kind: kind, Status: status, Msg: string(respBody)}
-			}
-			// 内容拦截误报（passthrough/append 模式首遇）：判定为 system 指纹误报，
-			// 触发降级到次日 00:00 CST，换 Degraded 中性提示词同请求内重试（append
-			// 降级重试同样退化为 replace——原文在场只会确定性再撞 400）。
-			// 第二次仍被拦（用户内容本身触发审核）→ 回内容防火墙错误（见下分支）。
-			// 内容问题非账号问题：applyErrorPolicy 不罚账号（见 ErrContentBlocked 分支）。
-			if kind == upstream.ErrContentBlocked && (h.cfg.PromptMode == "passthrough" || h.cfg.PromptMode == "append") && !degradedApplied {
-				h.degrade.Trigger()
-				body = prompt.Rewrite(body, prompt.Degraded)
-				degradedApplied = true
-				delete(tried, acct.UID) // 单账号池也能拿到重试机会（降级重试占一次名额）
-				run.releaseHeld()
-				log.Printf("content-blocked (likely fingerprint false positive) -> degraded prompt retry")
-				continue
-			}
-			if kind == upstream.ErrContentBlocked {
-				// 内容命中网关内容防火墙：立即回客户端，**不轮转**——换任何账号都会撞同一
-				// 审核，轮转纯属浪费时间。不罚账号（ErrContentBlocked 分支无冷却/熔断/NoteError）。
-				// error-passthrough：message 装上游 body 原文（code/msg/requestId 原样），
-				// 不再改写成网关固定文案——客户端必须看到真实错误才能排查。
-				h.applyErrorPolicy(acct.UID, kind, string(respBody), bareModel, uerr)
-				run.fail(acct.UID)
-				msg := string(respBody)
-				if strings.TrimSpace(msg) == "" {
-					// 空 body 兜底：无上游原文可透传，保留可读分类文案（不编造原文）。
-					msg = "content blocked by upstream content firewall"
-				}
-				writeOpenAIErrorHint(w, http.StatusBadRequest, "content_blocked", msg,
-					h.hintOf(upstream.ErrContentBlocked, string(respBody), bareModel, run.hasImage(), uerr))
-				st.status = http.StatusBadRequest
-				st.outcome = reqlog.OutcomeHTTPError
-				return true
-			}
-			// 11115「prompt is too long」：立即透传上游原文回客户端，**不罚号不轮转**
-			// ——上下文超限是请求的问题（同一 body 换任何号都超限，白扔健康号配额；
-			// 与 WAF IP fail-fast 同哲学：确定与账号无关的错误直接终止轮转）。
-			// applyErrorPolicy ErrPromptTooLong 分支零动作，fail 只释放租约。
-			// message 装上游 body 原文（含真实 token 数与上限值——上游原文是最有价值
-			// 的错误信息，客户端必须看到，禁止固定词覆盖）。
-			if kind == upstream.ErrPromptTooLong {
-				h.applyErrorPolicy(acct.UID, kind, string(respBody), bareModel, uerr)
-				run.fail(acct.UID)
-				writeOpenAIErrorHint(w, http.StatusBadRequest, "prompt_too_long", promptTooLongMessage(string(respBody)),
-					h.hintOf(upstream.ErrPromptTooLong, string(respBody), bareModel, run.hasImage(), uerr))
-				st.status = http.StatusBadRequest
-				st.outcome = reqlog.OutcomeHTTPError
-				return true
-			}
-			// 图片格式/数据无效：立即透传上游原文回客户端，不罚号不轮转。
-			// 同一 body 换账号仍是同样的解析结果，轮转只会放大无效请求。
-			if kind == upstream.ErrImageInvalid {
-				h.applyErrorPolicy(acct.UID, kind, string(respBody), bareModel, uerr)
-				run.fail(acct.UID)
-				msg := string(respBody)
-				if strings.TrimSpace(msg) == "" {
-					msg = "image request was rejected by upstream"
-				}
-				writeOpenAIErrorHint(w, http.StatusBadRequest, "image_invalid", msg,
-					h.hintOf(upstream.ErrImageInvalid, string(respBody), bareModel, run.hasImage(), uerr))
-				st.status = http.StatusBadRequest
-				st.outcome = reqlog.OutcomeHTTPError
-				return true
-			}
-			// 请求体解析失败（11101）：与 11115 / 图片无效同一哲学——同一 body 换任何
-			// 账号都是同样的解析结果，轮转只会放大无效请求（每号一次上游调用 +
-			// rotateBackoff 占用在途名额）。更要紧的是：继续轮转后末端会落到
-			// 「其余保持 503」，把确定失败的请求伪装成"账号不可用、稍后再试"，
-			// 客户端于是对必然失败的请求无限重试。立即透传上游原文回 400。
-			if kind == upstream.ErrBadParams {
-				h.applyErrorPolicy(acct.UID, kind, string(respBody), bareModel, uerr)
-				run.fail(acct.UID)
-				msg := string(respBody)
-				if strings.TrimSpace(msg) == "" {
-					msg = "chat request body was rejected by upstream"
-				}
-				writeOpenAIErrorHint(w, http.StatusBadRequest, "bad_params", msg,
-					h.hintOf(upstream.ErrBadParams, string(respBody), bareModel, run.hasImage(), uerr))
-				st.status = http.StatusBadRequest
-				st.outcome = reqlog.OutcomeHTTPError
-				return true
-			}
-			// lastErr 携带完整 body（uerr.Msg 在 upstream 侧截断 200 字符，透传语义
-			// 要求原文全量）+ Kind/RetryAfter（末端映射与冷却时长共用）。
-			run.lastErr = &upstream.Error{Kind: kind, Status: status, Msg: string(respBody), RetryAfter: uerr.RetryAfter}
-			h.applyErrorPolicy(acct.UID, kind, string(respBody), bareModel, uerr)
-			run.fail(acct.UID)
-			// WAF IP 级 fail-fast（优先于 rotateBackoff 退避——IP 级拦截时退避无意义）：
-			// 该次 WAF 403 喂入 IP 级状态机，若激活（短窗多号命中，IP 被拦而非账号）
-			// 则立即终止轮转——继续换号只会把请求放大 MaxRotate 倍打同一出口 IP，
-			// 加重风控。账号级软冷却已在上方 applyErrorPolicy 照常记账。
-			if kind == upstream.ErrWafBlock && h.wafIP.noteWaf(acct.UID) {
-				break
-			}
-			if !rotateBackoff(i, r.Context()) {
-				break // ctx 取消：终止轮转（分类错误换号退避）
-			}
+		if eout == errRetry {
 			continue
 		}
 		// 成功判定与粘性绑定一律**延后到这一跳真正成功之后**（见下方流式/非流式分支）：
@@ -401,10 +266,8 @@ func (run *chatRun) rotateAndServe(w http.ResponseWriter, r *http.Request, chatM
 		}
 		return run.serveNonStream(w, acct, rc, attemptStarted)
 	}
-	// 回写运行期状态：body 可能被降级改写替换（循环后的 fallbackForward 要用），
-	// 其余三项是阶段⑤ finalErrorOf 的输入。
-	run.body = body
-	run.degradedApplied = degradedApplied
+	// 回写阶段⑤ 的输入。body/degradedApplied 已直接写在 run 上（handleErrorPath
+	// 里的降级改写就地更新 run.body），无需在此回写。
 	run.lastErr, run.modelBlock, run.groupFilteredOut = lastErr, modelBlock, groupFilteredOut
 	return false
 }
@@ -712,4 +575,181 @@ func (run *chatRun) selectAccount(i int, r *http.Request) (*auth.Auth, selectOut
 		}
 	}
 	return acct, selectOK
+}
+
+// errOutcome 错误分类处置后对轮转循环控制流的影响。
+//
+// 四态而非 bool：块内有三类不同的"不继续本轮的正常流程"——
+//
+//	errRetry  只放弃本轮，continue 下一轮；
+//	errAbort  终止整轮轮转，break 出去走末端错误构造；
+//	errHandled 响应已经写完（请求级错误就地 400），调用方必须立即 return true。
+//
+// 合并任意两态都会让行为静默改变（errHandled 被当成 errAbort 会导致重复写响应）。
+type errOutcome int
+
+const (
+	errProceed errOutcome = iota // status < 400：继续处理响应（流式/非流式分派）
+	errRetry                     // continue 下一轮
+	errAbort                     // break 退出轮转
+	errHandled                   // 响应已写完，调用方 return true
+)
+
+// handleErrorPath 传输层错误与上游 4xx/5xx 的分类与处置。
+//
+// 副作用写 run/st（lastErr / status / outcome），调用方只需看返回值决定控制流。
+func (run *chatRun) handleErrorPath(w http.ResponseWriter, i int, r *http.Request, acct *auth.Auth, status int, respBody []byte, terr error, attemptStarted time.Time) errOutcome {
+	h := run.h
+	st := run.st
+	bareModel := run.bareModel
+	tried := run.tried
+	var uerr *upstream.Error
+	if errors.As(terr, &uerr) {
+		status = uerr.Status
+	}
+	if uerr == nil && terr != nil {
+		// 上游超时 / 停滞：**不换号、不罚号**。
+		//
+		// 超时不是账号的问题：同一份请求换到别的号，撞上的是同一个慢上游，
+		// 只会把客户端拖到 MaxRotate × header_timeout（部署值 600s 时最坏
+		// 约半小时），期间还给一串健康号喂连败计数。此前全仓没有任何超时
+		// 识别，超时和"网络抖动"共用同一条换号路径。
+		//
+		// 判定三态：net.Error.Timeout()（ResponseHeaderTimeout / Client.Timeout）、
+		// 显式 deadline（DeadlineExceeded / os.ErrDeadlineExceeded）、以及
+		// **客户端仍在但 ctx 被取消**——那只能是我们自己的空闲看门狗掐的流，
+		// 也就是上游停滞。客户端主动断连时 r.Context() 已取消，走下面的抖动分支。
+		if isUpstreamTimeout(terr, r.Context().Err() != nil) {
+			run.recordAttempt(acct.UID, pool.TokenUsageDelta{}, 0, false, attemptStarted, 0)
+			st.status = http.StatusServiceUnavailable
+			run.lastErr = fmt.Errorf("%w: %v", errUpstreamTimeout, terr)
+			log.Printf("WARN: [server] upstream timeout acct=%s: %v (rotation stopped, account not penalized)",
+				logfmt.Label(acct.UID, acct.Nickname), terr)
+			return errAbort
+		}
+		// 网络层抖动：只换号，不喂熔断计数（传输层错误对连续失败连坐熔断过于严苛）。
+		// 连败兜底（issue #114）：喂连败计数——连不上上游是「不知道原因的失败」，
+		// 连败 N 次临时出池，单次/偶发不罚（NoteFailures 内部达阈才动作）。
+		// 上游 client 已打 transport error 日志。
+		run.recordAttempt(acct.UID, pool.TokenUsageDelta{}, 0, false, attemptStarted, 0)
+		st.status = http.StatusServiceUnavailable
+		run.lastErr = terr
+		h.cfg.Pool.NoteFailures(acct.UID)
+		run.fail(acct.UID)
+		if !rotateBackoff(i, r.Context()) {
+			return errAbort
+		}
+		return errRetry
+	}
+	if status >= 400 {
+		run.recordAttempt(acct.UID, pool.TokenUsageDelta{}, 0, false, attemptStarted, 0)
+		st.status = status
+		var kind upstream.ErrKind
+		if uerr != nil {
+			kind = uerr.Kind
+		} else {
+			kind = upstream.Classify(status, string(respBody))
+			uerr = &upstream.Error{Kind: kind, Status: status, Msg: string(respBody)}
+		}
+		// 内容拦截误报（passthrough/append 模式首遇）：判定为 system 指纹误报，
+		// 触发降级到次日 00:00 CST，换 Degraded 中性提示词同请求内重试（append
+		// 降级重试同样退化为 replace——原文在场只会确定性再撞 400）。
+		// 第二次仍被拦（用户内容本身触发审核）→ 回内容防火墙错误（见下分支）。
+		// 内容问题非账号问题：applyErrorPolicy 不罚账号（见 ErrContentBlocked 分支）。
+		if kind == upstream.ErrContentBlocked && (h.cfg.PromptMode == "passthrough" || h.cfg.PromptMode == "append") && !run.degradedApplied {
+			h.degrade.Trigger()
+			// 直接写 run.body：降级改写必须让**下一轮出站**与**循环后的
+			// fallbackForward**都看到新 body。写成局部变量会只在本次调用内生效，
+			// 症状是第二个请求仍带原始 system 指纹（TestContentBlockedTriggersDegradedRetry 抓到）。
+			run.body = prompt.Rewrite(run.body, prompt.Degraded)
+			run.degradedApplied = true
+			delete(tried, acct.UID) // 单账号池也能拿到重试机会（降级重试占一次名额）
+			run.releaseHeld()
+			log.Printf("content-blocked (likely fingerprint false positive) -> degraded prompt retry")
+			return errRetry
+		}
+		if kind == upstream.ErrContentBlocked {
+			// 内容命中网关内容防火墙：立即回客户端，**不轮转**——换任何账号都会撞同一
+			// 审核，轮转纯属浪费时间。不罚账号（ErrContentBlocked 分支无冷却/熔断/NoteError）。
+			// error-passthrough：message 装上游 body 原文（code/msg/requestId 原样），
+			// 不再改写成网关固定文案——客户端必须看到真实错误才能排查。
+			h.applyErrorPolicy(acct.UID, kind, string(respBody), bareModel, uerr)
+			run.fail(acct.UID)
+			msg := string(respBody)
+			if strings.TrimSpace(msg) == "" {
+				// 空 body 兜底：无上游原文可透传，保留可读分类文案（不编造原文）。
+				msg = "content blocked by upstream content firewall"
+			}
+			writeOpenAIErrorHint(w, http.StatusBadRequest, "content_blocked", msg,
+				h.hintOf(upstream.ErrContentBlocked, string(respBody), bareModel, run.hasImage(), uerr))
+			st.status = http.StatusBadRequest
+			st.outcome = reqlog.OutcomeHTTPError
+			return errHandled
+		}
+		// 11115「prompt is too long」：立即透传上游原文回客户端，**不罚号不轮转**
+		// ——上下文超限是请求的问题（同一 body 换任何号都超限，白扔健康号配额；
+		// 与 WAF IP fail-fast 同哲学：确定与账号无关的错误直接终止轮转）。
+		// applyErrorPolicy ErrPromptTooLong 分支零动作，fail 只释放租约。
+		// message 装上游 body 原文（含真实 token 数与上限值——上游原文是最有价值
+		// 的错误信息，客户端必须看到，禁止固定词覆盖）。
+		if kind == upstream.ErrPromptTooLong {
+			h.applyErrorPolicy(acct.UID, kind, string(respBody), bareModel, uerr)
+			run.fail(acct.UID)
+			writeOpenAIErrorHint(w, http.StatusBadRequest, "prompt_too_long", promptTooLongMessage(string(respBody)),
+				h.hintOf(upstream.ErrPromptTooLong, string(respBody), bareModel, run.hasImage(), uerr))
+			st.status = http.StatusBadRequest
+			st.outcome = reqlog.OutcomeHTTPError
+			return errHandled
+		}
+		// 图片格式/数据无效：立即透传上游原文回客户端，不罚号不轮转。
+		// 同一 body 换账号仍是同样的解析结果，轮转只会放大无效请求。
+		if kind == upstream.ErrImageInvalid {
+			h.applyErrorPolicy(acct.UID, kind, string(respBody), bareModel, uerr)
+			run.fail(acct.UID)
+			msg := string(respBody)
+			if strings.TrimSpace(msg) == "" {
+				msg = "image request was rejected by upstream"
+			}
+			writeOpenAIErrorHint(w, http.StatusBadRequest, "image_invalid", msg,
+				h.hintOf(upstream.ErrImageInvalid, string(respBody), bareModel, run.hasImage(), uerr))
+			st.status = http.StatusBadRequest
+			st.outcome = reqlog.OutcomeHTTPError
+			return errHandled
+		}
+		// 请求体解析失败（11101）：与 11115 / 图片无效同一哲学——同一 body 换任何
+		// 账号都是同样的解析结果，轮转只会放大无效请求（每号一次上游调用 +
+		// rotateBackoff 占用在途名额）。更要紧的是：继续轮转后末端会落到
+		// 「其余保持 503」，把确定失败的请求伪装成"账号不可用、稍后再试"，
+		// 客户端于是对必然失败的请求无限重试。立即透传上游原文回 400。
+		if kind == upstream.ErrBadParams {
+			h.applyErrorPolicy(acct.UID, kind, string(respBody), bareModel, uerr)
+			run.fail(acct.UID)
+			msg := string(respBody)
+			if strings.TrimSpace(msg) == "" {
+				msg = "chat request body was rejected by upstream"
+			}
+			writeOpenAIErrorHint(w, http.StatusBadRequest, "bad_params", msg,
+				h.hintOf(upstream.ErrBadParams, string(respBody), bareModel, run.hasImage(), uerr))
+			st.status = http.StatusBadRequest
+			st.outcome = reqlog.OutcomeHTTPError
+			return errHandled
+		}
+		// lastErr 携带完整 body（uerr.Msg 在 upstream 侧截断 200 字符，透传语义
+		// 要求原文全量）+ Kind/RetryAfter（末端映射与冷却时长共用）。
+		run.lastErr = &upstream.Error{Kind: kind, Status: status, Msg: string(respBody), RetryAfter: uerr.RetryAfter}
+		h.applyErrorPolicy(acct.UID, kind, string(respBody), bareModel, uerr)
+		run.fail(acct.UID)
+		// WAF IP 级 fail-fast（优先于 rotateBackoff 退避——IP 级拦截时退避无意义）：
+		// 该次 WAF 403 喂入 IP 级状态机，若激活（短窗多号命中，IP 被拦而非账号）
+		// 则立即终止轮转——继续换号只会把请求放大 MaxRotate 倍打同一出口 IP，
+		// 加重风控。账号级软冷却已在上方 applyErrorPolicy 照常记账。
+		if kind == upstream.ErrWafBlock && h.wafIP.noteWaf(acct.UID) {
+			return errAbort
+		}
+		if !rotateBackoff(i, r.Context()) {
+			return errAbort
+		}
+		return errRetry
+	}
+	return errProceed
 }
