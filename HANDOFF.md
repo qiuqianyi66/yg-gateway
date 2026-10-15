@@ -544,9 +544,42 @@ usage 末帧 → `[DONE]`，且**无 ping 注释帧**=默认关零回归）。
 `docs/adr/ADR-006-hotpath-streaming-observability.md`、
 `.harness/changes/hotpath-optimization-2026-10/summary.md`。
 
+### 六之十一之二、R10 红线修复 + 可观测补齐（2026-10-15）
+
+**起因**：上一轮留的两个尾巴——`fallbackForward` 静默吞 `io.Copy` 错误（R10 红线），
+以及可观测缺 TTFB 与上游错误分类的时序导出。
+
+**改了什么**：
+
+1. **修 R10 红线（备用上游转发）**：`fallbackForward` 此前
+   `_, _ = io.Copy(w, resp.Body)` ——把「客户端断连 / 备用源半截流」**一律记成
+   成功转发**，调用方据此 return true，观测里根本看不到备用源的传输故障。
+   改为 `newFlushWriter`（逐块 flush，与 StreamHint 同口径）+ 检查 `io.Copy`
+   错误：半截流返回 false 并记日志。非流式 `io.ReadAll` 失败同样不再伪装成功。
+2. **上游错误分类计数**：`applyErrorPolicy` 成为**唯一汇聚点**（所有轮转失败分支
+   都过这里），按 `upstream.ErrKind.String()` 计数。新增
+   `metrics.KindCounters`（标签数有界 64，空标签记 `(none)`，nil 接收者安全）。
+3. **TTFB 分位数**：新增 `Config.TTFB *metrics.Registry`，流式分支在**真拿到
+   首帧**时观测（0 = 无观测，空流/断连不记 0，避免「首帧 0 毫秒」的假数据）。
+   与端到端 `Latency` 分开记——两个问题不同（"总共等多久" vs "上游多快开始吐"）。
+4. **/metrics 暴露**：`upstream_errors_total{kind}` + `ttfb_ms` 直方图
+   （全局 + model 标签）。main 自动装配，无需配置。
+
+**测试**：`TestFallbackForwardStreamTruncated`（半截流判失败，还原成 `_, _ =` 会
+FAIL）、`TestFallbackForwardStreamFlushes`（逐块 flush）、
+`TestErrKindCountedOnErrorPolicy`（计数汇聚，去掉 Inc 会 FAIL）、
+`TestMetricsTTFBAndErrorKinds`、`TestKindCounters*`（4 例）。
+
+**门禁**：21 包全绿（18 ok + 3 no test files）+ vet 干净；gofmt 仅 3 个历史文件漂移。
+
+**真机验证（PID 36508）**：备份 `yg-gateway.exe.pre-obs.bak` → 替换重启 →
+healthz 3/4 → `/metrics` 输出 `ttfb_ms_count=12`（按模型 hy4-preview=2 /
+deepseek-v4.1-flash=7 / step-5-preview=3）与 `upstream_errors_total` 族——
+均为真实流量观测。
+
 **下一轮候选**：
-1. Prometheus 指标补 TTFB 分桶与上游错误分类计数（分类逻辑已齐，缺导出）
+1. Prometheus 指标补在途/租约时序（当前只有瞬时 gauge）
 2. 长流场景显式开启 `sse_keepalive_seconds` / `stream_total_timeout_seconds` 的实测调参
-3. pick 侧 scratch 切片的 sync.Pool 复用（本轮未做，收益待 bench 量化）
+3. pick 侧 scratch 切片的 sync.Pool 复用（收益待 bench 量化）
 
 ## 读完本文件后，直接回用户："上下文已接上。多 API Key 派发 + 面板 Key 管理页均已完成。可选下一步路线图见上文，等你拍板。"

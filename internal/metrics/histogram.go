@@ -288,6 +288,71 @@ func (r *Registry) Global() *Histogram {
 	return &r.global
 }
 
+// ---------------------------------------------------------------------------
+// KindCounters：按离散标签计数（上游错误分类等）
+// ---------------------------------------------------------------------------
+
+// KindCounters 按标签计数的计数器集合。
+//
+// 为什么需要上界：标签值来自上游错误分类（有界枚举），但防御异常输入导致无界
+// 增长（与 Registry.byModel 同原则）。超上界后新标签**丢弃计数**——宁可少一个
+// 标签维度，也不让内存随输入无界膨胀。
+type KindCounters struct {
+	mu      sync.Mutex
+	m       map[string]*atomic.Int64
+	maxKeys int
+}
+
+// defaultMaxKinds 标签上限。
+const defaultMaxKinds = 64
+
+// NewKindCounters 构造标签计数器集合。
+func NewKindCounters() *KindCounters {
+	return &KindCounters{m: map[string]*atomic.Int64{}, maxKeys: defaultMaxKinds}
+}
+
+// Inc 给 key 加 1。key 为空按 "(none)" 计（避免空标签无法区分「未分类」与「缺失」）。
+func (k *KindCounters) Inc(key string) {
+	if k == nil {
+		return
+	}
+	if key == "" {
+		key = "(none)"
+	}
+	if c := k.counter(key); c != nil {
+		c.Add(1)
+	}
+}
+
+// counter 取（必要时创建）key 的计数器；超上界返回 nil（丢弃该标签的计数）。
+func (k *KindCounters) counter(key string) *atomic.Int64 {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	if c, ok := k.m[key]; ok {
+		return c
+	}
+	if len(k.m) >= k.maxKeys {
+		return nil
+	}
+	c := &atomic.Int64{}
+	k.m[key] = c
+	return c
+}
+
+// Snapshot 返回当前各标签计数（快照非严格一致，对指标足够）。
+func (k *KindCounters) Snapshot() map[string]int64 {
+	if k == nil {
+		return nil
+	}
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	out := make(map[string]int64, len(k.m))
+	for key, c := range k.m {
+		out[key] = c.Load()
+	}
+	return out
+}
+
 // Snapshot 返回全量快照：全局 + 各模型。
 func (r *Registry) Snapshot() RegistrySnapshot {
 	if r == nil {

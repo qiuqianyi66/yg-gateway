@@ -286,6 +286,11 @@ func main() {
 	// 延迟分位数观测（ADR-003 D-403）：自实现固定分桶，零新依赖。
 	// 进程级单例（无需落盘，重启归零——分位数是近期健康度而非历史账本）。
 	latencyReg := metrics.NewRegistry()
+	// 首 token （TTFB）分位数与上游错误分类计数：同源自实现，同样进程级单例。
+	// TTFB 与端到端延迟分开记——两者回答的问题不同（"总共等多久" vs "上游多快
+	// 开始吐"）；错误分类则把既有 Classify 的 13 种 ErrKind 导出成时序指标。
+	ttfbReg := metrics.NewRegistry()
+	errKinds := metrics.NewKindCounters()
 
 	// 请求指标始终启用；JSONL 归档只写脱敏元数据，写盘失败不影响聊天请求。
 	requestLog := reqlog.New(reqlog.Config{
@@ -354,6 +359,8 @@ func main() {
 		Live:                 live,
 		Usage:                rec,
 		Latency:              latencyReg,
+		TTFB:                 ttfbReg,
+		ErrKinds:             errKinds,
 		RequestLog:           requestLog,
 		PromptMode:           cfg.Prompt.Mode,
 		PromptText:           cfg.PromptText,

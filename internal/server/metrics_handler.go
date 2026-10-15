@@ -81,6 +81,26 @@ func (h *Handler) metricsHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// ---- TTFB 分桶（首 token 延迟；与端到端延迟是两个不同的问题）----
+	if h.cfg.TTFB != nil {
+		p.Help(metricNamePrefix+"ttfb_ms", "Time to first upstream byte histogram (global).").
+			Type(metricNamePrefix+"ttfb_ms", "histogram")
+		p.Histogram(metricNamePrefix+"ttfb_ms", h.cfg.TTFB.Global())
+		for model, hs := range h.cfg.TTFB.Snapshot().ByModel {
+			label := `model="` + escapeLabel(model) + `"`
+			p.Histogram(metricNamePrefix+"ttfb_ms", hs.UnsafeHistogram(), label)
+		}
+	}
+
+	// ---- 上游错误分类计数 ----
+	if h.cfg.ErrKinds != nil {
+		p.Help(metricNamePrefix+"upstream_errors_total", "Upstream errors by classification kind.").
+			Type(metricNamePrefix+"upstream_errors_total", "counter")
+		for kind, n := range h.cfg.ErrKinds.Snapshot() {
+			p.Counter(metricNamePrefix+"upstream_errors_total", n, `kind="`+escapeLabel(kind)+`"`)
+		}
+	}
+
 	// ---- 账号池状态 ----
 	total, healthy, cooling, disabled, inFlightFull := h.cfg.Pool.CountsDetailed()
 	p.Help(metricNamePrefix+"accounts", "Account pool size by state.").
