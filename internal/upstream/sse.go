@@ -10,14 +10,89 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 )
+
+// sseKeepAlive 聊天 SSE 心跳间隔（F-706）。包级变量而非 Client 字段：ChatStream
+// 的调用方（handler）持有 *Client，但 StreamHint 在 upstream 包内被直接调用，
+// 传参要穿过三层；而该值**只在装配期设置一次**（main 启动时按 config），运行期
+// 无人改写，包级 atomic 足够且不触碰 Client 的既有构造面。
+//
+// <=0 = 关闭（默认）→ 不传 WithKeepAlive，出站字节流与旧版逐位一致（零回归）。
+var sseKeepAlive atomic.Int64
+
+// SetSSEKeepAlive 设置聊天 SSE 心跳间隔（仅装配期调用一次；<=0 关闭）。
+func SetSSEKeepAlive(d time.Duration) {
+	if d < 0 {
+		d = 0
+	}
+	sseKeepAlive.Store(int64(d))
+}
+
+// SSEKeepAlive 返回当前心跳间隔（<=0 = 关闭）。供 handler 决定是否传
+// WithKeepAlive，避免为关闭状态付选项构造与 lastBeat 原子写的开销。
+func SSEKeepAlive() time.Duration { return time.Duration(sseKeepAlive.Load()) }
 
 // errEmptyStream 上游返回 200 但没有有效 SSE 数据帧（空流/只有注释/[DONE]）。
 // 用哨兵错误替代裸 fmt.Errorf：StreamHint 的调用方（handler 流式路径）需要区分
 // 「上游空流」与「客户端断连写失败」——空流是上游缺陷，应记 502 观测；写失败是
 // 客户端已走，日志口径不同。Aggregate 与 StreamHint 共用同一哨兵（errors.Is 判定）。
 var errEmptyStream = errors.New("upstream stream contained no valid data events")
+
+// maxSSEFrameBytes 单个 SSE 行（一帧 data 或一条注释）的字节上限（F-705）。
+//
+// 为什么需要：bufio.Reader.ReadString 对「不含换行的超长行」会一直读到 EOF 才
+// 返回，一个不吐换行的上游可以把网关内存吃到宿主上限。上限的作用是把这种形态
+// 变成明确的错误（errFrameTooLarge）而不是 OOM。
+//
+// 取值：正常帧远小于此（一帧 delta 通常几百字节；大图片/长工具参数的帧到几十 KB）。
+// 1MiB 给足畸形但合法的帧空间，同时把最坏内存占用钉死。
+const maxSSEFrameBytes = 1 << 20
+
+// maxAggregateBytes 非流式聚合（Aggregate）的整流体量上限（F-705）。
+//
+// 非流式响应要把整条流读进内存拼成单个 JSON，比逐帧透传更怕无界。取值远大于
+// 单帧上限：一条完整的非流式回答可以是几 MB（长回答 + 工具参数 + 推理链）。
+// 16MiB 覆盖合法极端形态，超限即判上游畸形（与 doJSON 的 LimitReader 同哲学）。
+const maxAggregateBytes = 16 << 20
+
+// errFrameTooLarge 单帧超过 maxSSEFrameBytes（或聚合总量超过 maxAggregateBytes）。
+// 上游畸形，不是账号问题：调用方据此回 502 并停止读流，不罚号不轮转。
+var errFrameTooLarge = errors.New("upstream SSE frame too large")
+
+// IsFrameTooLarge 报告错误是否为「帧/流体量超限」——供 handler 在流式路径把
+// 这种形态与客户端断连区分开（前者是上游缺陷，记 502；后者人已走，记 interrupted）。
+func IsFrameTooLarge(err error) bool { return errors.Is(err, errFrameTooLarge) }
+
+// readSSELine 读一行（含 '\n'），并对单行字节数设上限。
+//
+// 用 ReadSlice 而非 ReadString：ReadString 内部就是「ReadSlice + 无限累积」，
+// 遇到不吐换行的流会把整个流吃进内存；这里累积到 cap 立即失败，最坏内存占用
+// 有界。正常情况下（行 < bufio 缓冲大小）第一条 ReadSlice 就返回，无额外分配。
+//
+// 返回的行**含**行尾 '\n'（若无则 EOF），与 ReadString 一致；调用方按既有
+// TrimRight("\r\n") 处理。
+func readSSELine(br *bufio.Reader) (string, error) {
+	var sb strings.Builder
+	for {
+		frag, err := br.ReadSlice('\n')
+		if err == bufio.ErrBufferFull {
+			// 缓冲区满但行还没结束：累积这一段并继续。
+			if int64(sb.Len())+int64(len(frag)) > maxSSEFrameBytes {
+				return "", errFrameTooLarge
+			}
+			sb.Write(frag)
+			continue
+		}
+		if int64(sb.Len())+int64(len(frag)) > maxSSEFrameBytes {
+			return "", errFrameTooLarge
+		}
+		sb.Write(frag)
+		return sb.String(), err
+	}
+}
 
 // IsEmptyStreamError 报告错误是否为「上游空流」（无有效 SSE 帧）——供 handler
 // 在流式路径把空流记为失败观测（HTTP 头已发出只能 200，但日志/状态应收敛到
@@ -140,9 +215,18 @@ func Aggregate(r io.Reader) (map[string]any, error) {
 		}
 	}
 	for {
-		line, err := br.ReadString('\n')
-		if err != nil && err != io.EOF {
-			return nil, err
+		// 单行上限（F-705）：不吐换行的超长行不再无限吃内存，超限即判上游畸形。
+		line, err := readSSELine(br)
+		if err != nil {
+			if errors.Is(err, errFrameTooLarge) {
+				return nil, err
+			}
+			if err != io.EOF {
+				return nil, err
+			}
+		}
+		if int64(content.Len()) > maxAggregateBytes {
+			return nil, errFrameTooLarge
 		}
 		line = strings.TrimRight(line, "\r\n")
 		if strings.HasPrefix(line, "data: ") {
@@ -479,12 +563,14 @@ func Stream(w http.ResponseWriter, r io.Reader) error {
 
 // StreamOption StreamHint 的可选行为开关。
 // WithErrorFrameObserver 只做旁路观测、不改透传字节；WithMarkupRepair 会改写出站
-// 帧（把正文里的原生工具调用标记还原成 delta.tool_calls，见 dsml.go）。
+// 帧（把正文里的原生工具调用标记还原成 delta.tool_calls，见 dsml.go）；
+// WithKeepAlive 会在流静默超阈值时写 SSE 注释帧保活（默认关，零回归）。
 type StreamOption func(*streamOptions)
 
 type streamOptions struct {
 	onErrorFrame func(payload string)
 	markup       *MarkupRepair
+	keepAlive    time.Duration
 }
 
 // WithMarkupRepair 注册「模型原生工具调用标记」修复器（见 dsml.go）。
@@ -506,11 +592,28 @@ func WithErrorFrameObserver(fn func(payload string)) StreamOption {
 	return func(o *streamOptions) { o.onErrorFrame = fn }
 }
 
+// WithKeepAlive 开启 SSE 心跳：流中静默超过 d 时向客户端写 `: ping\n\n` 注释帧
+// （SSE 规范的注释行，标准客户端按规范忽略），防止中间层（nginx / LB / 代理）
+// 按空闲掐断长静默流——典型场景是长思考链模型首字节前要等几十秒。
+//
+// 默认关闭（不传本选项）：注释帧会改变出站字节流，测试与既有客户端行为一并
+// 零回归。开启后：
+//   - 写路径加互斥锁（心跳 goroutine 与主循环并发写同一 ResponseWriter）；
+//   - 心跳 goroutine 由 stop 通道 + WaitGroup 保证在函数返回前退出（R9：
+//     不留下无人回收的 goroutine）。
+func WithKeepAlive(d time.Duration) StreamOption {
+	return func(o *streamOptions) {
+		if d > 0 {
+			o.keepAlive = d
+		}
+	}
+}
+
 // StreamHint 同 Stream，但上游 error 帧透出前把 hintFn(payload) 的返回值写入
 // error.gateway_hint。hintFn 为 nil 或返回空串 → 原样透传（零改写）。
 // 空流兜底 error 帧（"empty upstream stream"）不带 hint（网关本地故障形态
 // 未覆盖，不编造）。
-// opts：旁路观测开关（见 WithErrorFrameObserver），不改变任何透传字节。
+// opts：旁路观测 / 标记修复 / 保活开关（见各 With*）。
 func StreamHint(w http.ResponseWriter, r io.Reader, hintFn func(string) string, opts ...StreamOption) error {
 	var o streamOptions
 	for _, f := range opts {
@@ -524,6 +627,67 @@ func StreamHint(w http.ResponseWriter, r io.Reader, hintFn func(string) string, 
 	h.Set("Connection", "keep-alive")
 	h.Set("X-Accel-Buffering", "no")
 	fl, _ := w.(http.Flusher)
+
+	// 首帧前先提交 200 + SSE 响应头（F-704）。
+	//
+	// 为什么要显式做：此前响应头是**惰性**发出的——net/http 在第一次 Write
+	// 时才连同 200 一起刷出去。于是「上游已接受请求但迟迟不吐首 token」这段
+	// 时间里，客户端什么都看不到（没有状态码、没有 Content-Type），只能干等；
+	// 中间层也因看不到字节而可能按自己的空闲策略掐连。
+	// 提前 WriteHeader(200) + Flush 后，客户端立刻知道「流已建立」，TTFB 的
+	// 感知与首 token 解耦；真实错误仍按既有约定在流里以 error 帧下发
+	// （HTTP 状态码一旦发出就不可改，这是 SSE 的既有约束，不是本改动引入的）。
+	w.WriteHeader(http.StatusOK)
+	if fl != nil {
+		fl.Flush()
+	}
+
+	// 心跳（WithKeepAlive）：静默超阈值写 `: ping\n\n`。默认关闭 → 本段整体不执行，
+	// 写路径不引入互斥锁开销（零回归）。
+	var (
+		writeMu  *sync.Mutex
+		stopKa   chan struct{}
+		kaDone   sync.WaitGroup
+		lastBeat atomic.Int64 // 上次写入时刻（UnixNano）：心跳 goroutine 读、主循环写
+	)
+	lastBeat.Store(time.Now().UnixNano())
+	if o.keepAlive > 0 {
+		writeMu = &sync.Mutex{}
+		stopKa = make(chan struct{})
+		kaDone.Add(1)
+		go func() {
+			defer kaDone.Done()
+			t := time.NewTicker(o.keepAlive)
+			defer t.Stop() // R12：定时器必须 Stop
+			for {
+				select {
+				case <-stopKa:
+					return
+				case <-t.C:
+					if time.Since(time.Unix(0, lastBeat.Load())) < o.keepAlive {
+						continue // 刚写过数据：不需要心跳
+					}
+					writeMu.Lock()
+					_, werr := io.WriteString(w, ": ping\n\n")
+					if fl != nil {
+						fl.Flush()
+					}
+					writeMu.Unlock()
+					if werr != nil {
+						return // 客户端已断：写失败即退（主循环随后也会感知）
+					}
+				}
+			}
+		}()
+	}
+	// 无论哪条返回路径，先停心跳并等它退出，再交还 ResponseWriter
+	// （否则函数返回后 handler 仍可能往同一 w 写，与心跳竞争）。
+	defer func() {
+		if stopKa != nil {
+			close(stopKa)
+			kaDone.Wait()
+		}
+	}()
 
 	// toolCallSeen 跨帧记录 delta.tool_calls 里已发过首片的 index，
 	// 供逐 chunk 透传时收敛 name 为「每 index 一次」（对齐 OpenAI 官方流）。
@@ -545,14 +709,53 @@ func StreamHint(w http.ResponseWriter, r io.Reader, hintFn func(string) string, 
 	toolFinishSent := false
 
 	// writeSSE 原样写出一帧并 flush。
+	// 心跳开启时经 writeMu 串行化（心跳 goroutine 与主循环并发写同一
+	// ResponseWriter，不加锁会交错出半帧）；未开启时 writeMu 为 nil，零开销。
 	writeSSE := func(payload string) error {
-		if _, werr := io.WriteString(w, "data: "+payload+"\n\n"); werr != nil {
-			return werr
+		lock := func() {
+			if writeMu != nil {
+				writeMu.Lock()
+			}
 		}
-		if fl != nil {
+		unlock := func() {
+			if writeMu != nil {
+				writeMu.Unlock()
+			}
+		}
+		lock()
+		_, werr := io.WriteString(w, "data: "+payload+"\n\n")
+		if werr == nil && fl != nil {
 			fl.Flush()
 		}
-		return nil
+		unlock()
+		if werr == nil {
+			lastBeat.Store(time.Now().UnixNano()) // 心跳判据：刚写过数据
+		}
+		return werr
+	}
+
+	// writeLine 原样写一行（注释/其他非 data 行），与 writeSSE 同锁口径。
+	writeLine := func(s string) error {
+		lock := func() {
+			if writeMu != nil {
+				writeMu.Lock()
+			}
+		}
+		unlock := func() {
+			if writeMu != nil {
+				writeMu.Unlock()
+			}
+		}
+		lock()
+		_, werr := io.WriteString(w, s)
+		if werr == nil && fl != nil {
+			fl.Flush()
+		}
+		unlock()
+		if werr == nil {
+			lastBeat.Store(time.Now().UnixNano())
+		}
+		return werr
 	}
 
 	// writeRaw 原样写出一帧（绕过 normalizeFrame）。上游 error 帧（error-passthrough）
@@ -711,7 +914,8 @@ func StreamHint(w http.ResponseWriter, r io.Reader, hintFn func(string) string, 
 	validFrames := 0
 readLoop:
 	for {
-		line, err := br.ReadString('\n')
+		// 单行上限（F-705）：不吐换行的超长行不再无限吃内存，超限即判上游畸形。
+		line, err := readSSELine(br)
 		trimmed := strings.TrimRight(line, "\r\n")
 		switch {
 		case strings.HasPrefix(trimmed, "data: [DONE]"):
@@ -726,15 +930,15 @@ readLoop:
 			}
 		case trimmed != "":
 			// 注释/其他行：原样透传
-			if _, werr := io.WriteString(w, line); werr != nil {
+			if werr := writeLine(line); werr != nil {
 				return werr
-			}
-			if fl != nil {
-				fl.Flush()
 			}
 		}
 		// 空行（帧分隔）吞掉：本函数自产 "\n\n"
 		if err != nil {
+			if errors.Is(err, errFrameTooLarge) {
+				return err
+			}
 			if err == io.EOF {
 				break
 			}

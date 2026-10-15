@@ -158,6 +158,12 @@ func bucketUpperMs(i int) float64 {
 }
 
 // Snapshot 一次读取的分位数快照（面板 / /status 用）。
+// Histogram 返回本快照对应的直方图本体（Prometheus 暴露用：/metrics 要的是
+// 各桶样本数，而 Snapshot 只有分位数——同一份数据两种口径，故给个回指）。
+//
+// 回指安全：RegistrySnapshot 由 Registry.Snapshot() 构造，那里持有的是
+// *Histogram 指针本身（不是拷贝），因此这里的 h 始终指向活对象——抓取时读到的
+// 是「抓取时刻」的桶计数（原子读，快照非严格一致，对指标足够）。
 type Snapshot struct {
 	Count  int64   `json:"count"`
 	MeanMs float64 `json:"mean_ms"`
@@ -166,7 +172,12 @@ type Snapshot struct {
 	P95Ms  float64 `json:"p95_ms"`
 	P99Ms  float64 `json:"p99_ms"`
 	MaxMs  float64 `json:"max_ms"`
+
+	hist *Histogram
 }
+
+// UnsafeHistogram 返回底层直方图指针（仅供同包 /metrics 暴露使用）。
+func (s Snapshot) UnsafeHistogram() *Histogram { return s.hist }
 
 // Snapshot 返回分位数快照。MaxMs 用最高非空桶的上界（近似——精确 max 需要
 // 额外记录，而分桶的价值在分位数不在精确极值）。
@@ -182,6 +193,7 @@ func (h *Histogram) Snapshot() Snapshot {
 		P95Ms:  round1(h.Quantile(0.95)),
 		P99Ms:  round1(h.Quantile(0.99)),
 		MaxMs:  round1(h.maxMs()),
+		hist:   h,
 	}
 }
 
@@ -265,6 +277,15 @@ func (r *Registry) modelHist(model string) *Histogram {
 	h = &Histogram{}
 	r.byModel[model] = h
 	return h
+}
+
+// Global 返回全局直方图本体（Prometheus 暴露用：需要各桶计数而非分位数）。
+// 返回的是活对象指针，调用方只做原子读（Histogram.Add 本身无锁）。
+func (r *Registry) Global() *Histogram {
+	if r == nil {
+		return nil
+	}
+	return &r.global
 }
 
 // Snapshot 返回全量快照：全局 + 各模型。

@@ -32,6 +32,29 @@ import (
 // 入参 conversationID 为网关解析出的会话标识（body 里没有 conversation_id 时用它做哈希源）。
 // 两源都空时 convHex 为定值（每次新会话不复用前缀，但仍保留账号隔离段）。
 // body 不可解析时原样返回（与 prepareBody 语义一致：坏 body 不二次错误化）。
+// promptCacheKeyFrom 在**已解析**的 AST 上算出应注入的 prompt_cache_key（F-702）。
+//
+// 与 InjectPromptCacheKey 的判据逐位一致（同优先级、同 uid 隔离、同哈希格式），
+// 只是入参从字节换成 AST——这样出站 body 只需一次 unmarshal + 一次 marshal。
+//
+// 调用点：PrepareBodyOptWithEffortsAndDefaultAndCache 在**规范化之后**调用它。
+// 规范化管线不动 conversation_id / conversationId / prompt_cache_key 三个键，
+// 故取值与「先规范化再单独注入」的旧两趟版本完全一致。
+func promptCacheKeyFrom(obj map[string]any, uid, conversationID string) string {
+	// 优先级 1：客户端已显式带 key → 绝不覆盖。
+	if existing := strField(obj, "prompt_cache_key"); existing != "" {
+		return existing
+	}
+	// 优先级 2：body 里的 conversation_id / conversationId 做会话哈希源。
+	conv := conversationID
+	if v := strField(obj, "conversation_id"); v != "" {
+		conv = v
+	} else if v := strField(obj, "conversationId"); v != "" {
+		conv = v
+	}
+	return buildCacheKey(uid, conv)
+}
+
 func InjectPromptCacheKey(body []byte, uid, conversationID string) []byte {
 	if len(body) == 0 {
 		return body

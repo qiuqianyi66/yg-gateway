@@ -75,12 +75,21 @@ type chatStat struct {
 }
 
 // newChatStat 以请求进入 handler 的时刻为起点构造统计对象；toks 默认 -1（usage 缺失）。
-func newChatStat(now time.Time, body []byte, stream bool) *chatStat {
+//
+// model 由调用方传入**已解析**的值（热路径去重解析，F-701）：调用方在解析入站
+// body 时已经拿到了 model，这里不再对整份 body 做一次全文档 Unmarshal。空串按
+// parseModelFromBody 的既有口径兜底为 "-"（日志列不留空白）。
+func newChatStat(now time.Time, model string, stream bool) *chatStat {
 	mode := "sync"
 	if stream {
 		mode = "stream"
 	}
-	return &chatStat{start: now, model: parseModelFromBody(body), mode: mode, toks: -1}
+	// 与 parseModelFromBody 的兜底口径逐位一致：只有**空串**才显示 "-"
+	// （纯空白的 model 是客户端真发的值，照实显示，不做 trim 判定）。
+	if model == "" {
+		model = "-"
+	}
+	return &chatStat{start: now, model: model, mode: mode, toks: -1}
 }
 
 // done 幂等落一行表格日志。

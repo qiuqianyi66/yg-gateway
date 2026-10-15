@@ -2,6 +2,7 @@ package server
 
 import (
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -13,26 +14,43 @@ import (
 //
 // 状态机：进程内存、重启清零（可接受：重启极少触发，且 custom 模式根本
 // 不进降级路径）。降级期内的请求直达 Degraded，不再先撞 400。
+// 并发模型（热路径降锁）：until 存 Unix 纳秒的 atomic.Int64，Active() 全程
+// 无锁；Trigger() 仍在 mutex 下做「读-改-写」，保证「不续期」语义原子。
+// untilUnix 用 int64 而不是 time.Time：atomic 不能承载结构体，且降级判据只有
+// 「现在是否早于 until」这一个比较，纳秒时间戳足够。0 = 从未触发。
 type degradeGate struct {
-	mu    sync.Mutex
-	until time.Time
+	mu        sync.Mutex
+	untilUnix atomic.Int64
 }
 
-// Active 当前是否处于降级期（now < until）。
+// until 读取当前降级截止时刻（零值 = 未触发）。
+func (g *degradeGate) until() time.Time {
+	n := g.untilUnix.Load()
+	if n <= 0 {
+		return time.Time{}
+	}
+	return time.Unix(0, n)
+}
+
+// Active 当前是否处于降级期（now < until）。热路径无锁。
 func (g *degradeGate) Active() bool {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	return time.Now().Before(g.until)
+	n := g.untilUnix.Load()
+	if n <= 0 {
+		return false
+	}
+	return time.Now().UnixNano() < n
 }
 
 // Trigger 触发降级，直到次日 00:00 CST（Asia/Shanghai）。
 // 已在降级期内则不续期（保持最早触发点的 00:00 重置语义）。
+//
+// 「判定 + 置位」必须原子：并发 Trigger 若各自读到未过期，会同时算出新 until
+// 并互相覆盖（虽然两者都是同一个午夜、结果等价，但语义上仍应是单次置位）。
 func (g *degradeGate) Trigger() {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	if !time.Now().Before(g.until) {
-		// 已过期/未触发 → 设新的 until；未过期则保持原 until（不续期）。
-		g.until = nextMidnightCST(time.Now())
+	if time.Now().UnixNano() >= g.untilUnix.Load() {
+		g.untilUnix.Store(nextMidnightCST(time.Now()).UnixNano())
 	}
 }
 

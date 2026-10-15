@@ -252,6 +252,16 @@ type Config struct {
 		HeaderTimeoutSeconds int `json:"header_timeout_seconds"`
 		// IdleTimeoutSeconds 聊天 SSE 流中空闲上限（活跃吐数据续命不掐）；<=0 回落默认 300。
 		IdleTimeoutSeconds int `json:"idle_timeout_seconds"`
+		// StreamTotalTimeoutSeconds 聊天 SSE **整请求**总时长上限（F-707）。
+		// 与 HeaderTimeoutSeconds（只管首字节前）、IdleTimeoutSeconds（只管流中静默）
+		// 构成三件套：补上「上游持续滴字节但永不结束」这一形态——那种流会不断刷新
+		// IdleTimeout，请求/账号租约/全局在途名额被无限期占住。
+		// <=0 = 不限（保持旧行为）。装配期字段（需重启）。
+		StreamTotalTimeoutSeconds int `json:"stream_total_timeout_seconds"`
+		// SSEKeepAliveSeconds 聊天 SSE 心跳间隔（F-706）：流中静默超该值向客户端写
+		// `: ping` 注释帧，防中间层按空闲掐连长静默流（长思考链模型首字节前常等
+		// 数十秒）。<=0 = 关闭（默认，零回归）。装配期字段（需重启）。
+		SSEKeepAliveSeconds int `json:"sse_keepalive_seconds"`
 		// UserAgent 出站 User-Agent 显式覆盖（非空时全路径生效，优先于默认三段式）。
 		// 全部出站请求生效：chat/refresh/checkin/balance/report/travel/FetchModels。
 		// 默认值已对齐官方 WorkBuddy 桌面形态（三段式），用户仍可配完全自定义值改写。
@@ -846,6 +856,15 @@ func (c *Config) normalize() error {
 	}
 	if c.Upstream.IdleTimeoutSeconds <= 0 {
 		c.Upstream.IdleTimeoutSeconds = 300
+	}
+	// 整请求总时长上限与 SSE 心跳：<=0 = 关闭（零回归，不设默认值）。
+	// 有意不给默认：两者都会改变线上流的行为（掐长流 / 多写注释帧），
+	// 应由部署方按自己的中间层形态显式开启。
+	if c.Upstream.StreamTotalTimeoutSeconds < 0 {
+		c.Upstream.StreamTotalTimeoutSeconds = 0
+	}
+	if c.Upstream.SSEKeepAliveSeconds < 0 {
+		c.Upstream.SSEKeepAliveSeconds = 0
 	}
 	if !strings.HasPrefix(c.Listen, ":") && !strings.Contains(c.Listen, ":") {
 		c.Listen = ":" + c.Listen
