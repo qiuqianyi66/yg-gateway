@@ -1101,7 +1101,14 @@ func runExpertBatch(p *Panel, a *auth.Auth, expertType string, count int) (strin
 			time.Sleep(expertSummonGap)
 		}
 	}
-	_ = fail
+	// 失败次数此前只累加、从不使用，靠 `_ = fail` 抑制编译器的未使用检查——
+	// 后果是召唤失败对运维完全不可见（返回值只报成功数 ok，看起来"全成功"）。
+	// 按 ERROR-HANDLING.md 判据表这属于「影响状态机推进」，不可忽略：至少必须记录。
+	// 这里只加 WARN 日志、不改返回值格式（对调用方零行为变更）。
+	if fail > 0 {
+		log.Printf("WARN: [panel] expert chain partial failure: ok=%d fail=%d type=%s uid=%s",
+			ok, fail, expertType, logfmt.Label(a.UID, a.Nickname))
+	}
 	return fmt.Sprintf("已对 %d 位真实专家完成召唤+使用链（类型 %s）", ok, expertType), nil
 }
 
