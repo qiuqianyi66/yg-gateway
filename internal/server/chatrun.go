@@ -219,99 +219,26 @@ func (r *chatRun) recordAttempt(uid string, delta pool.TokenUsageDelta, credit f
 func (run *chatRun) rotateAndServe(w http.ResponseWriter, r *http.Request, chatMeta upstream.ChatMeta) (handled bool) {
 	h := run.h
 	st := run.st
-	bareModel, realm := run.bareModel, run.realm
+	bareModel := run.bareModel
 	clientIP := run.clientIP
 	peekStream := run.peekStream
-	authKey := run.authKey
 	degradedApplied := run.degradedApplied
 	tried, modelBlock, groupFilteredOut := run.tried, run.modelBlock, run.groupFilteredOut
 	lastErr := run.lastErr
 	body := run.body
 	for i := 0; i < h.cfg.MaxRotate; i++ {
-		// 选号：粘性号优先（PickByUIDForModel 已校验该模型可用性 + 在途未满），否则普通轮换。
-		var acct *auth.Auth
-		if run.stickyUID != "" {
-			acct = h.cfg.Pool.PickByUIDForModel(run.stickyUID, bareModel)
-			if acct == nil || (realm != "" && acct.Realm() != realm) {
-				// 粘性号在当前模型不可用（冷却/占满/该模型被 6004 限额）或 realm 不符 → 解绑，
-				// 本次回落普通轮换。
-				run.unbindSticky()
-				acct = nil
-			}
-		}
-		if acct == nil {
-			// 模型感知 + realm 感知选号：模型非空时启用 6004 模型级冷却豁免
-			// （healthyForModel），realm 谓词过滤跨域账号。
-			// P1-B：再叠加 authKey.Group 过滤——该 key 只能用自己组的账号。
-			group := ""
-			if authKey != nil {
-				group = authKey.Group
-			}
-			acct = h.cfg.Pool.PickExcludingForRealmGroup(tried, bareModel, realm, group)
-		}
-		if acct == nil {
-			st.status = http.StatusServiceUnavailable
-			// 记下"是不是模型级阻塞"。选号返回 nil 有两种完全不同的成因：
-			//   (a) 池子真的没有可用号（账号级冷却/在途占满/积分保底）；
-			//   (b) 号都在，但每个号都对这个模型处于模型级冷却（11102/6004）。
-			// 两者此前都报 no_healthy_account，导致「模型不可用」被读成「号全挂了」。
-			// 在这里取一次快照，供下方错误构造区分（issue #102 附带发现 1）。
-			modelBlock = h.cfg.Pool.ModelBlocked(bareModel)
-			// P1-B：key 绑定了账号组但组里没号可选 → 标记，错误 hint 里给运维提示。
-			if authKey != nil && authKey.Group != "" {
-				groupFilteredOut = true
-			}
+		// 选号 + 占租约 + token 就绪（含 continue/break 的三态控制流）已抽到
+		// chatrun.go 的 selectAccount。
+		acct, outcome := run.selectAccount(i, r)
+		// 用 if 而非 switch 承接：**switch 里的 break 只跳出 switch，不跳出 for**
+		// （Go 的隐式 break 语义）。写成 switch 时 selectAbort 会退化成"什么都不做"
+		// 继续下一轮——症状是轮转次数翻倍并泄漏在途名额，而不是立刻失败
+		// （TestChatGlobalAdmissionRelease 抓到的就是这个）。
+		if outcome == selectAbort {
 			break
 		}
-		st.uid = acct.UID
-		// 同步昵称：请求流水行只写 uid8 时无法直观看是哪一号，昵称随本次选号带入日志行。
-		st.nick = acct.Nickname
-		tried[acct.UID] = true
-
-		// 占用在途名额：Pick 已跳过满额账号，此处 CAS 兜底并发抢名额的竞态。
-		if !h.cfg.Pool.Acquire(acct.UID) {
-			// 若被抢的正是粘性号，立即解绑并回落普通轮换，避免下一轮仍撞同一个
-			// 满载粘性号再浪费一次 PickByUID 往返（语义与 fail()/PickByUID-nil 的解绑一致）。
-			if run.stickyUID != "" && acct.UID == run.stickyUID {
-				run.unbindSticky()
-			}
-			if !rotateBackoff(i, r.Context()) {
-				// 客户端已断连：换号重试无意义，终止轮转走末端错误透传。
-				break
-			}
-			continue // 最后一个名额被并发抢走 → 换号
-		}
-		run.heldUID = acct.UID
-
-		// 成本未知跟踪（AGENTS.md「Unknown 消解纪律」）：选中即意味着这个
-		// (账号,模型) 组合即将被使用，而它的成本可能还没摸清。登记为可消解的
-		// 未知（幂等去重，命中路径只是一次原子读），由后续 NoteModelCost 自动消解。
-		//
-		// 为什么在这里而不是 pick 内部：pick 在 pool 写锁/读锁的临界区里，
-		// 不该再碰别的锁（ADR-005 特意让 pick 走读锁以避免串行化）。
-		h.cfg.Pool.TrackCostUnknown(acct.UID, bareModel)
-
-		// token 临近过期 → 先 refresh（失败冷却换号）
-		// 继承请求 ctx（F-708）：客户端断开/停机时刷新随之取消，不再占满 30s。
-		if acct.NeedsRefresh(h.cfg.RefreshSkew) {
-			if err := h.cfg.Upstream.RefreshTokenContext(r.Context(), acct); err != nil {
-				lastErr = err
-				var ue *upstream.Error
-				if errors.As(err, &ue) && ue.Kind == upstream.ErrSessionDead {
-					h.cfg.Pool.Disable(acct.UID, "refresh session dead")
-				} else {
-					h.cfg.Pool.NoteError(acct.UID)
-				}
-				run.fail(acct.UID)
-				if !rotateBackoff(i, r.Context()) {
-					break // ctx 取消：终止轮转（refresh 失败换号退避）
-				}
-				continue
-			}
-			if err := acct.SaveAtomic(); err != nil {
-				// 刷新成功但落盘失败：下次启动会用旧 token，必须暴露
-				log.Printf("ERR: [server] chat refresh acct=%s: save auth failed: %v", logfmt.Label(acct.UID, acct.Nickname), err)
-			}
+		if outcome == selectRetry {
+			continue
 		}
 
 		// 客户端 IP 按请求传递（PassthroughIP 开启时注入；消除共享字段竞态）。
@@ -339,7 +266,7 @@ func (run *chatRun) rotateAndServe(w http.ResponseWriter, r *http.Request, chatM
 			if isUpstreamTimeout(terr, r.Context().Err() != nil) {
 				run.recordAttempt(acct.UID, pool.TokenUsageDelta{}, 0, false, attemptStarted, 0)
 				st.status = http.StatusServiceUnavailable
-				lastErr = fmt.Errorf("%w: %v", errUpstreamTimeout, terr)
+				run.lastErr = fmt.Errorf("%w: %v", errUpstreamTimeout, terr)
 				log.Printf("WARN: [server] upstream timeout acct=%s: %v (rotation stopped, account not penalized)",
 					logfmt.Label(acct.UID, acct.Nickname), terr)
 				break
@@ -350,7 +277,7 @@ func (run *chatRun) rotateAndServe(w http.ResponseWriter, r *http.Request, chatM
 			// 上游 client 已打 transport error 日志。
 			run.recordAttempt(acct.UID, pool.TokenUsageDelta{}, 0, false, attemptStarted, 0)
 			st.status = http.StatusServiceUnavailable
-			lastErr = terr
+			run.lastErr = terr
 			h.cfg.Pool.NoteFailures(acct.UID)
 			run.fail(acct.UID)
 			if !rotateBackoff(i, r.Context()) {
@@ -450,7 +377,7 @@ func (run *chatRun) rotateAndServe(w http.ResponseWriter, r *http.Request, chatM
 			}
 			// lastErr 携带完整 body（uerr.Msg 在 upstream 侧截断 200 字符，透传语义
 			// 要求原文全量）+ Kind/RetryAfter（末端映射与冷却时长共用）。
-			lastErr = &upstream.Error{Kind: kind, Status: status, Msg: string(respBody), RetryAfter: uerr.RetryAfter}
+			run.lastErr = &upstream.Error{Kind: kind, Status: status, Msg: string(respBody), RetryAfter: uerr.RetryAfter}
 			h.applyErrorPolicy(acct.UID, kind, string(respBody), bareModel, uerr)
 			run.fail(acct.UID)
 			// WAF IP 级 fail-fast（优先于 rotateBackoff 退避——IP 级拦截时退避无意义）：
@@ -673,4 +600,116 @@ func (run *chatRun) serveNonStream(w http.ResponseWriter, acct *auth.Auth, rc io
 		h.cfg.Pool.NoteModelCost(acct.UID, bareModel, credit, total)
 	}
 	return true
+}
+
+// selectOutcome 选号阶段对轮转循环控制流的影响。
+//
+// 为什么需要它：选号块内含 continue（租约被并发抢走、token 刷新失败换号）与
+// break（无可服务账号、ctx 取消），抽成函数后必须用返回值表达控制流——Go 没有
+// 跨函数的 break/continue。三态刻意分开而不用 bool：break 与 continue 语义不同
+// （前者终止整轮轮转走末端错误构造，后者只放弃本轮），合并会掩盖差异。
+type selectOutcome int
+
+const (
+	selectOK    selectOutcome = iota // 账号可用：租约已占、token 已就绪
+	selectRetry                      // 本轮无果，continue 下一轮
+	selectAbort                      // 终止轮转，break 出去走末端错误构造
+)
+
+// selectAccount 选号 + 占在途租约 + 确保 token 就绪。
+//
+// 副作用都写在 run 上（heldUID / stickyUID / lastErr / modelBlock /
+// groupFilteredOut），调用方无需再接一长串返回值。
+func (run *chatRun) selectAccount(i int, r *http.Request) (*auth.Auth, selectOutcome) {
+	h := run.h
+	st := run.st
+	bareModel, realm := run.bareModel, run.realm
+	authKey := run.authKey
+	tried := run.tried
+	// 选号：粘性号优先（PickByUIDForModel 已校验该模型可用性 + 在途未满），否则普通轮换。
+	var acct *auth.Auth
+	if run.stickyUID != "" {
+		acct = h.cfg.Pool.PickByUIDForModel(run.stickyUID, bareModel)
+		if acct == nil || (realm != "" && acct.Realm() != realm) {
+			// 粘性号在当前模型不可用（冷却/占满/该模型被 6004 限额）或 realm 不符 → 解绑，
+			// 本次回落普通轮换。
+			run.unbindSticky()
+			acct = nil
+		}
+	}
+	if acct == nil {
+		// 模型感知 + realm 感知选号：模型非空时启用 6004 模型级冷却豁免
+		// （healthyForModel），realm 谓词过滤跨域账号。
+		// P1-B：再叠加 authKey.Group 过滤——该 key 只能用自己组的账号。
+		group := ""
+		if authKey != nil {
+			group = authKey.Group
+		}
+		acct = h.cfg.Pool.PickExcludingForRealmGroup(tried, bareModel, realm, group)
+	}
+	if acct == nil {
+		st.status = http.StatusServiceUnavailable
+		// 记下"是不是模型级阻塞"。选号返回 nil 有两种完全不同的成因：
+		//   (a) 池子真的没有可用号（账号级冷却/在途占满/积分保底）；
+		//   (b) 号都在，但每个号都对这个模型处于模型级冷却（11102/6004）。
+		// 两者此前都报 no_healthy_account，导致「模型不可用」被读成「号全挂了」。
+		// 在这里取一次快照，供下方错误构造区分（issue #102 附带发现 1）。
+		run.modelBlock = h.cfg.Pool.ModelBlocked(bareModel)
+		// P1-B：key 绑定了账号组但组里没号可选 → 标记，错误 hint 里给运维提示。
+		if authKey != nil && authKey.Group != "" {
+			run.groupFilteredOut = true
+		}
+		return nil, selectAbort
+	}
+	st.uid = acct.UID
+	// 同步昵称：请求流水行只写 uid8 时无法直观看是哪一号，昵称随本次选号带入日志行。
+	st.nick = acct.Nickname
+	tried[acct.UID] = true
+
+	// 占用在途名额：Pick 已跳过满额账号，此处 CAS 兜底并发抢名额的竞态。
+	if !h.cfg.Pool.Acquire(acct.UID) {
+		// 若被抢的正是粘性号，立即解绑并回落普通轮换，避免下一轮仍撞同一个
+		// 满载粘性号再浪费一次 PickByUID 往返（语义与 fail()/PickByUID-nil 的解绑一致）。
+		if run.stickyUID != "" && acct.UID == run.stickyUID {
+			run.unbindSticky()
+		}
+		if !rotateBackoff(i, r.Context()) {
+			// 客户端已断连：换号重试无意义，终止轮转走末端错误透传。
+			return nil, selectAbort
+		}
+		return nil, selectRetry
+	}
+	run.heldUID = acct.UID
+
+	// 成本未知跟踪（AGENTS.md「Unknown 消解纪律」）：选中即意味着这个
+	// (账号,模型) 组合即将被使用，而它的成本可能还没摸清。登记为可消解的
+	// 未知（幂等去重，命中路径只是一次原子读），由后续 NoteModelCost 自动消解。
+	//
+	// 为什么在这里而不是 pick 内部：pick 在 pool 写锁/读锁的临界区里，
+	// 不该再碰别的锁（ADR-005 特意让 pick 走读锁以避免串行化）。
+	h.cfg.Pool.TrackCostUnknown(acct.UID, bareModel)
+
+	// token 临近过期 → 先 refresh（失败冷却换号）
+	// 继承请求 ctx（F-708）：客户端断开/停机时刷新随之取消，不再占满 30s。
+	if acct.NeedsRefresh(h.cfg.RefreshSkew) {
+		if err := h.cfg.Upstream.RefreshTokenContext(r.Context(), acct); err != nil {
+			run.lastErr = err
+			var ue *upstream.Error
+			if errors.As(err, &ue) && ue.Kind == upstream.ErrSessionDead {
+				h.cfg.Pool.Disable(acct.UID, "refresh session dead")
+			} else {
+				h.cfg.Pool.NoteError(acct.UID)
+			}
+			run.fail(acct.UID)
+			if !rotateBackoff(i, r.Context()) {
+				return nil, selectAbort
+			}
+			return nil, selectRetry
+		}
+		if err := acct.SaveAtomic(); err != nil {
+			// 刷新成功但落盘失败：下次启动会用旧 token，必须暴露
+			log.Printf("ERR: [server] chat refresh acct=%s: save auth failed: %v", logfmt.Label(acct.UID, acct.Nickname), err)
+		}
+	}
+	return acct, selectOK
 }
