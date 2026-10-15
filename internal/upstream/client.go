@@ -581,13 +581,24 @@ func Classify(status int, body string) ErrKind {
 				return ErrContentBlocked
 			}
 		}
-		// 请求体解析失败（HTTP 400 + Unmarshal chat params failed / code 11101）：
-		// 这是"发给上游的 body 有问题"。网关侧截断已由 413 消灭（issue #41 commit A），
-		// 剩余来源是客户端 JSON 本身畸形——换了账号照样 400，不该罚号（白白冷却好号）。
-		// 归 ErrBadParams：不冷却/不熔断/不计错，且**不轮转**——11101 发生在上游解析
-		// 请求体阶段，还没走到模型路由，所以"不同账号可能有不同模型权限"其实是
-		// 11102（ErrModelBlocked）的理由，那里已有 (账号,模型) 负缓存避让。
-		if strings.Contains(body, badParamsMarkerMsg) || strings.Contains(body, badParamsMarkerCode) {
+		// 请求级参数问题一律归 ErrBadParams：不冷却/不熔断/不计错，且**不轮转**。
+		//
+		//   - 11101 Unmarshal chat params failed：上游解析请求体失败。网关侧截断已由
+		//     413 消灭（issue #41 commit A），剩余来源是客户端 JSON 本身畸形；
+		//   - 11133 model_param_invalid：模型供应商拒绝请求参数（图片 URL 拉不到、
+		//     模型版本不接受该请求等）。
+		//
+		// 两者都是「同一个 body 换任何账号结果不变」，所以轮转只会白烧健康号配额，
+		// 并把客户端看到的最终错误变成误导性的 no_healthy_account——而 11133 的原文
+		// 明确写着「这次对话的内容这个模型不接受，与网络无关」。
+		//
+		// 「不同账号可能有不同模型权限」不是这里的理由，那是 11102（ErrModelBlocked），
+		// 已有 (账号,模型) 负缓存避让；11133 的实测证据是**同号同 body** 也会因模型
+		// 版本不同而 15 拒 / 16 过（见 payload.go），与账号无关。
+		//
+		// 判定复用 hint.go 的 isModelParamInvalid：hint 与分类必须同一口径，否则会
+		// 出现「提示说请求问题、行为却轮转所有账号」的分裂（2026-10-15 修复的即此）。
+		if strings.Contains(body, badParamsMarkerMsg) || strings.Contains(body, badParamsMarkerCode) || isModelParamInvalid(body) {
 			return ErrBadParams
 		}
 		return ErrClient
