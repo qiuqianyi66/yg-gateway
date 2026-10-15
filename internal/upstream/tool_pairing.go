@@ -11,6 +11,8 @@
 // 的条目让会话自愈，宁可丢一轮工具上下文，也好过整条会话死亡。
 package upstream
 
+import "strings"
+
 // repackToolResultBlocks 把插在 assistant.tool_calls 与其 tool 结果之间的非 tool 消息
 // 挪到整组之后，保证同一批 tool_call 的结果在 wire 上连续。
 //
@@ -124,6 +126,10 @@ func cleanupOrphanToolCalls(messages []any) ([]any, bool) {
 	}
 	callIDs := map[string]bool{}
 	resultIDs := map[string]bool{}
+	// nameBadIDs：function.name 为空（含纯空白）的调用 id。这些条目上游必判
+	// 11133 model_param_invalid（见 toolCallNameEmpty），无论有没有配对结果——
+	// 一律不保留（见下方 keepCalls）。
+	nameBadIDs := map[string]bool{}
 	hasTraffic := false
 	for _, m := range messages {
 		msg, ok := m.(map[string]any)
@@ -145,6 +151,13 @@ func cleanupOrphanToolCalls(messages []any) ([]any, bool) {
 					}
 					if id, ok := tc["id"].(string); ok && id != "" {
 						callIDs[id] = true
+						// 空 name 的调用登记进否决集。**仍照常登记 callIDs**：
+						// 否则 hasTraffic 会漏判该请求有工具流量而提前返回，
+						// 让「空 name 且无结果」这种本可被孤儿规则删掉的形态溜出站
+						// （比不修更糟——脏条目出站必被上游拒）。
+						if toolCallNameEmpty(tc) {
+							nameBadIDs[id] = true
+						}
 						hasTraffic = true
 					}
 				}
@@ -155,8 +168,17 @@ func cleanupOrphanToolCalls(messages []any) ([]any, bool) {
 		return messages, false
 	}
 	// keepCalls：调用 id 是否双侧齐全（调用存在且结果存在）。重复 id 与乱序均按集合处理。
+	//
+	// 追加否决条件：function.name 为空（含纯空白）的调用一律不保留。上游对这类条目
+	// 直接判 11133 model_param_invalid（tool_calls[i].function.name must be a
+	// non-empty string），且**带不带配对结果都会拒**——带结果的脏条目原本会命中
+	// keepCalls 原样出站，正是「整条会话从此每轮 503、只能手动清空历史」的成因。
+	// 删除动作完全复用两侧对称裁剪，不新增删除路径。
 	keepCalls := map[string]bool{}
 	for id := range callIDs {
+		if nameBadIDs[id] {
+			continue
+		}
 		if resultIDs[id] {
 			keepCalls[id] = true
 		}
@@ -344,4 +366,26 @@ func emptyContent(v any) bool {
 		return len(c) == 0
 	}
 	return false
+}
+
+// toolCallNameEmpty 判断 assistant.tool_calls[] 单项的 function.name 是否为空。
+//
+// 判据**精确收窄**为「function 对象存在、name 字段存在且为空白字符串」：
+//   - function 缺失或 name 字段缺失 → 判假。历史报文里存在不带 function 的占位
+//     条目，上游不因此拒参，这里不扩大打击面（与「空 id 双侧不识别」同口径）。
+//   - 只有确实存在且为空白（含 `"   "`）的 name 才判脏。
+//
+// 为什么单独一个函数而不是用现成的 strField：strField 把「字段缺失」与「空串」
+// 归一成同一个空串返回，用它会把缺字段的占位条目也判脏——那是打击面扩大。
+// 这里的语义是「字段在、但值是空的」，必须能区分这两种输入。
+func toolCallNameEmpty(tc map[string]any) bool {
+	fn, ok := tc["function"].(map[string]any)
+	if !ok {
+		return false
+	}
+	name, ok := fn["name"].(string)
+	if !ok {
+		return false
+	}
+	return strings.TrimSpace(name) == ""
 }

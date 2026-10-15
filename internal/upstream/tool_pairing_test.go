@@ -422,3 +422,98 @@ func TestFoldTextIntoPrevToolCall(t *testing.T) {
 		t.Fatal("数组正文不该被折叠（会丢结构）")
 	}
 }
+
+// TestCleanupOrphanToolCallsEmptyName 空 function.name 的钉桩（线上 11133）。
+//
+// 来源（2026-10-10 同源上游仓库定位，我方缺失该修复）：上游流式响应在 tool_call
+// name 分片到达前异常结束（200 空流也算）时，聚合器按占位符产出 name:"" 的条目，
+// 客户端把它写进会话历史；下一轮原样转发，上游直接判
+//
+//	400 {"code":11133,"extError":{"code":"model_param_invalid",
+//	     "message":"tool_calls[i].function.name must be a non-empty string"}}
+//
+// 且**带不带配对结果都会被拒**——带结果的脏条目会命中 keepCalls 原样出站。
+// 后果比 11148 更重：整条会话从此每轮 503，只能手动清空历史。
+//
+// 修复保持最小干预：收集阶段**照常登记 callIDs**（保住 hasTraffic 语义，否则
+// 「空 name 且无结果」这种本可被孤儿规则删掉的形态会漏出站），只在 keepCalls
+// 一处否决空 name 条目，删除动作完全复用既有的双侧对称裁剪。
+//
+// 边界与既有「空 id 双侧不识别」用例同口径：toolCallNameEmpty 只认
+// 「function 对象存在、name 字段存在且为空白串」，缺字段的占位条目不判脏
+// （上游不因此拒参），不扩大打击面。
+func TestCleanupOrphanToolCallsEmptyName(t *testing.T) {
+	t.Run("空 name 带结果：调用与结果成对剔除，assistant 保留", func(t *testing.T) {
+		in := msgs(t, `[
+			{"role":"user","content":"q"},
+			{"role":"assistant","content":"","tool_calls":[{"id":"c1","type":"function","function":{"name":"","arguments":"{}"}}]},
+			{"role":"tool","tool_call_id":"c1","content":"r1"},
+			{"role":"user","content":"next"}
+		]`)
+		out, changed := cleanupOrphanToolCalls(in)
+		if !changed {
+			t.Fatal("changed=false，期望剔除空 name 调用")
+		}
+		assertSummary(t, summarize(out), []string{"user(-)", "assistant(-)", "user(-)"})
+	})
+
+	t.Run("空 name 且无结果：仍走孤儿路径删除", func(t *testing.T) {
+		// 回归钉桩：若改成「空 name 不登记 callIDs」，hasTraffic 会变 false 提前
+		// 返回，该脏条目反而漏出站——比不修更糟。
+		in := msgs(t, `[
+			{"role":"assistant","content":null,"tool_calls":[{"id":"c1","type":"function","function":{"name":"","arguments":"{}"}}]},
+			{"role":"user","content":"go"}
+		]`)
+		out, changed := cleanupOrphanToolCalls(in)
+		if !changed {
+			t.Fatal("changed=false，期望删除空 name 孤儿调用")
+		}
+		msg := out[0].(map[string]any)
+		if _, has := msg["tool_calls"]; has {
+			t.Error("空 name 孤儿调用的 tool_calls 键应被删除")
+		}
+	})
+
+	t.Run("纯空白 name 判脏", func(t *testing.T) {
+		in := msgs(t, `[
+			{"role":"assistant","content":null,"tool_calls":[{"id":"c1","type":"function","function":{"name":"   ","arguments":"{}"}}]},
+			{"role":"tool","tool_call_id":"c1","content":"r1"}
+		]`)
+		out, changed := cleanupOrphanToolCalls(in)
+		if !changed {
+			t.Fatal("changed=false，纯空白 name 应与空串同判")
+		}
+		assertSummary(t, summarize(out), []string{"assistant(-)"})
+	})
+
+	t.Run("批内混合：只剔脏项，健康项不动", func(t *testing.T) {
+		in := msgs(t, `[
+			{"role":"assistant","content":null,"tool_calls":[
+				{"id":"c1","type":"function","function":{"name":"","arguments":"{}"}},
+				{"id":"c2","type":"function","function":{"name":"read","arguments":"{}"}}
+			]},
+			{"role":"tool","tool_call_id":"c1","content":"r1"},
+			{"role":"tool","tool_call_id":"c2","content":"r2"}
+		]`)
+		out, changed := cleanupOrphanToolCalls(in)
+		if !changed {
+			t.Fatal("changed=false，期望对称裁剪脏项")
+		}
+		assertSummary(t, summarize(out), []string{"assistant(c2)", "tool(c2)"})
+	})
+
+	t.Run("function 或 name 缺失不判脏（不扩大打击面）", func(t *testing.T) {
+		// 与既有 TestCleanupOrphanToolCalls 各子用例口径一致：无 function 字段的
+		// 占位条目仍按原配对规则处理，空 name 判定不误伤。
+		in := msgs(t, `[
+			{"role":"assistant","content":null,"tool_calls":[{"id":"c1"},{"id":"c2"}]},
+			{"role":"tool","tool_call_id":"c1","content":"r1"},
+			{"role":"tool","tool_call_id":"c2","content":"r2"}
+		]`)
+		out, changed := cleanupOrphanToolCalls(in)
+		if changed {
+			t.Error("changed=true，缺 function 字段不应判脏")
+		}
+		assertSummary(t, summarize(out), []string{"assistant(c1,c2)", "tool(c1)", "tool(c2)"})
+	})
+}
