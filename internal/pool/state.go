@@ -653,9 +653,9 @@ func (p *Pool) statusOf(uid string, e *entry) Status {
 				prov := evidence.Derive(nil, "EWMA 平滑的成功率（非真实成功率）", int(e.ewmaSuccessSamples))
 				st.EwmaProvenance = &prov
 			} else {
-				prov := evidence.Unknown(fmt.Sprintf(
+				prov := evidence.UnknownWithSamples(fmt.Sprintf(
 					"成功率样本不足（%d/%d），数值不可作事实使用；需继续观测才可信",
-					e.ewmaSuccessSamples, p.ewmaMinSamples))
+					e.ewmaSuccessSamples, p.ewmaMinSamples), int(e.ewmaSuccessSamples))
 				st.EwmaProvenance = &prov
 			}
 		}

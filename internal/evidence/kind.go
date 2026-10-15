@@ -69,6 +69,14 @@ func Unknown(basis string) Fact {
 	return Fact{Kind: KindUnknown, Basis: basis}
 }
 
+// UnknownWithSamples 同 Unknown，但记录「已经有几个部分样本」。
+//
+// 用途：区分「完全没数据」与「有 2/5 个样本、还差 3 个」——两者都是未知，
+// 但离消解的距离不同，运维对前者的期待完全不同。
+func UnknownWithSamples(basis string, samples int) Fact {
+	return Fact{Kind: KindUnknown, Basis: basis, Samples: samples}
+}
+
 // IsUnknown 报告该事实是否未知（含零值）。
 //
 // 零值 Fact 的 Kind 是 ""，也判为 unknown——这样"忘了标注"落到最保守档。
@@ -78,9 +86,16 @@ func (f Fact) IsUnknown() bool {
 
 // MarshalJSON 序列化为带 provenance 的对象。
 //
-// 为什么不直接用 struct tag：unknown 态要省掉 value/samples（没有值），
-// 而 observation 态不需要 samples（不适用）。手工构造 map 才能让不同 Kind
-// 输出不同字段集，避免消费者看到 `"value":null` 这种误导性字段。
+// 为什么不直接用 struct tag：unknown 态要省掉 value（没有值），且不同 Kind 的
+// 字段集不同。手工构造 map 才能让消费者看到干净的字段集，避免 `"value":null`
+// 这类误导性字段。
+//
+// samples 的规则：>0 就输出，与 Kind 无关。理由：
+//   - derivation/inference：样本数表达可信度，必须有；
+//   - unknown 但已有部分样本（如 EWMA 冷启动 2/5）：样本数是"离消解还差多远"
+//     的唯一结构化表达，藏掉会让消费者以为"完全没有数据"；
+//   - unknown 且样本为 0（如成本从未观测）：不输出——0 在这里不是"样本为零"，
+//     而是"没有样本"这一概念的占位。
 func (f Fact) MarshalJSON() ([]byte, error) {
 	m := map[string]any{"kind": string(nonEmptyKind(f.Kind))}
 	if f.Basis != "" {
@@ -89,7 +104,7 @@ func (f Fact) MarshalJSON() ([]byte, error) {
 	if !f.IsUnknown() && f.Value != nil {
 		m["value"] = f.Value
 	}
-	if f.Samples > 0 && (f.Kind == KindDerivation || f.Kind == KindInference) {
+	if f.Samples > 0 {
 		m["samples"] = f.Samples
 	}
 	return jsonMarshal(m)
