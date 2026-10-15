@@ -31,7 +31,7 @@ import (
 //
 // 与 Classify 的关系（2026-10-15 对齐）：Classify 现已把 11133 归 ErrBadParams
 // （请求级、不轮转），与这里的 isModelParamInvalid 共用同一判定函数，避免出现
-//「提示说请求问题、分类却轮转所有账号」的分裂。此处的独立判定保留，因为它还要
+// 「提示说请求问题、分类却轮转所有账号」的分裂。此处的独立判定保留，因为它还要
 // 区分「带图 + 目录声明不支持」这一更细的分支，Kind 本身表达不了。
 func GatewayHint(kind ErrKind, msg string, ctx HintContext) string {
 	// 11133 model_param_invalid 家族（图片回归实测：不支持图片的模型传图，或任意
