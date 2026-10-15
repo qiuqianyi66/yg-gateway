@@ -1,6 +1,7 @@
 ---
 name: panel-frontend
-description: 面板前端开发——go:embed 单文件 + 严格 CSP + esc 转义，改 app.js/index.html 必读。R3/R13 红线 + 测试切片契约。
+version: 1
+description: 面板前端开发——go:embed 单文件 + 严格 CSP + esc() 转义，改 app.js/index.html 必读（R3/R13 红线 + 测试切片契约）。【跳过】纯后端改动且不碰 app.js/index.html；只改 CSS 变量取值（无新渲染函数）——但改完仍必须重新编译二进制（R13）。
 ---
 
 # 面板前端（YG Gateway）

@@ -1,6 +1,7 @@
 ---
 name: deploy-verify
-description: 部署验证——二进制 swap + 备份 + healthz 冒烟 + 观测。对应十阶段流水线阶段 8-10，冒烟任何场景不可省略。
+version: 1
+description: 部署验证——二进制 swap + 备份（R15）+ healthz 冒烟 + 观测期。【跳过】纯本地实验不替换任何运行实例；只改配置不换二进制（但仍要验证配置生效）。冒烟在任何替换二进制的场景都不可省略。
 ---
 
 # Deploy Verify（YG Gateway）

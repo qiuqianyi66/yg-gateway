@@ -1,6 +1,7 @@
 ---
 name: unit-test-write
-description: 单元测试编写——Go 表驱动测试 + 前端 node/vm 切片测试，测试必须有牙齿（还原 bug 必须 FAIL）。对应十阶段流水线阶段 5。
+version: 1
+description: 单元测试编写——Go 表驱动测试 + 前端 node/vm 切片测试，测试必须有牙齿（还原 bug 必须 FAIL）。【跳过】纯样式/文案改动且无逻辑分支；只写测试数据或 fixture 的调整；改动已有测试的期望值以匹配新行为（那是 TDD 的实现步骤，不是新写测试）。
 ---
 
 # 单元测试编写（YG Gateway）

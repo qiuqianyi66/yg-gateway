@@ -1,6 +1,7 @@
 ---
 name: request-analysis
-description: 需求分析——将模糊需求转化为清晰技术任务（F 编号 + Given-When-Then + 影响分析 + 承重墙声明），进入开发流程前必须使用本技能。对应十阶段流水线阶段 1-3。
+version: 1
+description: 需求分析——把模糊需求转成可执行技术任务（F 编号 + Given-When-Then + 影响分析 + 承重墙声明）。收到任何新功能/变更需求时触发。【跳过】需求已精确到"改哪个文件的哪一行"（Fast 路径）；纯文档/注释改动；只是询问代码现状不想改。
 ---
 
 # 需求分析技能（YG Gateway）

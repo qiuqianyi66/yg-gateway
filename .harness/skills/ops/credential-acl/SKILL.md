@@ -1,6 +1,7 @@
 ---
 name: credential-acl
-description: 凭证 ACL 加固——auths/*.json 落盘权限（Windows icacls + Go 0600），加账号/换机器后必读。R1/R7 红线。
+version: 1
+description: 凭证 ACL 加固——auths/*.json 落盘权限（Windows icacls + Go 0600），加账号/换机器后必读（R1/R7 红线）。【跳过】不涉及 auths/ 与凭证落盘的改动；只改凭证的使用方式（如换刷新时机）不动文件权限。
 ---
 
 # 凭证 ACL 加固（YG Gateway）

@@ -1,6 +1,7 @@
 ---
 name: upstream-reverse
-description: 上游协议逆向与出站报文改造——改 CodeBuddy 上游（copilot.tencent.com）的请求/响应形态时必读，R8 红线约束（协议数据不得改名）。
+version: 1
+description: 上游协议逆向与出站报文改造——改 CodeBuddy 上游（copilot.tencent.com）的请求/响应形态时必读，R8 红线约束（协议数据不得改名）。【跳过】网关内部逻辑改动（不改出站报文）；只调超时/重试参数；读上游代码但不改网关出站行为。
 ---
 
 # 上游协议逆向（YG Gateway）
