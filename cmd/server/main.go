@@ -185,6 +185,11 @@ func main() {
 	}
 	// 聊天 SSE 流中空闲上限（S3 空闲监控读取）。
 	up.IdleTimeout = time.Duration(cfg.Upstream.IdleTimeoutSeconds) * time.Second
+	// 整请求总时长上限（F-707，三件套第三层；<=0 = 不限 = 零回归）。
+	up.StreamTotalTimeout = time.Duration(cfg.Upstream.StreamTotalTimeoutSeconds) * time.Second
+	// SSE 心跳间隔（F-706；<=0 = 关闭 = 零回归）。
+	// 透给 handler 的流式路径：StreamHint 静默超该值就写 `: ping` 注释帧。
+	upstream.SetSSEKeepAlive(time.Duration(cfg.Upstream.SSEKeepAliveSeconds) * time.Second)
 	up.SanitizeFingerprints.Store(cfg.Features.SanitizeBlacklistFingerprints)
 	// 出站 UA 与归属头（issue #42 + 上游同步）：
 	// UserAgent 非空则完全覆盖；ClientVersion/CliVersion 缺省对齐官方形态；

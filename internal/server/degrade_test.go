@@ -60,19 +60,36 @@ func TestDegradeGateActiveTriggered(t *testing.T) {
 func TestDegradeGateTriggerNoRenewal(t *testing.T) {
 	var g degradeGate
 	g.Trigger()
-	first := func() time.Time {
-		g.mu.Lock()
-		defer g.mu.Unlock()
-		return g.until
-	}()
+	first := g.until()
 	// 再次 Trigger：仍在降级期内，until 不应改变。
 	g.Trigger()
-	second := func() time.Time {
-		g.mu.Lock()
-		defer g.mu.Unlock()
-		return g.until
-	}()
+	second := g.until()
 	if !first.Equal(second) {
 		t.Errorf("Trigger during active should not renew: first=%v second=%v", first, second)
+	}
+}
+
+// TestDegradeGateActiveIsLockFree Active() 走 atomic 读（热路径降锁），
+// 与 until() 快照口径一致：触发后 Active=true，手动置为过去时间后 Active=false。
+//
+// 牙齿：把 Active 改回「恒返回 true」→ 最后一步 FAIL；把 untilUnix 的 0 哨兵
+// 判据去掉 → 未触发状态会被当成 1970 年、表现同样是 false，故这里额外断言
+// 未触发时 until() 是零值时间（而不是 1970）。
+func TestDegradeGateActiveIsLockFree(t *testing.T) {
+	var g degradeGate
+	if !g.until().IsZero() {
+		t.Fatalf("fresh gate until = %v, want zero time", g.until())
+	}
+	if g.Active() {
+		t.Error("fresh gate should not be active")
+	}
+	g.Trigger()
+	if !g.Active() {
+		t.Fatal("after Trigger should be active")
+	}
+	// 把截止时刻拨到过去：Active 应转 false（证明它读的是 atomic 值而非缓存）。
+	g.untilUnix.Store(time.Now().Add(-time.Second).UnixNano())
+	if g.Active() {
+		t.Error("expired gate should not be active")
 	}
 }

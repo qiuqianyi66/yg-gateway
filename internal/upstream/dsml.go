@@ -45,6 +45,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"yg-gateway/internal/session"
 )
 
 // markupPipe 是模型原生工具调用标记的分隔符：两个全角竖线 U+FF5C。
@@ -394,6 +396,81 @@ func ToolNameAllowlist(body []byte) map[string]bool {
 		}
 	}
 	if len(names) == 0 {
+		return nil
+	}
+	return names
+}
+
+// ToolNameAllowlistView 同 ToolNameAllowlist，但从**已解析**的请求视图取 tools /
+// functions / messages（热路径去重：顶层与子树都不再重复 Unmarshal）。
+//
+// 语义与 ToolNameAllowlist 逐位一致（同两个来源、同判空口径），**包括容错口径**：
+// 旧实现把 tools/functions/messages 一次性 Unmarshal 进 typed struct，任一条目类型
+// 不符会让整次解析失败并返回 nil（宽容解析留待单独评估，不在本轮改动语义）。视图
+// 路径同样以「遇到畸形条目即放弃整份名单」对齐，避免名单变多后修复层的严格/弱判定
+// 边界悄悄变化。
+func ToolNameAllowlistView(v *session.RequestView) map[string]bool {
+	if v == nil {
+		return nil
+	}
+	names := map[string]bool{}
+	bad := false // 任一条目畸形 → 整份名单作废（对齐旧实现的整体失败语义）
+	for _, raw := range v.Tools() {
+		var t struct {
+			Name     string `json:"name"`
+			Function *struct {
+				Name string `json:"name"`
+			} `json:"function"`
+		}
+		if err := json.Unmarshal(raw, &t); err != nil {
+			bad = true
+			break
+		}
+		if t.Function != nil && t.Function.Name != "" {
+			names[t.Function.Name] = true
+			continue
+		}
+		if t.Name != "" {
+			names[t.Name] = true
+		}
+	}
+	for _, raw := range v.Functions() {
+		var f struct {
+			Name string `json:"name"`
+		}
+		if err := json.Unmarshal(raw, &f); err != nil {
+			bad = true
+			break
+		}
+		if f.Name != "" {
+			names[f.Name] = true
+		}
+	}
+	for _, raw := range v.Messages() {
+		var m struct {
+			ToolCalls []struct {
+				Function *struct {
+					Name string `json:"name"`
+				} `json:"function"`
+			} `json:"tool_calls"`
+			FunctionCall *struct {
+				Name string `json:"name"`
+			} `json:"function_call"`
+		}
+		if err := json.Unmarshal(raw, &m); err != nil {
+			bad = true
+			break
+		}
+		for _, tc := range m.ToolCalls {
+			if tc.Function != nil && tc.Function.Name != "" {
+				names[tc.Function.Name] = true
+			}
+		}
+		if m.FunctionCall != nil && m.FunctionCall.Name != "" {
+			names[m.FunctionCall.Name] = true
+		}
+	}
+	if bad || len(names) == 0 {
 		return nil
 	}
 	return names

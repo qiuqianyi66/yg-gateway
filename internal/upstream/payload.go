@@ -27,7 +27,22 @@ func PrepareBodyOptWithEfforts(src []byte, sanitize bool, efforts map[string][]s
 // PrepareBodyOptWithEffortsAndDefault 完整管线：efforts 降级 + thinking.go 按
 // defaultEfforts（模型声明默认档）补档。defaultEfforts 为 nil 时与旧行为一致
 // （deepseek 缺档回退硬编码 high）。
-func PrepareBodyOptWithEffortsAndDefault(src []byte, sanitize bool, efforts map[string][]string, defaultEfforts map[string]string) []byte {
+// PrepareBodyOptWithEffortsAndDefaultAndCache 完整管线 + prompt_cache_key 注入，
+// **单次 JSON 往返**（F-702）。
+//
+// 与「先 PrepareBodyOptWithEffortsAndDefault 再 InjectPromptCacheKey」的等价性：
+// 后者是两趟完整的 unmarshal+marshal（背靠背），且每次 ChatStreamContext 都跑一遍
+// （轮转时重复 MaxRotate 次）。本函数在同一个 AST 上先规范化、再注入 cache key，
+// 最后只 marshal 一次。
+//
+// 顺序与语义严格照搬两趟版本：
+//   - cache key 的会话哈希源读的是**规范化之后**的 body（规范化不动
+//     conversation_id / conversationId / prompt_cache_key，故取值与旧版一致）；
+//   - 客户端已带非空 prompt_cache_key → 绝不覆盖（优先级 1）；
+//   - body 不可解析 → 原样返回 src（与两个旧入口同守卫）。
+//
+// cacheUID 为空串仍会注入键（uid 段退化为 "-"，与 InjectPromptCacheKey 同语义）。
+func PrepareBodyOptWithEffortsAndDefaultAndCache(src []byte, sanitize bool, efforts map[string][]string, defaultEfforts map[string]string, cacheUID, cacheConversationID string) []byte {
 	if len(src) == 0 {
 		return src
 	}
@@ -35,6 +50,19 @@ func PrepareBodyOptWithEffortsAndDefault(src []byte, sanitize bool, efforts map[
 	if err := json.Unmarshal(src, &obj); err != nil {
 		return src
 	}
+	prepareBodyAST(obj, sanitize, efforts, defaultEfforts)
+	obj["prompt_cache_key"] = promptCacheKeyFrom(obj, cacheUID, cacheConversationID)
+	out, err := json.Marshal(obj)
+	if err != nil {
+		return src
+	}
+	return out
+}
+
+// prepareBodyAST 在**已解析**的 AST 上跑完整出站规范化管线（不含 marshal）。
+// 抽出它是为了让「只规范化」与「规范化 + 注入 cache key」两条路径共用同一份
+// 改写字面顺序——顺序一旦两处各写一份就会漂移（tool 配对三步的先后是硬约束）。
+func prepareBodyAST(obj map[string]any, sanitize bool, efforts map[string][]string, defaultEfforts map[string]string) {
 	obj["stream"] = true
 	// max_completion_tokens → max_tokens 翻译（吸收上游 PR #116，Closes #117）：
 	// OpenAI 规范里 max_tokens 已 deprecated、max_completion_tokens 是新字段；
@@ -84,6 +112,24 @@ func PrepareBodyOptWithEffortsAndDefault(src []byte, sanitize bool, efforts map[
 			sanitizeMessages(msgs)
 		}
 	}
+}
+
+// PrepareBodyOptWithEffortsAndDefault 完整管线：efforts 降级 + thinking.go 按
+// defaultEfforts（模型声明默认档）补档。defaultEfforts 为 nil 时与旧行为一致
+// （deepseek 缺档回退硬编码 high）。
+//
+// 本入口**不注入** prompt_cache_key（向后兼容：仅传 body 不给 cache 上下文时不
+// 引入新字段，见 TestPrepareBodyOptNoCacheKeyInjection）。需要注入的调用方走
+// PrepareBodyOptWithEffortsAndDefaultAndCache（单次往返）。
+func PrepareBodyOptWithEffortsAndDefault(src []byte, sanitize bool, efforts map[string][]string, defaultEfforts map[string]string) []byte {
+	if len(src) == 0 {
+		return src
+	}
+	var obj map[string]any
+	if err := json.Unmarshal(src, &obj); err != nil {
+		return src
+	}
+	prepareBodyAST(obj, sanitize, efforts, defaultEfforts)
 	out, err := json.Marshal(obj)
 	if err != nil {
 		return src

@@ -481,4 +481,72 @@ README 引用文件全部存在（LICENSE/go.mod/docs/COMPETITIVE-ANALYSIS.md/lo
 
 YG Gateway 的差异化定位（写进了 README）：**单二进制零依赖 + 养号友好 + 安全加固 + 可审计治理**。
 
+## 六之十一、热路径去重解析 + 流式可靠性 + /metrics（2026-10-14）
+
+**起因**：用户「继续优化网关流程，你自己上网去分析，我只要结果」。调研（new-api /
+one-api / Cloudflare AI Gateway / gpt-load）+ 本仓静态审阅后，把重心从「选号算法」
+（ADR-005 已做）移到**请求本身**。
+
+**改了什么（8 项，全部零回归或默认关）**：
+
+1. **入站 body 单次解析（F-701）**：新增 `internal/session/requestview.go`
+   `RequestView` 惰性视图——顶层一次解析（字段名 → RawMessage），messages/tools/
+   metadata 按需且只解析一次。热路径上 6+ 次全文档 `json.Unmarshal` 收敛为 1 次。
+   - 顶层用 RawMessage 而非 typed struct：typed struct 遇到 `{"user_id":123}` 这类
+     单字段类型不符会让**整份**解析失败（连 model 都拿不到），RawMessage 逐字段
+     容错，与旧实现 `strOrEmpty` 口径一致。
+   - `server` 侧 peek / 工具名单 / 会话键 / 轮级键 / conversationId / 带图判定
+     全改读视图；`newChatStat` 改收已解析 model（删掉一次全文档解析）。
+2. **出站 body 单次往返（F-702）**：抽出 `prepareBodyAST`，新增
+   `PrepareBodyOptWithEffortsAndDefaultAndCache`——规范化与 prompt_cache_key 注入
+   在同一 AST 上完成，只 marshal 一次（原为两趟背靠背 unmarshal+marshal，且
+   `ChatStreamContext` 轮转时重复跑）。
+3. **degrade 去锁（F-703）**：`until` 改 `atomic.Int64`（UnixNano），`Active()`
+   热路径无锁。
+4. **首帧前下发 headers（F-704）**：`StreamHint` 设完 SSE 头立即
+   `WriteHeader(200)` + Flush。此前响应头惰性——上游迟迟不吐首 token 时客户端
+   看不到任何东西。
+5. **单帧/聚合上限（F-705）**：`readSSELine`（ReadSlice 累积）单帧 1MiB、
+   `Aggregate` 整流体 16MiB，超限返回 `errFrameTooLarge`；handler 记 502 观测，
+   **不罚号不轮转**（换号撞同一份畸形响应）。
+6. **SSE 心跳 + 整请求 deadline（F-706/707）**：新配置
+   `upstream.sse_keepalive_seconds`（静默写 `: ping` 注释帧，**默认 0 = 关**）与
+   `upstream.stream_total_timeout_seconds`（**默认 0 = 不限**）——两者都会改变
+   线上流行为，故不给默认值，由部署方按中间层形态显式开启（均装配期字段）。
+   心跳开启时写路径加互斥，goroutine 由 stop 通道 + WaitGroup 保证返回前退出。
+7. **refresh 继承 ctx + singleflight（F-708/709）**：`RefreshTokenContext(ctx, a)`
+   （handler 传 `r.Context()`，客户端断开即取消，不再占满 30s）+ 按 uid
+   `refreshGroup` 合并并发刷新（N 个并发临期只打 1 次上游）。
+8. **`/metrics` Prometheus 导出（F-710）**：自实现 text exposition（零新依赖），
+   `GET /metrics` 与 `/status` 同鉴权+限流口径。暴露 requests_total{outcome} /
+   in_flight / success_rate / duration 直方图（全局 + model 标签）/ accounts{state} /
+   accounts_in_flight / global_in_flight / tokens_total{kind} / cache_hit_total。
+   标签值转义（伪造 model 名不能注入假指标行）。
+
+**测试（本轮核心是「等价性守门」）**：
+- `TestViewEquivalenceWithBytePaths`（22 body × derive 两态 × 3 键，与字节路径逐位对照）
+- `TestToolNameAllowlistViewEquivalence`（11 body，DeepEqual，含畸形条目容错口径）
+- `TestPrepareBodySingleRoundTripEquivalence`（12 用例 × sanitize 两态，单趟 vs 两趟逐字节）
+- 新增行为测试 26 项（SSE 首帧头/帧上限/聚合上限/心跳开关/refresh ctx/单飞/metrics
+  四态/escapeLabel/Prometheus 构造器/配置字段钳制/degrade 无锁）
+- **20 包全绿**（17 ok + 3 no test files）+ `go vet` 干净；
+  `gofmt -l` 仅 3 个历史文件漂移（config.go / httpauth/index.go / panel.go，pre-existing）。
+  注：本机无 gcc，`-race` 不可用。
+
+**验证（真机 7863）**：备份 `yg-gateway.exe.pre-hotpath.bak` → 替换重启（PID 15380）→
+healthz 3/4 健康 → `/metrics` 200 且 12 个指标族齐全（带真实流量计数：
+requests_total{succeeded}=3、tokens_total{kind=total}=15616、cache_hit=1280）→
+`/v1/models` 200（20 模型）→ 非流式 200 + 完整 usage（credit=0.04）→
+流式 SSE 全链路（role → reasoning_content 逐块 → content → finish_reason=stop →
+usage 末帧 → `[DONE]`，且**无 ping 注释帧**=默认关零回归）。
+
+**文档**：`docs/prd/REQ-yg-gateway-hotpath-optimization-2026-10-14.md`、
+`docs/adr/ADR-006-hotpath-streaming-observability.md`、
+`.harness/changes/hotpath-optimization-2026-10/summary.md`。
+
+**下一轮候选**：
+1. Prometheus 指标补 TTFB 分桶与上游错误分类计数（分类逻辑已齐，缺导出）
+2. 长流场景显式开启 `sse_keepalive_seconds` / `stream_total_timeout_seconds` 的实测调参
+3. pick 侧 scratch 切片的 sync.Pool 复用（本轮未做，收益待 bench 量化）
+
 ## 读完本文件后，直接回用户："上下文已接上。多 API Key 派发 + 面板 Key 管理页均已完成。可选下一步路线图见上文，等你拍板。"

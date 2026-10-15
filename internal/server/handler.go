@@ -197,6 +197,9 @@ func NewHandler(cfg Config) *Handler {
 	h.mux.HandleFunc("POST /v1/messages", h.withAuth(h.anthropicMessages))
 	h.mux.HandleFunc("GET /v1/models", h.withAuth(h.rateLimited(h.models)))
 	h.mux.HandleFunc("GET /status", h.withAuth(h.rateLimited(h.status)))
+	// /metrics：Prometheus 文本导出（F-710）。与 /status 同鉴权口径——指标含
+	// 账号池状态与 token 量，属敏感运维数据，不对未鉴权方开放。
+	h.mux.HandleFunc("GET /metrics", h.withAuth(h.rateLimited(h.metricsHandler)))
 	h.mux.HandleFunc("GET /healthz", h.healthz)
 	// 兜底：未匹配路径与方法错误统一回 OpenAI 错误信封。
 	//
@@ -226,6 +229,7 @@ func (h *Handler) notFound(w http.ResponseWriter, r *http.Request) {
 		"/v1/chat/completions": {"POST": true},
 		"/v1/models":           {"GET": true},
 		"/status":              {"GET": true},
+		"/metrics":             {"GET": true},
 		"/healthz":             {"GET": true},
 	}
 	if methods, ok := known[path]; ok {
@@ -831,21 +835,31 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		writeOpenAIError(w, http.StatusBadRequest, "invalid_request", "read body: "+err.Error())
 		return
 	}
-	// 一次解析同时拿到 stream 与 model 的**原始字节**：把 Model 声明为
-	// json.RawMessage，既能解出字符串、又能判定原始 JSON 类型（missing/null/
-	// string/other 四态），不需要像以前那样对整份 body 再解一遍。
-	// 这是热路径上省下的一次全文档解析（大上下文请求收益显著）。
-	var peek struct {
-		Stream bool            `json:"stream"`
-		Model  json.RawMessage `json:"model"`
+	// 入站请求体**只解析一次**（F-701）：顶层惰性视图 + 子树按需解析。
+	//
+	// 此前每个消费方各自全文档 json.Unmarshal（peek / 日志取 model / 工具名单 /
+	// 会话键 / 轮级键 / conversationId / 是否带图），大上下文请求下是纯 CPU+GC
+	// 支出。改成一次顶层解析后，messages / tools 子树只在真有消费方需要时才解析，
+	// 且同一请求内只解析一次（视图内缓存）。
+	//
+	// 解析失败（body 不是 JSON 对象）→ viewOK=false，各消费方回落既有空值语义，
+	// 与旧实现「各自解析失败」逐位一致（不引入新的失败模式）。
+	reqView, viewOK := session.ParseRequestView(body)
+	if !viewOK {
+		// 兜底：视图不可用时退化为零值视图（各取值方法返回空值，与旧语义一致）。
+		reqView = session.RequestView{}
 	}
-	_ = json.Unmarshal(body, &peek)
-	modelKind := modelKindOf(peek.Model) // "missing" / "null" / "string" / "other"
+	// peek 只取 model 的原始字节与 stream 布尔：Model 声明为 json.RawMessage
+	// 是为了判定原始 JSON 类型（missing/null/string/other 四态），不需要对整份
+	// body 再解一遍。
+	peekModel := reqView.Model()
+	peekStream := reqView.Stream()
+	modelKind := modelKindOf(peekModel) // "missing" / "null" / "string" / "other"
 	// 字符串形态才解出裸值；missing/null/other 一律空串（与旧 peek.Model 同语义：
 	// json.Unmarshal 到 string 时非字符串会被静默置零，result 同样是空串）。
 	modelStr := ""
 	if modelKind == "string" {
-		_ = json.Unmarshal(peek.Model, &modelStr)
+		_ = json.Unmarshal(peekModel, &modelStr)
 	}
 
 	// 工具名名单：上游在没有 tools 的请求里会把工具调用吐成原生标记文本
@@ -853,7 +867,8 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	// 与「会话历史里出现过的工具名」两个来源——实测 tools 声明会在中转环节丢失，
 	// 只认前者会让修复层在最需要它的场景下失效。
 	// 在提示词/模型名改写之前取（那些改写不动 tools / messages[].tool_calls 子树）。
-	declaredTools := upstream.ToolNameAllowlist(body)
+	// 走视图路径：与会话键/轮级键共用同一份 messages 子树，不重复解析。
+	declaredTools := upstream.ToolNameAllowlistView(&reqView)
 
 	// realm 前缀解析（D6）：model 名可能带 "[realm:]" 前缀。剥出 realm + bareModel，
 	// bareModel 用于选号/粘性/出站 body 重写（前缀是网关侧路由协议，上游只认裸名）。
@@ -880,7 +895,9 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 请求级统计：出口即打一行表格日志（任何路径都会走到）。
-	st := newChatStat(time.Now(), body, peek.Stream)
+	// model 直接复用已解析的 modelStr（省掉一次全文档解析）；不可解析时
+	// modelStr 为空 → 沿用 parseModelFromBody 的 "-" 兜底口径。
+	st := newChatStat(time.Now(), modelStr, peekStream)
 	if tr := requestTraceFrom(r); tr != nil {
 		tr.stat = st
 		// 来源在 ServeHTTP 入口采集（此时才知道开关与请求头），此处转交给统计对象，
@@ -905,7 +922,7 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	// （见 session.ExtractKeyOpt）。反向命名是为了零值安全——本包的单测大量用
 	// Config{...} 部分字面量构造，正向命名（SessionDerive bool）会因零值 false
 	// 静默关掉派生、改变既有语义。
-	sessKey := session.ExtractKeyOpt(body, !h.cfg.DisableSessionDerive)
+	sessKey := session.ExtractKeyOptView(&reqView, !h.cfg.DisableSessionDerive)
 	stickyUID := ""
 	if h.cfg.Session != nil && sessKey != "" {
 		// 按模型解析：绑定号在**当前模型**被 6004 限额时视为不可用 → 重新分配，
@@ -921,7 +938,7 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	// 清空重生成），故不再限 sessKey=="" 才计算；sessKey 由下方派生处以复合键方式
 	// 入键（防不同会话同轮文本互撞）。
 	// 必须在下方 prompt.Rewrite 之前取——改写会动 messages 内容，之后取会让键漂移。
-	turnKey := session.TurnKey(body)
+	turnKey := session.TurnKeyView(&reqView)
 
 	// gateway_hint 判定所需的请求形态（image_url part）：**惰性求值**。
 	//
@@ -937,7 +954,13 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	}
 	reqHasImage := func() bool {
 		if !imageProbe.done {
-			imageProbe.val = hasImagePart(reqBodyForHint)
+			// 视图可用时走视图（与请求其余消费方共用同一份 messages 子树，
+			// 不重复解析）；视图不可用时才回落字节路径（与旧行为一致）。
+			if viewOK {
+				imageProbe.val = hasImageView(&reqView)
+			} else {
+				imageProbe.val = hasImagePart(reqBodyForHint)
+			}
 			imageProbe.done = true
 		}
 		return imageProbe.val
@@ -1086,7 +1109,7 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	//     粘性 key 进程内稳定生成；粘性 key 也空时走轮级兜底（TurnKey/TurnRequestID），
 	//     无 user 消息时退化成本请求级随机——轮转内捕获一次即共享；
 	//   - messageID 在 ChatHeaders 内每条消息生成（消息级独立，无需外部可见）。
-	chatMeta := upstream.ChatMeta{ConversationID: session.ResolveConversationID(body)}
+	chatMeta := upstream.ChatMeta{ConversationID: session.ResolveConversationIDView(&reqView)}
 	if v := r.Header.Get("X-Conversation-Request-ID"); v != "" {
 		chatMeta.ConversationRequestID = v
 	} else if turnKey != "" && sessKey != "" {
@@ -1161,8 +1184,9 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		heldUID = acct.UID
 
 		// token 临近过期 → 先 refresh（失败冷却换号）
+		// 继承请求 ctx（F-708）：客户端断开/停机时刷新随之取消，不再占满 30s。
 		if acct.NeedsRefresh(h.cfg.RefreshSkew) {
-			if err := h.cfg.Upstream.RefreshToken(acct); err != nil {
+			if err := h.cfg.Upstream.RefreshTokenContext(r.Context(), acct); err != nil {
 				lastErr = err
 				var ue *upstream.Error
 				if errors.As(err, &ue) && ue.Kind == upstream.ErrSessionDead {
@@ -1337,7 +1361,7 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		// 上游「200 已开流 + 一帧 error」是真实形态（6004 限流、内容拦截、审核），
 		// 此前在读第一帧之前就 NoteSuccess + 清 11102 负缓存 + 绑粘性 → 被限流的号
 		// 记成健康、粘性把会话钉死在它身上，后续每一轮都打同一个限流号。
-		if peek.Stream {
+		if peekStream {
 			// 流式：透传结束后立即关闭上游 body，避免 defer 在轮转场景下堆积 fd。
 			st.status = http.StatusOK
 			stats := newChatStatsReaderSince(rc, st.start)
@@ -1351,10 +1375,19 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 			// 第二个参数为 true = 名单为空时启用弱判定——tools 声明在链路上丢失是
 			// 实测最常见的泄漏成因，只做严格判定等于对主场景不设防。
 			repair := upstream.NewMarkupRepair(declaredTools, true)
+			// SSE 心跳（F-706）：配置开启时才传 WithKeepAlive，让长静默流持续给客户端
+			// 写 `: ping` 注释帧（防中间层按空闲掐连）。关闭时（默认）不传该选项——
+			// 出站字节流与旧版逐位一致，心跳 goroutine 也不会起。
+			streamOpts := []upstream.StreamOption{
+				upstream.WithErrorFrameObserver(func(payload string) { errFrame = payload }),
+				upstream.WithMarkupRepair(repair),
+			}
+			if ka := upstream.SSEKeepAlive(); ka > 0 {
+				streamOpts = append(streamOpts, upstream.WithKeepAlive(ka))
+			}
 			sErr := upstream.StreamHint(w, stats, upstream.FrameHintFunc(func() upstream.HintContext {
 				return h.hintContext(bareModel, reqHasImage())
-			}), upstream.WithErrorFrameObserver(func(payload string) { errFrame = payload }),
-				upstream.WithMarkupRepair(repair))
+			}), streamOpts...)
 			switch {
 			case upstream.IsEmptyStreamError(sErr):
 				// 上游 200 但空流（0 有效帧）：StreamHint 已写 error 帧 + [DONE]
@@ -1366,6 +1399,15 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 				st.status = http.StatusBadGateway
 				st.outcome = reqlog.OutcomeStreamError
 				log.Printf("WARN: [server] stream acct=%s model=%s: empty upstream stream (200+0 frames)", logfmt.Label(acct.UID, acct.Nickname), bareModel)
+			case upstream.IsFrameTooLarge(sErr):
+				// 上游吐了超过 maxSSEFrameBytes 的单帧（不换行的畸形流，F-705）：
+				// 这是**上游缺陷**，不是客户端断连（人已走那种）也不是账号限流。
+				// HTTP 头已在首帧前提交（200 发不出去别的码），只能以 502 口径记观测；
+				// 不罚号不轮转（换任何账号都撞同一份畸形响应）。
+				st.status = http.StatusBadGateway
+				st.outcome = reqlog.OutcomeStreamError
+				log.Printf("WARN: [server] stream acct=%s model=%s: upstream frame too large (>%d bytes)",
+					logfmt.Label(acct.UID, acct.Nickname), bareModel, 1<<20)
 			case errFrame != "":
 				// 上游以 error 帧报错（6004 限流 / 内容拦截 / 审核）：按帧内容分类并
 				// 处置账号——**不记成功、不清 11102 负缓存、不绑粘性**。此前这些动作
@@ -1964,6 +2006,30 @@ func hasImagePart(body []byte) bool {
 		return false
 	}
 	for _, m := range peek.Messages {
+		for _, p := range m.Content {
+			if p.Type == "image_url" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// hasImageView 同 hasImagePart，但从**已解析**的请求视图取 messages。
+// 只遍历 content 为数组形态的消息（字符串形态不可能含 image_url part）。
+func hasImageView(v *session.RequestView) bool {
+	if v == nil {
+		return false
+	}
+	for _, raw := range v.Messages() {
+		var m struct {
+			Content []struct {
+				Type string `json:"type"`
+			} `json:"content"`
+		}
+		if err := json.Unmarshal(raw, &m); err != nil {
+			continue
+		}
 		for _, p := range m.Content {
 			if p.Type == "image_url" {
 				return true

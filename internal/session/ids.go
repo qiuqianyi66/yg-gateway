@@ -23,25 +23,29 @@ import (
 // 语义是"对话 ID"，user_id 回落会污染后台按对话聚合的判据。
 // 缺失返回 ""（不伪造：透传客户端原值优先，客户端没给就不发）。
 func ResolveConversationID(body []byte) string {
-	if len(body) == 0 {
+	v, ok := ParseRequestView(body)
+	if !ok {
 		return ""
 	}
-	var obj map[string]any
-	if err := json.Unmarshal(body, &obj); err != nil {
+	return ResolveConversationIDView(&v)
+}
+
+// ResolveConversationIDView 同 ResolveConversationID，但从**已解析**的请求视图取值。
+// 优先级与语义逐位一致（metadata 优先、snake 优先于 camel，只认 conversationId）。
+func ResolveConversationIDView(v *RequestView) string {
+	if v == nil {
 		return ""
 	}
-	if meta, ok := obj["metadata"].(map[string]any); ok {
-		if v := strOrEmpty(meta["conversation_id"]); v != "" {
-			return v
-		}
-		if v := strOrEmpty(meta["conversationId"]); v != "" {
-			return v
-		}
+	if s := v.MetaStr("conversation_id"); s != "" {
+		return s
 	}
-	if v := strOrEmpty(obj["conversation_id"]); v != "" {
-		return v
+	if s := v.MetaStr("conversationId"); s != "" {
+		return s
 	}
-	return strOrEmpty(obj["conversationId"])
+	if s := v.Str("conversation_id"); s != "" {
+		return s
+	}
+	return v.Str("conversationId")
 }
 
 // NewMessageID 生成消息级 ID：32 位 hex（UUID v4 去横线的长度形态），对齐官方
@@ -96,23 +100,33 @@ func RequestIDForKey(key string) string {
 // 无 body / 无 messages / 无 user 消息 / 该消息无文本 → ""（调用方回落请求级随机
 // ID，不伪造聚合键）。
 func TurnKey(body []byte) string {
-	if len(body) == 0 {
+	v, ok := ParseRequestView(body)
+	if !ok {
 		return ""
 	}
-	var obj struct {
-		Messages []struct {
+	return TurnKeyView(&v)
+}
+
+// TurnKeyView 同 TurnKey，但从**已解析**的请求视图取 messages（惰性解析一次，
+// 与会话键共用同一份 messages 切片，不重复解析）。语义逐位一致：取**最后一条**
+// role=="user" 消息的「序号 + 内容签名」，无则可签名内容为空时返回 ""（不往前找）。
+func TurnKeyView(v *RequestView) string {
+	if v == nil {
+		return ""
+	}
+	msgs := v.Messages()
+	for i := len(msgs) - 1; i >= 0; i-- {
+		var msg struct {
 			Role    string          `json:"role"`
 			Content json.RawMessage `json:"content"`
-		} `json:"messages"`
-	}
-	if err := json.Unmarshal(body, &obj); err != nil {
-		return ""
-	}
-	for i := len(obj.Messages) - 1; i >= 0; i-- {
-		if obj.Messages[i].Role != "user" {
+		}
+		if err := json.Unmarshal(msgs[i], &msg); err != nil {
 			continue
 		}
-		sig := contentSignature(obj.Messages[i].Content)
+		if msg.Role != "user" {
+			continue
+		}
+		sig := contentSignature(msg.Content)
 		if sig == "" {
 			// 最后一条 user 消息没有可签名内容（空/null/空 parts）→ 本轮不建立聚合键。
 			// 不继续往前找：整轮内该消息位置恒定，往前找反而会让键随 step 漂移。

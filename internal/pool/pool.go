@@ -206,6 +206,21 @@ func (p *Pool) GlobalInFlight() int64 {
 	return p.globalInFlight.Load()
 }
 
+// InFlightTotal 返回全部账号的在途请求总数（/metrics 的账号维度 gauge）。
+//
+// 与 GlobalInFlight 的区别：GlobalInFlight 是**网关级**在途（含尚未选到号的
+// 请求），本方法是**账号级**在途之和（选到号并 Acquire 成功的那些）。两者都
+// 有观测价值：前者回答「网关整体负载」，后者回答「账号池被压到什么程度」。
+func (p *Pool) InFlightTotal() int64 {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	var total int64
+	for _, e := range p.byUID {
+		total += e.inFlight.Load()
+	}
+	return total
+}
+
 // AcquireGlobal 全局准入判定（ADR-003 D-401）：未配置上限恒放行；否则在
 // 「当前在途 < 上限」时占用一个名额并返回 true。占用成功后**必须**配对调用
 // ReleaseGlobal（handler 用 defer 保证）。

@@ -617,6 +617,18 @@ type Client struct {
 	// IdleTimeout 聊天 SSE 流中空闲超时；<=0 表示禁用空闲监控。
 	IdleTimeout time.Duration
 
+	// StreamTotalTimeout 聊天 SSE **整请求**总时长上限（F-707）；<=0 表示不限
+	// （保持旧行为）。
+	//
+	// 为什么需要这一层：HeaderTimeout 只管「首字节前」、IdleTimeout 只管「流中静默」，
+	// 两者都不覆盖「上游持续滴字节但永不结束」这种形态——滴字节式上游会不断刷新
+	// IdleTimeout，于是请求 / 账号租约 / 全局在途名额被无限期占住。本字段补上
+	// 「整请求」这一层，与首字节上限、流中空闲上限构成三件套。
+	//
+	// 语义要点：上限只约束**上游流**，不约束客户端读走的速度——客户端慢读由
+	// 写失败/断连感知（上游 body 随之关闭），不占这个预算。
+	StreamTotalTimeout time.Duration
+
 	// effortsMu/efforts 缓存各模型 supportedEfforts（FetchModels 刷新），供请求体 effort 降级。
 	// 按 realm 分层桶（cn/global）：同模型名跨域探测的 effort 集合可能不同，
 	// 混桶会互相污染（C-2）。
@@ -637,6 +649,10 @@ type Client struct {
 	// SanitizeFingerprints 出站请求体黑名单指纹脱敏开关（默认 true；false 完全还原）。
 	// 面板保存配置热改 + chat 热路径并发读写，用 atomic.Bool 消除数据竞争。
 	SanitizeFingerprints atomic.Bool
+
+	// refreshGroup 按 uid 合并并发 token 刷新（F-709 singleflight）。
+	// nil = 不合并（测试注入自定义 Client 时可少一层）；生产由 New() 装配。
+	refreshGroup *refreshGroup
 
 	// UserAgent 出站 User-Agent 显式覆盖（非空时全路径生效，优先于默认三段式）。
 	// 空 = 默认官方形态：chat/refresh/FetchModels 走
@@ -699,6 +715,7 @@ func New() *Client {
 		GlobalEnabled: true,
 	}
 	c.SanitizeFingerprints.Store(true)
+	c.refreshGroup = &refreshGroup{}
 	return c
 }
 
@@ -792,11 +809,12 @@ func (c *Client) prepareBody(body []byte, realm, uid, conversationID string) []b
 		//（issue #84：往 WorkBuddy 上游发 low/max 非法，须降级到 high）。
 		efforts, defs = globalEffortMap(efforts, defs)
 	}
-	body = PrepareBodyOptWithEffortsAndDefault(body, c.SanitizeFingerprints.Load(), efforts, defs)
-	// prompt_cache_key 注入（P0 费用优化，费用降 ~17×）：按账号隔离的稳定缓存键，
-	// 让同一客户端对同一账号的连续请求命中上游前缀缓存。
-	body = InjectPromptCacheKey(body, uid, conversationID)
-	return body
+	// 单次往返（F-702）：规范化与 cache key 注入在同一个 AST 上完成，只 marshal 一次。
+	// 此前是 PrepareBodyOptWithEffortsAndDefault + InjectPromptCacheKey 两趟背靠背的
+	// unmarshal/marshal，且每次 ChatStreamContext（含轮转重试）都跑一遍。
+	// 语义等价性：规范化管线不动 conversation_id/conversationId/prompt_cache_key，
+	// 故 cache key 的取值与「先规范化再单独注入」逐位一致。
+	return PrepareBodyOptWithEffortsAndDefaultAndCache(body, c.SanitizeFingerprints.Load(), efforts, defs, uid, conversationID)
 }
 
 // effortsSnapshot 返回 effort 能力缓存副本；nil 表示未知（透传不降级）。
@@ -907,7 +925,76 @@ const refreshTokenExpiresInMax = 10 * 365 * 24 * time.Hour
 //     独占 a.mu，阻塞同账号的 SaveAtomic / 其他刷新（issue:持锁 120s I/O）。
 //   - 写回前重新校验快照一致性：若锁外期间另一 goroutine 已完成刷新（refreshToken
 //     已变），本次结果直接采用（新 token 已生效），不再重复写回。
+//
+// 同账号并发刷新按 uid 合并（singleflight，F-709）：N 个并发请求同时发现 token
+// 临期时，只有第一个真的打刷新端点，其余等待同一结果——省掉 N-1 次上游调用，
+// 也少 N-1 次 token 轮换。等待方超时/取消时返回 ctx 错误（调用方按刷新失败处理，
+// 账号侧已有冷却/连败承接，不会把池子打坏）。
 func (c *Client) RefreshToken(a *auth.Auth) error {
+	return c.RefreshTokenContext(context.Background(), a)
+}
+
+// RefreshTokenContext 同 RefreshToken，但网络 I/O 继承调用方 ctx（F-708）。
+//
+// 为什么需要：此前刷新用 context.Background()——客户端断开/请求取消/优雅停机都
+// 打断不了它，最坏情况下刷新还要占满 30s 才返回，期间账号在途名额与全局名额
+// 一直被占。传入 r.Context() 后，客户端一走刷新立即取消。
+func (c *Client) RefreshTokenContext(ctx context.Context, a *auth.Auth) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if c.refreshGroup != nil {
+		return c.refreshGroup.do(ctx, a.UID, func() error { return c.refreshTokenLocked(ctx, a) })
+	}
+	return c.refreshTokenLocked(ctx, a)
+}
+
+// refreshGroup 按 uid 的 singleflight：同 uid 的并发刷新只发一次上游请求。
+//
+// 为什么不用 map + mutex 手工管：需要在「取消/超时」与「等别人结果」之间做选择，
+// 还要保证 leader 一定 close done（否则等待方永久挂住）。用 channel + 惰性清理
+// （leader 结束时 delete）足够，无需引入依赖。
+type refreshGroup struct {
+	mu sync.Mutex
+	m  map[string]*refreshCall
+}
+
+type refreshCall struct {
+	done chan struct{} // leader 完成时 close
+	err  error         // 仅 leader 写，close 后等待方读
+}
+
+// do 执行 fn；同 key 已有在执行中的调用时等待其结果。
+// ctx 取消/超时时返回 ctx.Err()（不等 leader 的结果——那可能还要 30s）。
+func (g *refreshGroup) do(ctx context.Context, key string, fn func() error) error {
+	g.mu.Lock()
+	if g.m == nil {
+		g.m = map[string]*refreshCall{}
+	}
+	if call, ok := g.m[key]; ok {
+		g.mu.Unlock()
+		select {
+		case <-call.done:
+			return call.err
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	call := &refreshCall{done: make(chan struct{})}
+	g.m[key] = call
+	g.mu.Unlock()
+
+	call.err = fn()
+	g.mu.Lock()
+	delete(g.m, key)
+	g.mu.Unlock()
+	close(call.done)
+	return call.err
+}
+
+// refreshTokenLocked 真正打刷新端点（两段式锁外 I/O，见 RefreshToken 注释）。
+// ctx 由调用方提供：RefreshTokenContext 传 Background，handler 传 r.Context()。
+func (c *Client) refreshTokenLocked(ctx context.Context, a *auth.Auth) error {
 	// 第 1 段（锁内）：读快照。
 	a.Lock()
 	rtSnapshot := a.RefreshToken
@@ -918,7 +1005,10 @@ func (c *Client) RefreshToken(a *auth.Auth) error {
 	}
 
 	endpoint := c.chatBase(a) + "/v2/plugin/auth/token/refresh"
-	ctx, cancel := context.WithTimeout(context.Background(), refreshIOTimeout)
+	// 在调用方 ctx 之上再叠加网络 I/O 上限：调用方 ctx 可能没有 deadline
+	// （如 Background），那样单次刷新可无限等；也可能已有更早的 deadline
+	// （如请求 ctx），此时取更早者——context.WithTimeout 的语义正是如此。
+	ctx, cancel := context.WithTimeout(ctx, refreshIOTimeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, nil)
 	if err != nil {
@@ -1018,6 +1108,17 @@ func (c *Client) ChatStream(a *auth.Auth, body []byte, clientIP string, meta Cha
 func (c *Client) ChatStreamContext(ctx context.Context, a *auth.Auth, body []byte, clientIP string, meta ChatMeta) (rc io.ReadCloser, status int, respBody []byte, err error) {
 	if ctx == nil {
 		ctx = context.Background()
+	}
+	// 整请求总时长上限（F-707）：在调用方 ctx 之上再派生一层 deadline。
+	//
+	// 只在配置了上限时才派生（<=0 = 不限，零回归：派生本身也有一次 ctx 分配
+	// 成本，长流场景不值得为默认关闭的功能付）。上限到期后 reqCtx 取消 → 在读
+	// 阻塞中的 Read 返回 context.DeadlineExceeded → 流被掐断、连接与账号租约
+	// 释放，不再无限占住全局在途名额。
+	var totalCancel context.CancelFunc
+	if c.StreamTotalTimeout > 0 {
+		ctx, totalCancel = context.WithTimeout(ctx, c.StreamTotalTimeout)
+		defer totalCancel()
 	}
 	prepared := c.prepareBody(body, a.Realm(), a.UID, meta.ConversationID)
 	if c.globalOn(a) {

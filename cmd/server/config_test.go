@@ -332,6 +332,42 @@ func TestUpstreamTimeoutDefaults(t *testing.T) {
 	if c.Upstream.IdleTimeoutSeconds != 300 {
 		t.Errorf("idle_timeout_seconds=%d want fallback 300", c.Upstream.IdleTimeoutSeconds)
 	}
+	// F-707/F-706：整请求总时长与 SSE 心跳默认关闭（<=0），不设默认值——
+	// 两者都会改变线上流行为，须由部署方显式开启（零回归）。
+	if c.Upstream.StreamTotalTimeoutSeconds != 0 {
+		t.Errorf("stream_total_timeout_seconds=%d want 0 (off by default)", c.Upstream.StreamTotalTimeoutSeconds)
+	}
+	if c.Upstream.SSEKeepAliveSeconds != 0 {
+		t.Errorf("sse_keepalive_seconds=%d want 0 (off by default)", c.Upstream.SSEKeepAliveSeconds)
+	}
+}
+
+// TestUpstreamStreamTotalAndKeepAlive 显式配置与负值钳制（F-707/F-706）。
+func TestUpstreamStreamTotalAndKeepAlive(t *testing.T) {
+	dir := t.TempDir()
+	fp := filepath.Join(dir, "c.json")
+	os.WriteFile(fp, []byte(`{"upstream":{"stream_total_timeout_seconds":1800,"sse_keepalive_seconds":15}}`), 0o600)
+	c, err := Load(fp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Upstream.StreamTotalTimeoutSeconds != 1800 {
+		t.Errorf("stream_total_timeout_seconds=%d want 1800", c.Upstream.StreamTotalTimeoutSeconds)
+	}
+	if c.Upstream.SSEKeepAliveSeconds != 15 {
+		t.Errorf("sse_keepalive_seconds=%d want 15", c.Upstream.SSEKeepAliveSeconds)
+	}
+	// 负值一律钳 0（视为关闭，不产生「负数秒」这种诡异配置）。
+	fp2 := filepath.Join(dir, "c2.json")
+	os.WriteFile(fp2, []byte(`{"upstream":{"stream_total_timeout_seconds":-5,"sse_keepalive_seconds":-1}}`), 0o600)
+	c2, err := Load(fp2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c2.Upstream.StreamTotalTimeoutSeconds != 0 || c2.Upstream.SSEKeepAliveSeconds != 0 {
+		t.Errorf("negative values must clamp to 0: total=%d keepalive=%d",
+			c2.Upstream.StreamTotalTimeoutSeconds, c2.Upstream.SSEKeepAliveSeconds)
+	}
 }
 
 func TestUpstreamHeaderFallsBackToTimeout(t *testing.T) {

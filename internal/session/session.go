@@ -374,45 +374,55 @@ func ExtractKey(body []byte) string {
 // 代价：无会话标识的多轮对话失去上游 prompt 缓存复用（该客户端本就在
 // "被误判为同一会话"和"没有缓存复用"之间，后者更安全）。
 func ExtractKeyOpt(body []byte, allowDerive bool) string {
-	if len(body) == 0 {
+	v, ok := ParseRequestView(body)
+	if !ok {
 		return ""
 	}
-	var obj map[string]any
-	if err := json.Unmarshal(body, &obj); err != nil {
+	return ExtractKeyOptView(&v, allowDerive)
+}
+
+// ExtractKeyOptView 同 ExtractKeyOpt，但从**已解析**的请求视图取值（热路径去重：
+// 顶层不再重复 Unmarshal，messages 子树只在真要派生时才解析）。
+//
+// 优先级与语义与 ExtractKeyOpt 逐位一致（同一份判据、同一份注释），只是入参从
+// 字节换成视图。视图解析失败（body 非 JSON 对象）等价于旧实现的解析失败 → 均返回 ""。
+func ExtractKeyOptView(v *RequestView, allowDerive bool) string {
+	if v == nil {
 		return ""
 	}
-	if meta, ok := obj["metadata"].(map[string]any); ok {
-		if v := strOrEmpty(meta["conversation_id"]); v != "" {
-			return v
-		}
-		if v := strOrEmpty(meta["conversationId"]); v != "" {
-			return v
-		}
+	if s := v.MetaStr("conversation_id"); s != "" {
+		return s
 	}
-	if v := strOrEmpty(obj["conversation_id"]); v != "" {
-		return v
+	if s := v.MetaStr("conversationId"); s != "" {
+		return s
 	}
-	if v := strOrEmpty(obj["conversationId"]); v != "" {
-		return v
+	if s := v.Str("conversation_id"); s != "" {
+		return s
+	}
+	if s := v.Str("conversationId"); s != "" {
+		return s
 	}
 	// 5. prompt_cache_key：OpenAI 系的会话级前缀缓存键，语义就是"同一会话复用同一
 	//    前缀"，与粘性诉求同源。放显式会话键之后、派生键之前，不抢占优先级。
-	if v := strOrEmpty(obj["prompt_cache_key"]); v != "" {
-		return v
+	if s := v.Str("prompt_cache_key"); s != "" {
+		return s
 	}
 	// 派生回退闸：带 user 维度标识的请求不派生（契约见上）。
-	if hasUserIDKey(obj) {
+	if v.MetaStr("user_id") != "" || v.Str("user_id") != "" {
 		return ""
 	}
 	// 内容派生总开关（见 ExtractKeyOpt 注释）：关掉后无显式会话标识即不粘性。
 	if !allowDerive {
 		return ""
 	}
-	return deriveKey(obj)
+	return deriveKeyView(v)
 }
 
 // hasUserIDKey 报告已解析 body 是否携带 user 维度标识（metadata.user_id 或顶层
 // user_id，非空字符串才算）。只用于派生回退闸（ExtractKey）；解析失败按无处理。
+//
+// 保留供旧调用方使用；视图路径已内联到 ExtractKeyOptView（避免为一次判据再建
+// 一次 map）。两处判据同口径：metadata 优先、非空字符串才算。
 func hasUserIDKey(obj map[string]any) bool {
 	if meta, ok := obj["metadata"].(map[string]any); ok {
 		if strOrEmpty(meta["user_id"]) != "" {
@@ -468,6 +478,121 @@ func deriveKey(obj map[string]any) string {
 	}
 	sum := sha256.Sum256([]byte(systemText + "\x00" + firstUserText))
 	return derivedKeyPrefix + hex.EncodeToString(sum[:16])
+}
+
+// deriveKeyView 同 deriveKey，但从**已解析**的请求视图遍历 messages（热路径去重）。
+//
+// 与 deriveKey 的等价性靠两条保证：
+//  1. 遍历顺序与提前退出条件逐位一致（system/developer 取首条、user 取首条、
+//     两者都拿到即停止遍历长历史）；
+//  2. 文本提取口径一致——视图里每个 message 的 content 仍是原始字节，交给
+//     userContentSignatureRaw（与 userContentSignature 同一份签名判据，只是入参
+//     从 `any` 换成 RawMessage，省掉一次 Marshal 往返）。
+//
+// 因此派生出的键与旧实现**逐位相同**（存量会话绑定不会因为这次重构漂移）。
+func deriveKeyView(v *RequestView) string {
+	msgs := v.Messages()
+	if len(msgs) == 0 {
+		return ""
+	}
+	systemText, firstUserText := "", ""
+	for _, m := range msgs {
+		var msg map[string]json.RawMessage
+		if err := json.Unmarshal(m, &msg); err != nil {
+			continue
+		}
+		text := messageTextRaw(msg["content"])
+		switch rawString(msg["role"]) {
+		case "system", "developer":
+			if systemText == "" {
+				systemText = text
+			}
+		case "user":
+			if firstUserText == "" {
+				firstUserText = userContentSignatureRaw(msg["content"])
+			}
+		}
+		if firstUserText != "" && systemText != "" {
+			break // 都已拿到：停止遍历长历史
+		}
+	}
+	if firstUserText == "" {
+		return "" // 无用户消息：无从归属会话
+	}
+	sum := sha256.Sum256([]byte(systemText + "\x00" + firstUserText))
+	return derivedKeyPrefix + hex.EncodeToString(sum[:16])
+}
+
+// messageTextRaw 取 content 原始字节的文本表示（字符串 / 数组 parts 的 text 字段），
+// 与 messageText(any) 同口径。
+func messageTextRaw(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	trimmed := strings.TrimSpace(string(raw))
+	if trimmed == "" || trimmed == "null" {
+		return ""
+	}
+	switch trimmed[0] {
+	case '"':
+		return rawString(raw)
+	case '[':
+		parts := rawArray(raw)
+		var sb strings.Builder
+		for _, pr := range parts {
+			var p struct {
+				Text string `json:"text"`
+			}
+			if err := json.Unmarshal(pr, &p); err != nil {
+				return ""
+			}
+			sb.WriteString(p.Text)
+		}
+		return sb.String()
+	}
+	return ""
+}
+
+// userContentSignatureRaw 同 userContentSignature，但入参是 content 的**原始字节**
+// （视图路径专用，省掉「any → Marshal → RawMessage」的往返）。签名判据与输出格式
+// 与 userContentSignature 逐位一致，保证派生键零漂移。
+func userContentSignatureRaw(raw json.RawMessage) string {
+	st := strings.TrimSpace(string(raw))
+	if st == "" || st == "null" {
+		return ""
+	}
+	if st[0] == '"' {
+		return rawString(raw)
+	}
+	if st[0] != '[' {
+		return ""
+	}
+	parts := rawArray(raw)
+	if parts == nil {
+		return ""
+	}
+	var b strings.Builder
+	hasNonText := false
+	for _, pr := range parts {
+		var p struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		}
+		if json.Unmarshal(pr, &p) != nil {
+			return ""
+		}
+		if p.Type == "" || p.Type == "text" {
+			b.WriteString(p.Text)
+			continue
+		}
+		hasNonText = true
+		b.WriteString("\n[" + p.Type + "]\n")
+	}
+	out := b.String()
+	if !hasNonText {
+		return out
+	}
+	return strings.TrimSpace(out)
 }
 
 // userContentSignature 把已解析的 content（any）转回 RawMessage 后取**会话级稳定**
