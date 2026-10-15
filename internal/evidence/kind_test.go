@@ -54,7 +54,8 @@ func TestFactMarshalJSON(t *testing.T) {
 	}
 }
 
-// TestFactUnknownOmitsSamples unknown 态不该带样本数（0 就是 0，不是"样本为 0"）。
+// TestFactUnknownOmitsSamples unknown 且**无样本**时不该带 samples 字段
+// （0 表示"没有样本"，不是"样本为零"）。
 func TestFactUnknownOmitsSamples(t *testing.T) {
 	raw, _ := json.Marshal(Unknown("no call yet"))
 	if string(raw) == "" {
@@ -63,7 +64,26 @@ func TestFactUnknownOmitsSamples(t *testing.T) {
 	var got map[string]any
 	_ = json.Unmarshal(raw, &got)
 	if _, has := got["samples"]; has {
-		t.Errorf("unknown fact must omit samples, got %s", raw)
+		t.Errorf("unknown fact without samples must omit the field, got %s", raw)
+	}
+}
+
+// TestFactUnknownKeepsPartialSamples unknown 但**已有部分样本**时必须带上样本数
+// ——那是"离消解还差多远"的唯一结构化表达（如 EWMA 冷启动 2/5）。
+//
+// 牙齿：把 MarshalJSON 里的 samples 条件改回「仅 derivation/inference 输出」
+// → 本测试 FAIL。
+func TestFactUnknownKeepsPartialSamples(t *testing.T) {
+	f := Unknown("成功率样本不足（2/5），需继续观测")
+	f.Samples = 2
+	raw, _ := json.Marshal(f)
+	var got map[string]any
+	_ = json.Unmarshal(raw, &got)
+	if got["kind"] != "unknown" {
+		t.Fatalf("kind=%v want unknown", got["kind"])
+	}
+	if got["samples"] != float64(2) {
+		t.Errorf("partial samples lost: %s（消费者会误以为完全没有数据）", raw)
 	}
 }
 
