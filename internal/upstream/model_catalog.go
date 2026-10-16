@@ -157,6 +157,8 @@ func (c *modelCatalog) saveLocked() {
 		return
 	}
 	if dir := filepath.Dir(c.path); dir != "" {
+		// 忽略：MkdirAll 失败必然导致下一步 WriteFile(tmp) 失败并打 WARN（判据③）；
+		// 不影响内存目录缓存（model.json 只是跨重启的加速层）。
 		_ = os.MkdirAll(dir, 0o755)
 	}
 	tmp := c.path + ".tmp"

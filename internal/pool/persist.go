@@ -259,6 +259,8 @@ func (p *Pool) saveLocked() {
 		return
 	}
 	if dir := filepath.Dir(p.stateFp); dir != "" {
+		// 忽略：MkdirAll 失败必然导致下一步 WriteFile(tmp) 失败并走 notePersistFail 上报，
+		// 失败不会消失（判据③）；不影响状态快照的真值——原子性由下面的 tmp+rename 保证。
 		_ = os.MkdirAll(dir, 0o755)
 	}
 	tmp := p.stateFp + ".tmp"

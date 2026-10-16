@@ -115,7 +115,11 @@ func main() {
 	// 再 store.Close() 排空在途异步写（最后一笔 Redis 镜像必须写完才关连接）。
 	defer func() {
 		p.Close()
-		_ = store.Close()
+		// 关闭失败只记 WARN：进程已在退出，无法补救；但不该完全不可见——
+		// 超时放弃排空意味着最后一笔 Redis 状态镜像可能没写完（判据②+ 可观测性）。
+		if err := store.Close(); err != nil {
+			log.Printf("WARN: [main] store.Close 失败（Redis 镜像可能未排空）: %v", err)
+		}
 	}()
 	p.SetStore(store)
 	p.RestoreFromSnapshot() // 择新恢复：Redis 快照比本地新才采用，否则本地优先
