@@ -1,0 +1,160 @@
+# R8 协议数据 golden —— 上游报文里**不得改名 / 不得改序**的内容。
+# 生成与比对：internal/upstream/r8_golden_test.go（默认只读比对，任何字节差异即 FAIL）。
+# 归一化：<ver> 版本 · <32hex>/<36hex> 派生 ID · <uuid> · <digits> 时间戳 · <token> 凭证。
+# 即：改版本常量不红；改段数/段序/分隔符/字面量/候选顺序/头族会红。
+
+[ua]
+# 三段式 WorkBuddy UA：段数、段序、分隔符、平台段按 realm 的品牌 —— 改名会触发上游风控 11140
+  userAgent(cn)                     = WorkBuddy/<ver> WorkBuddy/<ver> CLI/<ver>
+  userAgent(global)                 = WorkBuddy/<ver> WorkBuddy AI/<ver> CLI/<ver>
+  defaultWorkBuddyUA()              = WorkBuddy/<ver> WorkBuddy/<ver> CLI/<ver>
+  billingUA()                       = WorkBuddy/<ver>
+  userAgent(custom 版本,custom 平台) = WorkBuddy/<ver> WorkBuddy AI/<ver> CLI/<ver>
+  billingUA(custom 版本)             = WorkBuddy/<ver>
+  userAgent(SaaS)                   = WorkBuddy/<ver> WorkBuddy/<ver> CLI/<ver>
+  billingUA(SaaS)                   = (empty)
+  userAgent(显式覆盖)                = custom-agent/1.0
+
+[paths]
+# 出站路径与按 realm 的候选序列（顺序即行为：只在首个候选 404 时回落）
+  chatCompletionsPath               = /v2/chat/completions
+  chatPaths(cn)                     = /v2/chat/completions
+  chatPaths(global)                 = /v2/chat/completions
+  billingMeterPaths(cn)             = /v2/billing/meter/get-user-resource
+  billingMeterPaths(global)         = /billing/meter/get-user-resource , /v2/billing/meter/get-user-resource
+  checkinMeterPaths(cn)             = /v2/billing/meter/daily-checkin
+  checkinMeterPaths(global)         = /billing/meter/daily-checkin , /v2/billing/meter/daily-checkin
+  reportPath                        = /v2/report
+  desktopReportPath                 = /v2/report
+  mpReportPath                      = /v2/report
+
+[origin-language]
+# Origin/Referer 基础域与 Accept-Language 按 realm 切换（对齐官方客户端，避免风控误判）
+  originRefererFor(cn)              = https://www.codebuddy.cn
+  originRefererFor(global)          = https://www.workbuddy.ai
+  acceptLanguageFor(cn)             = zh-CN
+  acceptLanguageFor(global)         = en-US
+
+[headers.chat.cn]
+# CN chat 出站头族全集（含会话头族 X-Conversation-* / X-Request-ID / B3）
+  Accept: application/json, text/event-stream
+  Accept-Language: zh-CN
+  Authorization: Bearer <token>
+  Content-Type: application/json
+  Origin: https://www.codebuddy.cn
+  Referer: https://www.codebuddy.cn/
+  User-Agent: WorkBuddy/<ver> WorkBuddy/<ver> CLI/<ver>
+  X-Agent-Purpose: conversation
+  X-B3-Sampled: 1
+  X-B3-Spanid: <16hex>
+  X-B3-Traceid: <32hex>
+  X-Codebuddy-Request: 1
+  X-Conversation-Id: wb2api-conv-<digits>
+  X-Conversation-Message-Id: <32hex>
+  X-Conversation-Request-Id: <32hex>
+  X-Domain: copilot.tencent.com
+  X-Ide-Name: WorkBuddy
+  X-Ide-Type: WorkBuddy
+  X-Ide-Version: <ver>
+  X-Machine-Id: <36hex>
+  X-No-Enterprise-Id: 1
+  X-Product: WorkBuddy
+  X-Request-Id: <32hex>
+  X-Requested-With: XMLHttpRequest
+  X-Root-Request-Id: <32hex>
+  X-Session-Id: <36hex>
+  X-Trace-Id: <32hex>
+  X-User-Id: u-cn
+
+[headers.chat.global]
+# global chat 出站头族：平台段与域声明换成国际版形态
+  Accept: application/json, text/event-stream
+  Accept-Language: en-US
+  Authorization: Bearer <token>
+  Content-Type: application/json
+  Origin: https://www.workbuddy.ai
+  Referer: https://www.workbuddy.ai/
+  User-Agent: WorkBuddy/<ver> WorkBuddy AI/<ver> CLI/<ver>
+  X-Agent-Purpose: conversation
+  X-B3-Sampled: 1
+  X-B3-Spanid: <16hex>
+  X-B3-Traceid: <32hex>
+  X-Codebuddy-Request: 1
+  X-Conversation-Id: wb2api-conv-<digits>
+  X-Conversation-Message-Id: <32hex>
+  X-Conversation-Request-Id: <32hex>
+  X-Domain: www.workbuddy.ai
+  X-Ide-Name: WorkBuddy
+  X-Ide-Type: WorkBuddy
+  X-Ide-Version: <ver>
+  X-Machine-Id: <36hex>
+  X-No-Enterprise-Id: 1
+  X-Product: WorkBuddy
+  X-Request-Id: <32hex>
+  X-Requested-With: XMLHttpRequest
+  X-Root-Request-Id: <32hex>
+  X-Session-Id: <36hex>
+  X-Trace-Id: <32hex>
+  X-User-Id: u-global
+
+[headers.billing.cn]
+# billing 域头族（不走 CommonHeaders，单独注入；UA 为单段 WorkBuddy/<ver>）
+  Accept: application/json
+  Accept-Language: zh-CN
+  Authorization: Bearer <token>
+  Content-Type: application/json
+  User-Agent: WorkBuddy/<ver>
+  X-Codebuddy-Request: 1
+  X-Domain: copilot.tencent.com
+  X-User-Id: u-cn
+
+[headers.refresh.cn]
+# refresh 端点专属头：X-Refresh-Token 只允许出现在这里
+  Accept: application/json
+  Accept-Language: zh-CN
+  Content-Type: application/json
+  Origin: https://www.codebuddy.cn
+  Referer: https://www.codebuddy.cn/
+  User-Agent: WorkBuddy/<ver> WorkBuddy/<ver> CLI/<ver>
+  X-Auth-Refresh-Source: plugin
+  X-Codebuddy-Request: 1
+  X-Machine-Id: <36hex>
+  X-Refresh-Token: rt-refresh
+  X-Requested-With: XMLHttpRequest
+  X-Session-Id: <36hex>
+
+[stream]
+# 流式帧 id：无真实 id 时的哨兵，以及有真实 id 时不得覆盖
+  normalizeFrame({}).id            = chatcmpl-wb2api
+  normalizeFrame({}).object        = chat.completion.chunk
+  normalizeFrame(真实 id).id       = chatcmpl-real-1
+
+[conversation-id]
+# 对话 ID 的**形状**（值随调用变，形状不变）：wb2api 前缀 + 派生 ID 的稳定性
+  clientToken() 形状                = <uuid>
+  deriveAccountStableID(u-cn,machine) = <36hex>
+  同 uid 同用途幂等                  = true
+  同 uid 不同用途互异                = true
+  不同 uid 互异                      = true
+
+[conversation-id-generators]
+# 各生成点的 conversationId 形态：真跑生成代码（不写字面量），只归一掉随机部分
+  DesktopChatWithExpert conversationId      = wb2api-conv-<digits>
+  DesktopChatWithExpert requestId           = <32hex>
+  DesktopChatWithExpert Accept              = text/event-stream
+  DesktopChatWithExpert X-Conversation-ID 与返回值一致 = true
+  SchoolChatTimesEvents traceId             = wb2api-<uuid>
+  SchoolChatTimesEvents rootRequestId       = wb2api-<uuid>
+  SchoolChatTimesEvents traceId==rootReqId  = true
+  SchoolChatTimesEvents messageId           = msg-<hex>
+  SchoolChatTimesEvents conversationId      = wb2api-conv-<digits>
+  SchoolChatTimesEvents agentName/Type      = mp / main
+  RunNightChats 上报 conversationId         = wb2api-night-<digits>-0
+
+[report-body]
+# 上报体里 conversationId 为**原样透传**的 wb2api-<ms> 形态（网关不重写它）
+  eventCode                         = chat_request_send
+  mode                              = craft
+  conversationId                    = wb2api-123
+  userId                            = u-cn
+  conversationId 原样透传(未加后缀)  = true
