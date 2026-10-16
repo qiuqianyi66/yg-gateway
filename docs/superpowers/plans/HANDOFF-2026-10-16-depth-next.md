@@ -305,3 +305,50 @@ Set-Location $dst
 | D3 | T7 的计量口径（unknown 不写 0）要不要改？ | 改（更诚实） / 只加观测字段不动数字 |
 | D4 | `cordis.patch.yml` 用 provider 级 `defaultInput` 还是维持 20 条逐条声明？ | 两者并存（建议） / 只留逐条 |
 | D5 | `cn:auto` 要不要声明支持图片？ | 声明（可能后移到上游失败） / 保持 text-only |
+
+---
+
+## 8. 本轮执行结果（执行会话追加，2026-10-16）
+
+**全部 5 个决策点均按推荐执行**：D1 提交 / D2 CI 强制棘轮 / D3 改计量口径 / D4 provider 级 + 保留 20 条 /
+D5 先实测再定（实测支持声明，故保持声明）。
+
+| Task | 状态 | 提交 | 关键结果 |
+|---|---|---|---|
+| T1 | ✅ | `77e312a` `ed0a313` `ac0179a` | AGENTS.md 门禁清单同步（23 包 / gofmt 零漂移 / 五项门禁 + 总闸）；文件行数口径统一（非空行 vs 实际行）；`docs/superpowers/` 纳入版本管理（28 个 checkbox 全勾 + 状态 banner） |
+| T2 | ✅ | `c9812da` | CI 新增 `gate` job（`-Fast -AllFiles -Base <ref>`）；PR paths 补 `scripts/**`、`.harness/**`；`build` 依赖 gate。**并修掉两处会让 CI 门禁空转的根因**：Linux 上反斜杠路径 → 基线找不到 → 棘轮永远假绿；CI 工作区干净 → 改动清单与 R10 恒空。两处各有负向探针（gofmt 漂移 / `_ = v` 提交）实测退出 1 |
+| T3 | ✅ | `7b0018c` | upstream **4/5**、panel **5/5**；唯一存活者 M2（global billing 候选顺序反转，全包 0 捕获）已补 pin 并在副本内复验：**变异态整包唯一 FAIL 就是新 pin** |
+| T4 | ✅ | `c7838cc` | R8 golden（`testdata/r8_protocol.golden`，159 行 / 10 section）；7 条 R8 定向变异 **7/7 CAUGHT**（精确到行）；比对器「任意字节篡改都可检出」自证；顺带闭掉 `wb2api-night-*` 此前**无人断言**的缺口 |
+| T5 | ✅ | `8a6acd2` | `server -count=3` 与 `pool -count=20` 全绿（本会话独立复现）；EWMA 用可注入时钟（生产 `nowFn==nil` 逐位等价）；两包 `TestMain` 沙箱 + R1 守卫（带可复现负向探针）。**见修正 ①** |
+| T6 | ✅ | `e8a51db` `abfd580` | ADR-008（棘轮选型，含两处学费）；`.harness/LESSONS.md`（Seen 计数制，8 条坑 + 3 条 flake 单列） |
+| T7 | ✅（P1/P2） | `d43ea04` `8f274d7` | credit 与 cache-miss 的「未知冒充 0」收掉；两条反向变异均 CAUGHT；P3/P4 未做（PRD §七给理由） |
+| T8 | ✅ | `0cb5fa2` | cc-switch 深读落盘（170 行 / 60 处 file:line / observation-inference-unknown 标注 + 对照本仓 14 行）。**见修正 ②** |
+| T9 | ✅（待重启生效） | `8ce32df` | provider 级 `defaultInput` + `displayName` 反引号修复；网关目录实测 21 模型全 `supports_images=true`（过声明 0 / 欠声明 1）；实发图 2 次——模型回「图片只有一块纯红色，无有效信息」= **图片真到模型**。**见修正 ③** |
+| T10 | ✅ | `4be7517` | `review.md` 改为按路径分级要求（实测 12 个目录只有 2 个配了它）+ 补上一轮 L2 的 review.md |
+
+### 对本文原判断的修正（重要，别按旧文理解）
+
+① **T5 的因果假设不成立**：`internal/server -count=3` 红的根因是**进程内包级全局** `dynamicModelsCache`
+的 5min 负缓存被同包用例写入，而 `TestMain` 只在进程起止各跑一次、**隔离不了它**。
+沙箱（环境隔离 + R1 守卫）仍独立有价值，但 A 是靠 `resetDynamicModelsCache()` + 去掉对活上游的依赖修掉的。
+**别以为沙箱治了 A**；结构性根治（把该缓存搬进 Handler）仍未做——新增 models 用例忘记 reset 仍会复发。
+
+② **T8 取材清单里有一个不存在的路径**：`src-tauri/src/services/session_manager/*` 在该仓库**不存在**
+（实为 `session_usage*.rs` 一族，8 文件）。本轮按实际取材，并把读的确切 commit SHA 记进笔记（`09bce30`）。
+
+③ **T9 的验证方法在本仓不可行**：本文写的「用网关 reqlog 归档 JSONL 确认 `image_url` 真出站」做不到——
+reqlog 记录**不含请求体**（21 个字段清单见 `.harness/changes/2026-10-16-dsh-default-input/summary.md`）。
+改用**行为级证据**（模型能描述图片内容），它比 grep 日志更强：证明图片不只是发出去了，而是被理解了。
+
+④ **T3 的空缺已填上，但结论有边界**：upstream 只找到 1 处真缺口、panel 5/5 干净——「大包不一定更脏」
+这个观察只对**这 10 条变异**成立，不代表穷尽核验。
+
+### 本轮未尽事项（如实登记）
+
+1. T7 的 P3（`anthropic.go` 的 `"stream":"true"` 类型错）与 P4（`cmd/login` 4xx 分档）未做。
+2. T5 的结构性根治（`dynamicModelsCache` 搬进 Handler）未做。
+3. R8 golden 覆盖 `RunNightChats`，其**不可注入的 4s sleep** 使 `internal/upstream` 单轮 7s→11s。
+4. CI `gate` job **首次运行待确认**（本机无 Linux；已消除的两处平台依赖见 T2）。
+5. T9 的配置**需重启 dsh 才生效**（本会话运行在 dsh 内，未擅自重启会话宿主）。
+6. `.harness/LESSONS.md` L-3（单引号吞变量）已 Seen 2，机器检查要改 `scripts/pre-commit.ps1`，按机制
+   **Seen 3 必落地**。
