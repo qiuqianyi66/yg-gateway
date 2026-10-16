@@ -227,22 +227,40 @@ func TestEwmaMedianLatency(t *testing.T) {
 	}
 }
 
-// TestEwmaLatencyPenalizesSlowInPick 延迟惩罚经 pick 生效：三号同等权重（初始齐用、
-// credits 相同），慢号（5s vs 中位 1s）被罚后 r=0 恒选快号；r=末尾仍可命中慢号
-// （惩罚未清零、不饿死）。
+// TestEwmaLatencyPenalizesSlowInPick 延迟惩罚经 pick 生效：三号 credits 相同、
+// 时间冻结，权重严格可排序；慢号（5s vs 中位 1s）被罚后 r=0 恒选快号；r=末尾仍可
+// 命中慢号（惩罚未清零、不饿死）。
+//
+// 为什么改成注入时钟（T5 治 flake）：旧版靠 time.Now() 的**闲置补偿差**来打破
+// fast/mid 的权重并列，而 Windows 的 time.Now() 精度约 1ms——setup 恰好跨毫秒
+// 边界时（约 1/8 概率）三个 lastUsed 落在不同毫秒：pick 会把中选号（fast）的
+// lastUsed 刷新到 now，于是第 2 轮起 mid 的闲置补偿反超 fast → r=0 选中 mid →
+// FAIL（实测 -count=20 必现）。修法是**消除时间依赖**而不是放宽断言：SetClock
+// 把时间冻结在 base（闲置补偿恒 0），并列只由 pick 的稳定兜底（UID 字典序）决出。
+//
+// 牙齿（三处断言各自能红）：
+//  1. 删掉 ewmaWeightFactor 的延迟惩罚分支 → slow 的未罚权重 11.5 反超 fast/mid 的
+//     11（slow 久置 1h 的补偿刻意留着，见下）→ 加权断言与两条 pick 断言 FAIL；
+//  2. 把 pick/pickWeighted 的 p.now() 改回 time.Now()（注入时钟失效）→ 写回的
+//     lastUsed 不等于冻结时刻 → lastUsed 断言 FAIL（不需要等墙钟漂移到「恰好出错」）。
 func TestEwmaLatencyPenalizesSlowInPick(t *testing.T) {
 	withNoPickGap(t)
+	// 冻结时钟：now 恒为 base，fast/mid 的 lastUsed 也是 base → 闲置补偿恒 0。
+	// base 取哪个时刻无关紧要（只有「冻结」这件事有意义）；不要改成 time.Now()。
+	base := time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC)
 	p := New("")
+	p.SetClock(func() time.Time { return base })
 	p.SetEwma(true, 0.1, 5)
 	for _, u := range []string{"fast", "mid", "slow"} {
 		p.Add(&auth.Auth{UID: u})
 		p.SetCredits(u, 100, 0)
 	}
-	// 初始齐用：idle 补偿相等；再注入延迟台账（同锁内完成）。
 	p.mu.Lock()
-	for _, u := range []string{"fast", "mid", "slow"} {
-		p.byUID[u].setLastUsed(time.Now())
-	}
+	p.byUID["fast"].setLastUsed(base)
+	p.byUID["mid"].setLastUsed(base)
+	// slow 刻意久置 1h：其**未罚**权重（11.5）高于 fast/mid（11），因此「被罚后垫底」
+	// 只能由延迟惩罚解释；顺带钉住「惩罚足以压过闲置补偿」这条语义边界。
+	p.byUID["slow"].setLastUsed(base.Add(-time.Hour))
 	// 快/中 1s、慢 5s，各 5 样本 → 池中位 1s → slow(5s) > 1.5s → 被罚。
 	for _, u := range []string{"fast", "mid", "slow"} {
 		e := p.byUID[u]
@@ -253,7 +271,29 @@ func TestEwmaLatencyPenalizesSlowInPick(t *testing.T) {
 			e.ewmaLatencyMs = 1000
 		}
 	}
+	eFast, eMid, eSlow := p.byUID["fast"], p.byUID["mid"], p.byUID["slow"]
+	median := p.poolMedianLatencyMs([]*entry{eFast, eMid, eSlow})
 	p.mu.Unlock()
+
+	if median != 1000 {
+		t.Fatalf("池延迟中位数应为 1000（下中位; 样本 1000/1000/5000）, got %v", median)
+	}
+	p.mu.RLock()
+	rawFast := p.weightOf(eFast, 100, base)
+	rawMid := p.weightOf(eMid, 100, base)
+	rawSlow := p.weightOf(eSlow, 100, base)
+	wFast := p.routingWeightOf(eFast, 100, base, median)
+	wMid := p.routingWeightOf(eMid, 100, base, median)
+	wSlow := p.routingWeightOf(eSlow, 100, base, median)
+	p.mu.RUnlock()
+	if rawSlow <= rawFast || rawSlow <= rawMid {
+		t.Fatalf("前提失效：slow 的未罚权重应最高（久置补偿）, raw: fast=%v mid=%v slow=%v",
+			rawFast, rawMid, rawSlow)
+	}
+	if wSlow >= wMid || wSlow >= wFast {
+		t.Fatalf("延迟惩罚未生效：slow 被罚后应低于中位账号, weighted: fast=%v mid=%v slow=%v",
+			wFast, wMid, wSlow)
+	}
 
 	p.SetRandomSource(func(n int64) int64 { return 0 })
 	for i := 0; i < 10; i++ {
@@ -261,7 +301,16 @@ func TestEwmaLatencyPenalizesSlowInPick(t *testing.T) {
 			t.Fatalf("iter %d: 慢号被罚后 r=0 应选快号, got %+v", i, got)
 		}
 	}
-	// r=末尾 → 权重最低的慢号仍可被选中（不饿死）。
+	// 注入时钟必须**真的**被 pick 使用（否则权重重新被墙钟污染 → 本用例复发 flake）：
+	// 选中写回的 lastUsed 必须恰好是冻结时刻。把 pick/pickWeighted 的 p.now() 改回
+	// time.Now() 时此断言 FAIL（无需等墙钟漂移到「恰好出错」的那一刻）。
+	p.mu.RLock()
+	gotLastUsed := p.byUID["fast"].lastUsedTime()
+	p.mu.RUnlock()
+	if !gotLastUsed.Equal(base) {
+		t.Fatalf("pick 应使用注入时钟写回 lastUsed: got %v want %v", gotLastUsed, base)
+	}
+	// r=末尾 → 权重最低的慢号仍可被选中（惩罚未清零、不饿死）。
 	p.SetRandomSource(func(n int64) int64 { return n - 1 })
 	got := p.Pick()
 	if got == nil || got.UID != "slow" {

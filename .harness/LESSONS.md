@@ -45,11 +45,24 @@
 - **状态**：已写进 HANDOFF §3 T3 的配方，并在 T3 的 agent 提示词里做成**硬前置断言**。
   尚未机器化（变异核验不在提交门禁内）。
 
-### L-3｜单引号包变量 → 生成字面名垃圾文件 —— Seen: 1
+### L-3｜单引号/未加引号的变量 → 生成字面名垃圾文件 —— **Seen: 2 → 已升级为规则（机器检查仍缺）**
 
 - **Seen 1**（2026-10-16）：`-coverprofile=$out`（单引号）在仓库根生成了 `$out`/`$p`/`$tmp`
   三个文件，内容是覆盖率 profile（已清理）。
-- **规则**：需要插值的参数一律 `"…=$var"`；跑 profile 的输出路径一律写 `$env:TEMP`。
+- **Seen 2**（2026-10-16，T5）：`-coverprofile=$cov`、`-coverprofile=$abs`（**未加引号**，
+  看起来像是正常插值）在仓库根生成 `$cov`（52928 字节）/`$abs`（2492 字节）两个 profile 文件。
+  探针实测（`cmd /c echo -coverprofile=$x`）：
+  ```
+  未加引号: -coverprofile=$x      ← PS 5.1 根本没展开，原样进了原生命令
+  加了引号: -coverprofile=VAL
+  ```
+  即坑比 Seen 1 记的**更宽**：不只是单引号，未加引号的 `-flag=$var` 同样不展开，
+  而且它不报错、只是把 profile 写到名为 `$cov` 的文件里——静默，且看起来像成功。
+- **规则**（升级）：给原生命令传「带变量的参数」一律写 `"-flag=$var"`（**双引号**）；
+  覆盖率/临时产物一律 `"-coverprofile=$env:TEMP\xxx.out"`（绝对路径）。
+- **状态**：候选机器检查（扫新增行里未加引号的 `-\w+=\$`）需落在 `scripts/pre-commit.ps1`，
+  而 T5 的边界明令不许改 `scripts/`（门禁脚本不在该任务范围）→ 本轮只升级规则文本与证据。
+  **Seen 3 必须落地为脚本检查项**，不要再只加计数。
 
 ### L-4｜并行 agent 的结构化返回值必须原样上返 —— Seen: 1
 
@@ -97,6 +110,6 @@
 
 | flake | 现象 | 现状 |
 |---|---|---|
-| `internal/server` `TestModelsEndpoint` | `go test ./internal/server/ -count=3` 因**测试间全局状态污染**失败（`-count=1` 全绿） | 未修，T5 计划用「每包一个 `TestMain` 沙箱」治 |
-| `TestEwmaLatencyPenalizesSlowInPick` | 时间敏感，约 1/8 概率偶发 | 未修，T5 计划改成**可注入时钟**（不要靠「重跑至绿」） |
+| `internal/server` `TestModelsEndpoint` | `go test ./internal/server/ -count=3` 因**测试间全局状态污染**失败（`-count=1` 全绿） | **已修（T5，2026-10-16）**：真因是**进程内包级全局** `dynamicModelsCache`（其它用例写入的 5min 负缓存）——沙箱隔离不了，只能用例首行 `resetDynamicModelsCache()`；顺带去掉了对**活上游**的依赖（改假上游固定目录）。证据与牙齿见 `.harness/changes/2026-10-16-t5-sandbox/summary.md` |
+| `TestEwmaLatencyPenalizesSlowInPick` | 时间敏感，约 1/8 概率偶发 | **已修（T5，2026-10-16）**：真因是 Windows `time.Now()` 约 1ms 精度 + pick 会刷新中选号 lastUsed → 第 2 轮起并列被打破。改为**可注入时钟**（`Pool.SetClock`，生产默认仍是 `time.Now()`），测试冻结时间；`-count=20` 稳定全绿 |
 | panel 包单轮 44–60s | mp 上报路径含 0–10s 随机反作弊抖动且不可注入 | 预期行为；写新测试尽量走「达标/已领」路径（0 抖动） |

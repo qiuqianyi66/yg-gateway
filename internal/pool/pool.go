@@ -80,6 +80,15 @@ type Pool struct {
 	// randInt64N 仅供测试注入确定性随机源；nil 时用 math/rand/v2 全局源。
 	// 生产代码不应设置此字段。
 	randInt64N func(n int64) int64
+	// nowFn 可注入时钟（SetClock；nil = time.Now()，生产默认）。
+	//
+	// 为什么需要（T5 治 flake）：选号权重含两项随墙钟漂移的输入——闲置补偿
+	// （weightOf 的 idleWeight）与 EWMA 延迟中位数（poolMedianLatencyMs 的判定基准）。
+	// 权重**并列**时，谁排在前只由亚毫秒级的 lastUsed 差决定，而 Windows 的
+	// time.Now() 精度约 1ms → 同一测试在 -count>1 下偶发（约 1/8：
+	// TestEwmaLatencyPenalizesSlowInPick）。注入时钟后测试可把时间冻结，权重与墙钟
+	// 完全解耦；生产路径（nowFn 为 nil）仍走 time.Now()，逐位等价于改动前。
+	nowFn func() time.Time
 	// breakerProbeGap 熔断到期后的 half-open 试探间隔（ADR-003 D-400）：
 	// 熔断号到期后不再一次性全量放回，而是每 gap 至多放行 1 次试探；成功即全量恢复。
 	// 0 = 关闭 half-open（退化为既有的「到期即全量」行为，零回归）。
@@ -462,6 +471,26 @@ func (p *Pool) SetRandomSource(fn func(n int64) int64) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.randInt64N = fn
+}
+
+// now 返回当前时刻：生产路径 = time.Now()（nowFn 为 nil，逐位等价于改动前），
+// 测试经 SetClock 注入确定性时钟。
+//
+// 只给 pick 系（选号权重）用：其它路径的 time.Now() 只做「时长/过期」判定，
+// 与测试的数值断言无关，注入它们只会扩大漂移面（零收益）。
+func (p *Pool) now() time.Time {
+	if p.nowFn != nil {
+		return p.nowFn()
+	}
+	return time.Now()
+}
+
+// SetClock 仅供测试注入确定性时钟（通常返回一个固定时刻）；生产代码不应调用。
+// 与 SetRandomSource 同纪律：写 p.mu，须在任何并发 pick 之前注入。
+func (p *Pool) SetClock(fn func() time.Time) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.nowFn = fn
 }
 
 // Add 加入账号；已存在则保留原状态、更新凭证（upsert 单账号，不影响其他账号）。

@@ -62,7 +62,7 @@ func (p *Pool) PickExcludingForRealmGroup(tried map[string]bool, reqModel, realm
 func (p *Pool) pick(tried map[string]bool, reqModel, realm, group string) *auth.Auth {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
-	now := time.Now()
+	now := p.now()
 	// realm 过滤 + group 过滤（P1-B：账号池分组）。group 空 = 不限池（零回归）。
 	realmOK := func(e *entry) bool {
 		if realm != "" && e.a.Realm() != realm {
@@ -412,7 +412,7 @@ func (p *Pool) pickEarliestExpiryLocked(tried map[string]bool, now time.Time, re
 	// 一样推进 usedSeq/pickSeq：否则被兜底反复选中的账号 usedSeq 恒为 0，在 pick 的
 	// LRU 兜底（按 usedSeq 取最旧）眼里永远是「最旧」，刚被用过就被立刻再选——
 	// 防集中/防惊群失效（entry.usedSeq 契约：每次被选中时取 p.pickSeq 自增值）。
-	best.setLastUsed(time.Now())
+	best.setLastUsed(now) // 用调用方传入的同一 now（可注入时钟）：与上方 expiry 判定同一时刻
 	seq := p.pickSeq.Add(1)
 	best.usedSeq.Store(seq)
 	return best.a
@@ -442,8 +442,11 @@ var minPickGap = 100 * time.Millisecond
 // credits 全 0 时仍按 idleWeight 加权（不退化均匀随机）。
 // 权重为浮点，用 int64 定点（×1e6）抽签可保持确定性随机源注入（randInt64N 语义不变）。
 // 随机源优先用 p.randInt64N（仅供测试注入确定性），nil 时回退 math/rand/v2 全局源。
+// 时刻取 p.now()（可注入时钟，见 SetClock）：与 pick 的权重计算共用同一时间口径，
+// 否则两阶段权重（截断排序 vs 抽签）会落在不同时刻上（生产差异在 µs 级，但测试
+// 需要它可冻结）。
 func (p *Pool) pickWeighted(cands []*entry, medianLatencyMs float64) *entry {
-	now := time.Now()
+	now := p.now()
 	var maxCredits int64
 	for _, e := range cands {
 		if e.credits > maxCredits {
