@@ -225,6 +225,33 @@ func runURL(base, origin, realm, statePath string, client *http.Client, out io.W
 	fmt.Fprintln(out, st.AuthURL)
 }
 
+// pollFailureMessage 把 poll 阶段的失败翻译成**可执行**的提示。
+//
+// 为什么不能一概说「登录未完成」：真 401/403 意味着凭证/授权被拒——用户按到天亮也不会成功，
+// 却只看到「还没登录完」，而且看不到上游状态码（ERROR-HANDLING.md「留待产品定夺」表 P4）。
+// 5xx 与「没连上」（status=0）是上游/网络问题，与登录状态无关，也不该混进同一句提示。
+//
+// 4xx 分支只报**状态码**、不回显上游错误原文：状态码是用户能行动的信息（401/403 = 重来或查配置，
+// 404 = 查 realm/域），原文只会让人误判成「上游故障」。既有测试对此有负断言
+// （`must NOT contain "http_error: upstream 401"`），本条注释即该约束的来源。
+func pollFailureMessage(status int, err error) string {
+	switch {
+	case status == 0 || status >= 500:
+		return fmt.Sprintf("token endpoint error: %v", err)
+	case status == http.StatusUnauthorized || status == http.StatusForbidden:
+		return fmt.Sprintf("登录被上游拒绝（HTTP %d）：这不是「还没登录完」，继续等待不会成功。"+
+			"请检查账号/域/系统时间是否正确，或重新执行 login url", status)
+	case status == http.StatusNotFound:
+		return fmt.Sprintf("token 端点不存在（HTTP %d）：确认 --realm 与上游域是否匹配", status)
+	case status >= 400:
+		return fmt.Sprintf("登录未完成（waiting for login）。请确认已在浏览器完成登录再按 y（上游 HTTP %d）", status)
+	default:
+		// 正常等待态（HTTP 200 + 业务 code 非 0，如 "login ing"）：把上游 code/msg 一并打出来，
+		// 用户才能区分「真的在等」与「上游给了别的业务错误」。
+		return fmt.Sprintf("登录未完成（waiting for login）。请确认已在浏览器完成登录再按 y（上游 %v）", err)
+	}
+}
+
 // runPoll 执行 poll 子命令：读 state 文件（realm 校验），向 upstreamBase 的 token 端点
 // GET 一次，成功再 GET login/account（带 Bearer），stdout 打印完整 token+account JSON。
 // statePath 可注入临时文件便于测试。
@@ -246,10 +273,7 @@ func runPoll(base, origin, realm, statePath string, client *http.Client, out io.
 	// pending 时业务 code 非 0（"login ing"），完成时 code=0 + token bundle
 	tokRaw, status, errTok := doJSON(client, http.MethodGet, base+"/v2/plugin/auth/token?state="+ls.State, headers, nil)
 	if errTok != nil {
-		if status == 0 || status >= 500 {
-			fatal("token endpoint error: %v", errTok)
-		}
-		fatal("登录未完成（waiting for login）。请确认已在浏览器完成登录再按 y")
+		fatal("%s", pollFailureMessage(status, errTok))
 	}
 	var tok struct {
 		AccessToken  string `json:"accessToken"`

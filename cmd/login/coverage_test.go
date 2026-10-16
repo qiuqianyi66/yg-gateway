@@ -629,23 +629,29 @@ func TestCovLoginRunPollFatalBranches(t *testing.T) {
 			wantErrHas: []string{"token endpoint error", "http_error: upstream 500"},
 		},
 		{
-			// 401 归「未完成」是现有产品意图（runPoll main.go:249 只在 status==0 || status>=500
-			// 判上游错），待确认：若产品想让 401 走上游错误档，应改生产代码并把本用例改成正断言，
-			// 而不是在这里放宽口径。
-			// 变异实测：4xx 从未进入过这张表的判档分支；阈值改成 >=400 后原测试全绿。
-			// 本条用负断言钉阈值：401 必须落「未完成」档，且不得泄漏上游错误档文案。
-			name: "token 端点 401 归未完成档", stateJSON: `{"state":"st-1","realm":"cn"}`, cliRealm: "cn",
+			// **2026-10-16 口径变更（P4）**：原用例注释写的是「401 归未完成是现有产品意图，
+			// 待确认；若产品想让 401 走上游错误档，应改生产代码并把本用例改成正断言」。
+			// 本次就是那次变更（ERROR-HANDLING 表 P4：真 401/403 时用户按到天亮也不会成功，
+			// 且看不到上游状态码）→ 断言翻正。负断言保留：仍不得回显上游错误原文
+			// （状态码是用户能行动的信息，原文只会让人误判成上游故障）。
+			name: "token 端点 401：归「被拒」档（不再说「还未登录完成」）", stateJSON: `{"state":"st-1","realm":"cn"}`, cliRealm: "cn",
 			tokenResp: `{"code":0,"msg":"","data":null}`, tokenStatus: 401,
-			wantErrHas:    []string{"登录未完成（waiting for login）"},
-			wantErrNotHas: []string{"token endpoint error", "http_error: upstream 401"},
+			wantErrHas:    []string{"登录被上游拒绝", "HTTP 401", "继续等待不会成功"},
+			wantErrNotHas: []string{"token endpoint error", "http_error: upstream 401", "请确认已在浏览器完成登录再按 y"},
 		},
 		{
-			// 403 与 401 同属「4xx 全归未完成」这一档（main.go:249 只把 status==0 与 >=500 判上游错），
-			// 同样待确认。加这条是为了钉住整档而不是单点：只喂 401 时把阈值改成 status>401 仍会全绿。
-			name: "token 端点 403 同归未完成档", stateJSON: `{"state":"st-1","realm":"cn"}`, cliRealm: "cn",
+			// 403 与 401 同档（凭证/授权被拒）。保留整档断言：只喂 401 时把阈值改动仍会全绿。
+			name: "token 端点 403：同归「被拒」档", stateJSON: `{"state":"st-1","realm":"cn"}`, cliRealm: "cn",
 			tokenResp: `{"code":0,"msg":"","data":null}`, tokenStatus: 403,
-			wantErrHas:    []string{"登录未完成（waiting for login）"},
-			wantErrNotHas: []string{"token endpoint error", "http_error: upstream 403"},
+			wantErrHas:    []string{"登录被上游拒绝", "HTTP 403"},
+			wantErrNotHas: []string{"token endpoint error", "http_error: upstream 403", "请确认已在浏览器完成登录再按 y"},
+		},
+		{
+			// 404 单列：它是「realm/域配错」，与 401/403 的「被拒」不是同一类失效原因。
+			name: "token 端点 404：提示 realm/域不匹配", stateJSON: `{"state":"st-1","realm":"cn"}`, cliRealm: "cn",
+			tokenResp: `{"code":0,"msg":"","data":null}`, tokenStatus: 404,
+			wantErrHas:    []string{"端点不存在", "HTTP 404"},
+			wantErrNotHas: []string{"http_error: upstream 404", "请确认已在浏览器完成登录再按 y"},
 		},
 		{
 			name: "accessToken 为空", stateJSON: `{"state":"st-1","realm":"cn"}`, cliRealm: "cn",

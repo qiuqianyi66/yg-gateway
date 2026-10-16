@@ -7,9 +7,9 @@
 - 相关纪律：`AGENTS.md`「事实语义纪律（三态分离）」与「Unknown 消解纪律」；
   `docs/adr/ADR-007-evidence-and-unknown.md`
 
-> **实施状态（2026-10-16）**：**P1 与 P2 已实施并实测有牙齿**（两条反向变异均 CAUGHT，
-> 见 `.harness/changes/2026-10-16-t7-unknown-admission/summary.md`）；
-> **P3、P4 未实施**（理由见 §七）。实施中有一处设计偏差，见 §三.0。
+> **实施状态（2026-10-16）**：**P1–P4 全部已实施并验证**（P1/P2 见
+> `.harness/changes/2026-10-16-t7-unknown-admission/summary.md` §一–§三，P3/P4 见 §五，每项都有反向变异证据）。
+> 实施中有一处设计偏差，见 §三.0。
 
 ## 一、问题（为什么必须改）
 
@@ -102,9 +102,14 @@ P1–P3 是同一类错误：**把「不知道」编码成某个具体值**。P4
 - 依赖方向：新增 `pool → unknown`？**已存在**（白名单里 `pool → auth, evidence, logfmt, unknown`），
   改动后必须仍 `check-boundaries.ps1` 退出 0。
 
-## 七、未实施项与理由（不粉饰）
+## 七、P3/P4 的处置（复核后补做）
 
-| # | 项 | 状态 | 理由 |
+| # | 项 | 状态 | 说明 |
 |---|---|---|---|
-| P3 | `internal/server/anthropic.go` 的 `"stream":"true"`（字符串）类型错被吞 | **未实施** | 它的后果是「走错分支」而不是「写错数字」；修它要动 Anthropic 入站分支选择，属**行为变更**（可能影响请求路由），应单独立 PRD + 冒烟，不能与计量口径混在一个提交里 |
-| P4 | `cmd/login/main.go` 的 4xx 全归「登录未完成」 | **未实施** | 这是 CLI 提示文案与状态分档（`upstream-hint.md` 同族），不是计量口径；混进来会让本需求的验收标准变形 |
+| P3 | `internal/server/anthropic.go` 的 `"stream":"true"`（字符串）类型错被吞 | **已实施** | 只改可观测性、**不改分支行为**（改分支是行为变更，须单独 PRD + 冒烟）：抽出纯函数 `anthropicStreamIntent` 返回 `(stream, note)`，未知时打 WARN |
+| P4 | `cmd/login/main.go` 的 4xx 全归「登录未完成」 | **已实施** | 抽出纯函数 `pollFailureMessage`：401/403 归「被拒」、404 归「端点/realm 不匹配」、5xx/连不上归上游故障、200+业务码非 0 保留等待态并带出上游 code/msg。这是刻意的 **CLI 口径变更**；既有测试的分档注释已预告该变更方向，本次按指引把断言翻正 |
+
+> 两者起初被判为「不属于计量口径」而留在本轮之外（当时的判断是：P3 改分支属行为变更、
+> P4 是 CLI 文案）。复核后修正为：P3 **可以不改行为**、P4 与 P1/P2 同属「未知不得冒充某个具体结论」，
+> 且既有测试的注释已为 P4 预留了翻正路径，故一并实施。
+> 记录与反向变异证据见 `.harness/changes/2026-10-16-t7-unknown-admission/summary.md` §五–§六。

@@ -2,8 +2,7 @@
 
 > 承接 `docs/superpowers/plans/HANDOFF-2026-10-16-depth-next.md` §3 的 T7（用户决策 **D3 = 改**）。
 > 需求与验收：`docs/prd/REQ-usage-unknown-admission-2026-10-16.md`。
-> 本变更**不含 P3**（`anthropic.go` 的 `"stream":"true"` 类型错）与 **P4**（`cmd/login` 4xx 分档），
-> 理由写在 PRD §七——它们不是计量口径，混进来会让验收标准变形。
+> **P1–P4 全部实施并验证**（P3/P4 见 §五，是复核后补做的）。
 
 ## 一、改了什么
 
@@ -43,11 +42,6 @@
 
 两条变异还原后哈希一致，副本已删除，原件工作区未被污染。
 
-### 3. 门禁
-
-`go build ./...` / `go vet ./...` / `gofmt -l` 无输出；`go test ./... -count=1` 全绿；
-`check-boundaries.ps1`、`check-depth.ps1`（覆盖率未回退、未 `-Update`）、`pre-commit.ps1` 全量 —— 见提交 body 的实测记录。
-
 ## 三、防过度纠正（本变更最容易做错的地方）
 
 **真免费模型（上游明确回 `credit=0`）必须仍按观察记账**。这不是附注，是硬验收
@@ -58,17 +52,63 @@
 
 ## 四、怎么回滚
 
-`git revert <sha>`。三处判据改动彼此独立：
+`git revert <sha>`。各改动彼此独立：
+
 - 只回滚 `usageCreditTotal` → 恢复到旧口径（未知冒充 0）；
-- `reqlog.CacheMissUnknown` 是纯增量字段，旧消费者不受影响，可单独保留。
+- 只回滚 `CacheTokens`/`reqlog` → miss 未知重新记为 0，但信用（credit）侧仍正确；
+- `reqlog.CacheMissUnknown` 是纯增量字段，旧消费者不受影响，可单独保留；
+- P3/P4 的回滚见 §六（P4 会把 `cmd/login` 的提示退回旧分档）。
 
-## 五、遗留（已知、未做）
+## 五、补做：P3 与 P4（同一条纪律的两个远端）
 
-1. **P3 / P4 未实施**（PRD §七给了理由）：`anthropic.go` 的 `"stream":"true"` 类型错（走错分支）与
-   `cmd/login` 的 4xx 分档（CLI 文案）。
-2. **`unknowns_open` 可能长期非零**：若上游普遍不回 `credit`，该指标会持续 >0。按 ADR-007 这是
-   **信号**（要么池子在扩，要么 `requires` 设计有问题），不是故障——需要在观测时这样解读。
-3. **面板侧未验**：unknown 的展示由并行会话在 `internal/panel/*` 推进，本变更只保证 unknown
+原计划把 P3/P4 留在本轮之外，复核后判断它们就是同一条纪律（**未知不得冒充某个具体结论**）
+的另外两个落点，且都能在不改行为的前提下落地（P4 本身是口径变更），于是补做。
+
+| # | 改动 | 行为是否变化 |
+|---|---|---|
+| P3 | `internal/server/anthropic.go`：把 `_ = json.Unmarshal(body, &peek)` 拆成纯函数 `anthropicStreamIntent(body) (stream bool, note string)`；`"stream":"true"`（字符串）/ 非法 JSON → **未知**：行为保持非流式，但打 WARN 留痕 | **否**（分支选择一字未改——改它属行为变更，须单独 PRD + 冒烟） |
+| P4 | `cmd/login/main.go`：`runPoll` 的 4xx 分档拆成纯函数 `pollFailureMessage(status, err) string`；401/403 → 「登录被上游拒绝…继续等待不会成功」；404 → 「端点不存在，查 --realm/域」；5xx/连不上 → 上游故障档；200+业务码非 0 → 等待态并带出上游 code/msg | **是（这就是 P4 的目的）**：CLI 提示分档变化 |
+
+### P4 顺带发现的一处既有约束（已遵守，并写进代码注释）
+
+既有测试对 4xx 有一条**负断言**：不得回显 `http_error: upstream 401` 原文（500 档则要求回显）。
+因此 401/403/404 的新文案**只报状态码、不回显上游错误原文**：状态码是用户能行动的信息
+（重来 / 查配置），原文只会让人误判成「上游故障」。这条约束写进 `pollFailureMessage` 的注释，
+避免后来者「顺手」把原文加回去。
+
+另：该测试原有注释已写明「401 归未完成是现有产品意图，**待确认**；若产品想让 401 走上游错误档，
+应改生产代码并把本用例改成正断言」——本次决策正是那次变更，故按注释指引把两条用例**翻成正断言**，
+并补 404 一条（它与 401/403 的失效原因不同）。
+
+### 验收（实测）
+
+```
+internal/server: TestAnthropicStreamIntentUnknownIsNotFalse   （6 例：布尔/缺失/字符串/数字/非法 JSON）
+cmd/login:       TestPollFailureMessageDistinguishesRejectionFromWaiting（7 例：401/403/404/500/0/200/400）
+cmd/login:       TestCovLoginRunPollFatalBranches             （既有用例翻正后全绿）
+```
+
+**反向变异（副本内，原件只读，先断言 GOMOD 指向副本）**：把 `case status == 401 || 403:` 改成
+`case false:`（= 回到「4xx 全归未完成」的旧档）→ 两组用例同时红（既有用例的 401/403 子用例 + 新用例），
+还原后哈希一致 → **CAUGHT**。
+
+P3 的「行为保持不变」由测试正向钉住：`stream="true"` 用例同时断言 `stream == false`（分支不变）
+**且** note 非空（未知留痕）——两条同时成立才算过。
+
+## 六、P3/P4 的回滚
+
+`git revert <sha>`（涉及 `internal/server/anthropic.go`、`cmd/login/main.go`、
+`internal/server/anthropic_stream_intent_test.go`、`cmd/login/poll_message_test.go`、
+`cmd/login/coverage_test.go`）。P4 是**刻意的 CLI 口径变更**，回滚它会同时把
+`TestCovLoginRunPollFatalBranches` 的两条用例退回旧断言。
+
+## 七、遗留（已知、未做）
+
+1. **`unknowns_open` 可能长期非零**：若上游普遍不回 `credit`，该指标会持续 >0。按 ADR-007 这是
+   **信号**（要么池子在扩，要么 `requires` 设计有问题），不是故障——观测时要这样解读。
+2. **面板侧未验**：unknown 的展示由并行会话在 `internal/panel/*` 推进，本变更只保证 unknown
    进入既有登记链路；**未在面板上做过端到端观感验证**（避免与并行会话冲突）。
-4. **`cacheMissWarn` 的行为变化（刻意）**：miss 未知时该次不再喂入命中率统计，因此这类请求
+3. **`cacheMissWarn` 的行为变化（刻意）**：miss 未知时该次不再喂入命中率统计，因此这类请求
    既不会抬高命中率、也不会触发低命中率告警——即「因为不知道，所以不下结论」。
+4. **P4 的提示文案未在真机跑过**：单测覆盖了分档与文案，但没有用真实上游 401 走一遍 CLI
+   （需要一个被拒的账号，属真机操作）。
