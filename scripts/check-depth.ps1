@@ -14,6 +14,8 @@
 #   - **文件行数** = **非空行**（`Get-Content | Measure-Object -Line`，不计空行）——
 #     即本脚本 maxFileLines / oversizeFiles 用的口径。
 #   - **函数行数** = 代码行（排除空行与 `//` 开头的行），见下方「度量 2/2」段。
+#   实现上**显式过滤空白行**（`Where-Object { $_.Trim() -ne '' }`），不依赖 `Measure-Object -Line`
+#   ——后者对空白行的处理属实现细节，把口径押在它上面会让棘轮在别的 PowerShell 版本/平台上假红假绿。
 #   参照物：internal/upstream/client.go 实测 = **2185 非空行 / 2315 实际行**（差 130 空行）。
 #   本脚本与 `.harness/rules/编码规范.md` 第九节必须同口径——改任一侧先改这里。
 #
@@ -34,7 +36,10 @@ $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path -Parent $PSScriptRoot
 Set-Location $repoRoot
 
-$baselinePath = Join-Path $repoRoot '.harness\depth-baseline.json'
+# 路径一律用 Join-Path 分段拼（不写 '.harness\x.json' 反斜杠字面量）：
+# Linux/pwsh 上反斜杠不是分隔符，会变成文件名里的字符 → 基线「找不到」→ 脚本走
+# 「无基线 → 初始化并 exit 0」分支，**CI 里的棘轮会静默变成永远通过**。
+$baselinePath = Join-Path (Join-Path $repoRoot '.harness') 'depth-baseline.json'
 
 # 阈值常量（改这里必须同步改 .harness/rules/编码规范.md）
 $FILE_LIMIT = 1000
@@ -54,11 +59,21 @@ if (-not $prodFiles) {
     exit 2
 }
 
+# 相对路径：手工剥前缀 + 归一两种分隔符（.NET Framework 无 Path.GetRelativePath，
+# 且 Windows 写死的反斜杠在 Linux runner 上匹配不到，会打印绝对路径）。
+function Get-RepoRelPath($fullPath) {
+    $rel = $fullPath.Substring($repoRoot.Length)
+    return ($rel -replace '^[\\/]+', '')
+}
+
 $fileStats = foreach ($f in $prodFiles) {
     [pscustomobject]@{
-        Path  = $f.FullName.Replace("$repoRoot\", "")
+        Path  = Get-RepoRelPath $f.FullName
         # 口径：**非空行**（不含空行）。声明见文件头「口径声明」，别与函数口径混用。
-        Lines = (Get-Content $f.FullName | Measure-Object -Line).Lines
+        # 不用 `Measure-Object -Line`：它对空白行的处理是实现的细节（Windows 5.1 实测
+        # 不计空行，但把口径押在 cmdlet 行为上，跨平台/跨版本一旦变化就会让棘轮假红或
+        # 假绿）。这里显式过滤，口径与实现一一对应。
+        Lines = @(Get-Content $f.FullName | Where-Object { $_.Trim() -ne '' }).Count
     }
 }
 
@@ -111,7 +126,7 @@ foreach ($f in $prodFiles) {
             if ($sig.Length -gt 80) { $sig = $sig.Substring(0, 80) + '…' }
             [void]$longFuncs.Add([pscustomobject]@{
                 Lines = $len
-                File  = $f.FullName.Replace("$repoRoot\", "")
+                File  = Get-RepoRelPath $f.FullName
                 Sig   = $sig
             })
         }
