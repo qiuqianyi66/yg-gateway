@@ -151,6 +151,24 @@
 - **状态**：三条都在提交前被自己发现并修回，没有进入历史。候选：把「追加型改动先看 `git diff --stat`」
   写进提交前自检清单（`.harness/rules/CODE-STANDARDS-CHECKLIST.md` §十）。
 
+### L-11｜测试必须和它依赖的生产改动同一个提交 —— Seen: 1（**会让 HEAD 本身跑不过**）
+
+- **Seen 1**（2026-10-16，CI 首跑）：`internal/panel/coverage_handlers_test.go:1182` 断言面板响应里
+  有 `cost_ppm == 500` / `cost_samples == 1`，而产出这两个字段的 `internal/panel/panel.go` 改动**尚未提交**
+  （并行会话的工作区改动，+23 行）→ **本地 `go test ./...` 全绿，CI 红**。
+  同一根因还顺带暴露了另一件事：`panel.go` 在 **HEAD 上有 gofmt 漂移**，而本地因为工作区版本已被
+  改过/格式化过所以看不出来。
+- **危害**：这不是「测试写错了」，而是**提交的可复现性被破坏**——任何人 clone 到 HEAD 都会红；
+  而当事人本地永远绿，于是很容易误判成「CI 环境有问题」。
+  它同时说明「本地绿」作为证据的边界：**本地工作区可能含未提交改动**，CI 跑的是 HEAD。
+- **规则**：
+  1. 提交前用**干净 HEAD 的独立工作树**再跑一次（最快自查）：
+     `git worktree add "$env:TEMP\ci-check" HEAD --detach` → 进去 `go test ./... -count=1` → `git worktree remove`
+     （本次就是这么定位的：在 HEAD 工作树里 `TestPanelHandlersModels` 立刻复现）；
+  2. 测试与它依赖的生产改动**同一个提交**；做不到就先别提交那个测试；
+  3. 看到「本地绿、CI 红」的第一反应是查「HEAD 与工作区的差集」，不是怀疑 CI。
+- **状态**：本次已定位并记录；修复需并行会话把 panel WIP 提交（本会话未越界代提交）。
+
 ## 二、已知 flake（待修缺陷，不是流程教训）
 
 | flake | 现象 | 现状 |
