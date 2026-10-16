@@ -321,7 +321,7 @@ D5 先实测再定（实测支持声明，故保持声明）。
 | T4 | ✅ | `c7838cc` | R8 golden（`testdata/r8_protocol.golden`，159 行 / 10 section）；7 条 R8 定向变异 **7/7 CAUGHT**（精确到行）；比对器「任意字节篡改都可检出」自证；顺带闭掉 `wb2api-night-*` 此前**无人断言**的缺口 |
 | T5 | ✅ | `8a6acd2` | `server -count=3` 与 `pool -count=20` 全绿（本会话独立复现）；EWMA 用可注入时钟（生产 `nowFn==nil` 逐位等价）；两包 `TestMain` 沙箱 + R1 守卫（带可复现负向探针）。**见修正 ①** |
 | T6 | ✅ | `e8a51db` `abfd580` | ADR-008（棘轮选型，含两处学费）；`.harness/LESSONS.md`（Seen 计数制，8 条坑 + 3 条 flake 单列） |
-| T7 | ✅（P1/P2） | `d43ea04` `8f274d7` | credit 与 cache-miss 的「未知冒充 0」收掉；两条反向变异均 CAUGHT；P3/P4 未做（PRD §七给理由） |
+| T7 | ✅（P1–P4） | `d43ea04` `8f274d7` `d311eb9` | credit 与 cache-miss 的「未知冒充 0」收掉；P3（anthropic stream 类型错，只留痕不改行为）、P4（`cmd/login` 4xx 分档）也已补做；三组反向变异全部 CAUGHT |
 | T8 | ✅ | `0cb5fa2` | cc-switch 深读落盘（170 行 / 60 处 file:line / observation-inference-unknown 标注 + 对照本仓 14 行）。**见修正 ②** |
 | T9 | ✅（待重启生效） | `8ce32df` | provider 级 `defaultInput` + `displayName` 反引号修复；网关目录实测 21 模型全 `supports_images=true`（过声明 0 / 欠声明 1）；实发图 2 次——模型回「图片只有一块纯红色，无有效信息」= **图片真到模型**。**见修正 ③** |
 | T10 | ✅ | `4be7517` | `review.md` 改为按路径分级要求（实测 12 个目录只有 2 个配了它）+ 补上一轮 L2 的 review.md |
@@ -343,12 +343,34 @@ reqlog 记录**不含请求体**（21 个字段清单见 `.harness/changes/2026-
 ④ **T3 的空缺已填上，但结论有边界**：upstream 只找到 1 处真缺口、panel 5/5 干净——「大包不一定更脏」
 这个观察只对**这 10 条变异**成立，不代表穷尽核验。
 
-### 本轮未尽事项（如实登记）
+### 本轮未尽事项（如实登记 · 2026-10-16 收尾更新）
 
-1. T7 的 P3（`anthropic.go` 的 `"stream":"true"` 类型错）与 P4（`cmd/login` 4xx 分档）未做。
-2. T5 的结构性根治（`dynamicModelsCache` 搬进 Handler）未做。
-3. R8 golden 覆盖 `RunNightChats`，其**不可注入的 4s sleep** 使 `internal/upstream` 单轮 7s→11s。
-4. CI `gate` job **首次运行待确认**（本机无 Linux；已消除的两处平台依赖见 T2）。
-5. T9 的配置**需重启 dsh 才生效**（本会话运行在 dsh 内，未擅自重启会话宿主）。
-6. `.harness/LESSONS.md` L-3（单引号吞变量）已 Seen 2，机器检查要改 `scripts/pre-commit.ps1`，按机制
-   **Seen 3 必落地**。
+**已在这轮末尾做掉的**：
+
+1. ~~T7 的 P3/P4 未做~~ → **已做**（`d311eb9`）：P3 只改可观测性不改分支（`anthropicStreamIntent`），
+   P4 改 `cmd/login` 的 4xx 分档（`pollFailureMessage`：401/403 归「被拒」、404 归「端点/realm 不匹配」）；
+   既有测试的分档注释本就预告了这次变更，按指引把两条用例翻成正断言，另加 404 一条。反向变异 CAUGHT。
+2. ~~T9 待重启生效~~ → **已完成闭环**：dsh 于 **17:37:42** 重启并重写 `cordis.yml`；
+   `cordis.patch.yml` 与入库快照 SHA256 一致（`A61C16D7…`）；**用户实测发图可用**（用户观察——
+   网关 reqlog 无法区分那一次请求，因为它不含请求体，见修正 ③）。
+3. ~~备份链未清理~~ → **已收敛**（移动而非删除，可逆）：早于图片修复的 4 个 `.bak-*` 已移入
+   `~/.dsh/profiles/desktop/.bak-archive/`，并附 `README.txt` 明确「不要用它们覆盖现网配置」及原因；
+   现网目录只留 `bak-img-*` 与 `bak-20261016-defaultinput` 两个。
+4. `.harness/LESSONS.md` L-1（PowerShell 引号陷阱）**Seen 3 已落地机器检查**（`b8839e7`）：
+   `pre-commit.ps1` 检查 3/6 —— 新增 `*.ps1` 行里出现「反斜杠 + 双引号」即失败，带负向探针验证。
+   第 3 次踩坑就是本轮提交 T7-P3/P4 时（提交信息里的转义引号把 PS 串截断 → git 报路径在仓库外、
+   提交根本没发生）——**提交信息一律写文件 + `git commit -F`** 已成为该条的最佳实践。
+
+**仍未做**：
+
+1. T5 的结构性根治（`dynamicModelsCache` 搬进 Handler）未做——新增 models 用例忘记
+   `resetDynamicModelsCache()` 仍会复发。
+2. R8 golden 覆盖 `RunNightChats`，其**不可注入的 4s sleep** 使 `internal/upstream` 单轮 7s→11s。
+3. **CI `gate` job 首次运行仍待确认**：`git push` 需要凭据，而本机 `gh` 未登录
+   （`gh auth login` 或 PAT 之后即可）。**已先做过安全扫描**：47 个待推送提交里
+   无 `auths/`、`config.json`、`*.exe`、密钥形态（`sk-`/`ghp_`/`Bearer <长串>`/私钥块）命中——
+   但注意**该远端仓库是 public**，push 即公开。
+4. **T7 的改动尚未部署到生产实例**（`D:\yg-gateway\yg-gateway.exe` 仍是旧构建）：
+   新字段 `cache_miss_unknown` 至今未在产线日志出现即为证。部署前必须备份（R15）并冒烟；
+   且**不要用当前工作区构建**——工作区含并行会话未提交的 `internal/panel/*`（会一起 embed 进二进制）。
+   部署属并行会话的既定工作流（交接文档 §6），本轮未越界代做。
