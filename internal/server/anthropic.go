@@ -4,11 +4,42 @@ import (
 	"bytes"
 	"encoding/json"
 	"io"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 )
+
+// anthropicStreamIntent 解析请求体的 stream 字段，返回「是否流式」与一条**诊断说明**（note）。
+//
+// 三态语义（与 REQ-usage-unknown-admission 同一条纪律：**未知不得冒充某个具体结论**）：
+//   - 字段合法（true/false）：note 为空；
+//   - 字段缺失：保持既有默认（非流式），note 为空——缺省不是异常；
+//   - 字段**类型非法**（如 `"stream":"true"` 字符串）或 body 非法 JSON：**未知**。
+//     行为保持既有（走非流式），但必须返回 note 让调用方留痕：
+//     旧实现 `_ = json.Unmarshal(body, &peek)` 把类型错静默吞掉，于是「我们不知道客户端想要什么」
+//     被记成了「客户端要非流式」，客户端也不会知道自己的请求被降级了。
+//
+// 为什么只留痕不改分支：改分支选择是**行为变更**（可能把非流式请求改派到流式路径），
+// 应当单独走 PRD + 冒烟，不混在可观测性修复里。
+func anthropicStreamIntent(body []byte) (stream bool, note string) {
+	var peek struct {
+		Stream json.RawMessage `json:"stream"`
+	}
+	if err := json.Unmarshal(body, &peek); err != nil {
+		return false, "body 不是合法 JSON（" + err.Error() + "）：按非流式处理，后续 transform 会返回 400"
+	}
+	if len(peek.Stream) == 0 {
+		return false, ""
+	}
+	var s bool
+	if err := json.Unmarshal(peek.Stream, &s); err != nil {
+		return false, "stream 字段类型非法（" + strings.TrimSpace(string(peek.Stream)) + "）：按非流式处理；" +
+			"若客户端本意是流式，请把该字段改成布尔值"
+	}
+	return s, ""
+}
 
 // anthropicReq / anthropicResp 是 Anthropic Messages API 的最小子集。
 // 只实现 MVP 非流式所需字段；其余字段（tools / stop_sequences / metadata）忽略。
@@ -123,10 +154,11 @@ func (h *Handler) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var peek struct {
-		Stream bool `json:"stream"`
+	streamReq, streamNote := anthropicStreamIntent(body)
+	if streamNote != "" {
+		// 未知留痕：不再静默降级（见 anthropicStreamIntent 注释）。
+		log.Printf("WARN: [server] anthropic /v1/messages: %s", streamNote)
 	}
-	_ = json.Unmarshal(body, &peek)
 
 	openAIBody, err := transformAnthropicToOpenAI(body)
 	if err != nil {
@@ -138,7 +170,7 @@ func (h *Handler) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 	internalReq.Body = io.NopCloser(bytes.NewReader(openAIBody))
 	internalReq.Header.Set("Content-Type", "application/json")
 
-	if peek.Stream {
+	if streamReq {
 		h.anthropicStream(w, internalReq)
 		return
 	}
