@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"yg-gateway/internal/auth"
 )
@@ -226,6 +227,10 @@ func r8BuildGolden(t *testing.T) string {
 			return nil, fmt.Errorf("unexpected path %s", q.Path)
 		}
 	}))
+	// N4：golden 只关心报文内容，不关心真实节奏——注入空等待，免掉 4s。
+	// 「生产默认间隔是 4s」由 blackcat_test.go 的 TestNightChatsGapIsInjectable 单独钉住，
+	// 因此这里跳过等待不会让「节奏被改小」失去覆盖。
+	nc.SetNightChatSleep(func(time.Duration) {})
 	if _, err := nc.RunNightChats(upstreamhttpCNAuth(), 1); err != nil {
 		t.Fatalf("RunNightChats 失败，golden 无法完整生成：%v", err)
 	}

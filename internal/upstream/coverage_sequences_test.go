@@ -2170,6 +2170,10 @@ func TestUpstreamHTTPRunNightChatsSuccess(t *testing.T) {
 	}))
 	a := upstreamhttpCNAuth()
 
+	// N4：夜猫子的 4s 间隔改为可注入——本用例只验 HTTP 形状，不欠真实等待。
+	// 生产默认间隔（4s）本身由 blackcat_test.go 的 TestNightChatsGapIsInjectable 钉住。
+	c.SetNightChatSleep(func(time.Duration) {})
+
 	ok, err := c.RunNightChats(a, 1)
 	if err != nil {
 		t.Fatalf("RunNightChats: %v", err)
