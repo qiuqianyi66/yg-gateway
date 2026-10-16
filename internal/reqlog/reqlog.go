@@ -80,10 +80,14 @@ type Event struct {
 	HasCredit        bool      `json:"credit_known"`
 	// CacheHitTokens / CacheMissTokens 上游前缀缓存命中/未命中 token（issue #92）。
 	// 上游未回该维度时两者皆零值省略；hit=0 + miss>0 即整段未命中。
-	CacheHitTokens  int64  `json:"cache_hit_tokens,omitempty"`
-	CacheMissTokens int64  `json:"cache_miss_tokens,omitempty"`
-	ClientIP        string `json:"client_ip,omitempty"`
-	UserAgent       string `json:"user_agent,omitempty"`
+	CacheHitTokens  int64 `json:"cache_hit_tokens,omitempty"`
+	CacheMissTokens int64 `json:"cache_miss_tokens,omitempty"`
+	// CacheMissUnknown miss **未知**（上游既没给 prompt_cache_miss_tokens，prompt 也不可用）：
+	// 此时不写 cache_miss_tokens 数字，只打这个标记 —— 否则 0 会被读成「全部命中」。
+	// 纯增量字段：观察到的 0 与历史行都不出现它（REQ-usage-unknown-admission / T7）。
+	CacheMissUnknown bool   `json:"cache_miss_unknown,omitempty"`
+	ClientIP         string `json:"client_ip,omitempty"`
+	UserAgent        string `json:"user_agent,omitempty"`
 	// KeyID / KeyName 鉴权命中的下游 Key 身份（多 Key 派发归因，ADR-001 F-005）。
 	// 只存短稳定 id 与展示名，不存 Key 明文、不存 Authorization 原文（R1/R2）。
 	KeyID   string `json:"key_id,omitempty"`

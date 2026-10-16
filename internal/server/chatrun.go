@@ -362,8 +362,13 @@ func (run *chatRun) serveStream(w http.ResponseWriter, acct *auth.Auth, rc io.Re
 		}
 	}
 	credit, hasCredit := stats.Credit()
-	if hit, miss, ok := stats.CacheTokens(); ok {
-		st.cacheHit, st.cacheMiss, st.hasCache = hit, miss, true
+	if hit, miss, missKnown, ok := stats.CacheTokens(); ok {
+		if missKnown {
+			st.cacheHit, st.cacheMiss, st.hasCache = hit, miss, true
+		} else {
+			// 与非流式同口径：miss 未知不写 0，只标记未知（见 CacheTokens 注释）。
+			st.cacheHit, st.cacheMissUnknown = hit, true
+		}
 	}
 	run.recordAttempt(acct.UID, stats.Usage(), credit, hasCredit, attemptStarted, stats.TTFB())
 	// WARN 信号放 recordAttempt 之后：st.promptTokens 此时才是本次的观测值。
@@ -435,11 +440,25 @@ func (run *chatRun) serveNonStream(w http.ResponseWriter, acct *auth.Auth, rc io
 		log.Printf("WARN: [server] non-stream model=%s: saw %d native tool call block(s) but repaired none (tool names known=%d)",
 			bareModel, m, len(declaredTools))
 	}
-	credit, total, hasCredit := usageCreditTotal(resp)
+	credit, total, hasCredit, creditUnknown := usageCreditTotal(resp)
+	if creditUnknown {
+		// 未知不得静默：不记样本（hasCredit=false 已挡住 NoteModelCost），但要留下可查的痕迹。
+		// 该 (uid,model) 的「成本未知」由 TrackCostUnknown 登记的条目保持未消解（不调用
+		// NoteModelCost 即不消解），因此 /metrics 的 unknowns_open 会持续非零 —— 这是信号，不是故障。
+		log.Printf("WARN: [server] non-stream acct=%s model=%s: usage.credit 非法/缺失（类型错或非数值），"+
+			"本次不写成本台账（unknown，非 0）；该组合的成本未知保持未消解",
+			logfmt.Label(acct.UID, acct.Nickname), bareModel)
+	}
 	if usage, ok := resp["usage"].(map[string]any); ok {
 		if hit, okH := upstream.UsageCacheHitTokens(usage); okH {
-			miss, _ := upstream.UsageCacheMissTokens(usage)
-			st.cacheHit, st.cacheMiss, st.hasCache = int64(hit), int64(miss), true
+			miss, okM := upstream.UsageCacheMissTokens(usage)
+			if okM {
+				st.cacheHit, st.cacheMiss, st.hasCache = int64(hit), int64(miss), true
+			} else {
+				// miss 未知（没给 prompt_cache_miss_tokens 且 prompt 不可用）：**不得**当 0 ——
+				// 0 会被当成「全部命中」，把命中率抬到 100% 并压掉低命中率告警（issue #92）。
+				st.cacheHit, st.cacheMissUnknown = int64(hit), true
+			}
 		}
 	}
 	run.recordAttempt(acct.UID, usageDeltaFromResponse(resp), credit, hasCredit, attemptStarted, 0)

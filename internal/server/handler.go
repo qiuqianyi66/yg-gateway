@@ -979,18 +979,27 @@ func promptTooLongMessage(body string) string {
 }
 
 // usageCreditTotal 从聚合响应取 usage.credit 与 total_tokens（成本台账非流式入口）。
-// 任一字段缺失/非法 → ok=false（不记录）。
-func usageCreditTotal(resp map[string]any) (credit float64, total int, ok bool) {
+//
+// 三态语义（REQ-usage-unknown-admission / T7）：**未经观察的值不得冒充 0**。
+//   - usage 缺失 / total_tokens 缺失或非法：没有可信的分母，`ok=false`（旧行为保持）
+//   - credit 缺失或非法（例如上游给了字符串 "0.1"）：`ok=false, creditUnknown=true` ——
+//     旧实现 `c, _ := usage["credit"].(float64)` 会用零值兜底，把「未知」当成
+//     「免费」写进成本台账（per1k=0 的观测样本），于是一个付费号可能被判成免费号被优先选号。
+//     true 的 credit=0（真免费模型）是**观察**，仍走正常分支——这是防过度纠正的硬边界。
+func usageCreditTotal(resp map[string]any) (credit float64, total int, ok bool, creditUnknown bool) {
 	usage, _ := resp["usage"].(map[string]any)
 	if usage == nil {
-		return 0, 0, false
+		return 0, 0, false, false
 	}
-	c, _ := usage["credit"].(float64)
-	t, _ := usage["total_tokens"].(float64)
-	if t <= 0 {
-		return 0, 0, false
+	t, okT := usage["total_tokens"].(float64)
+	if !okT || t <= 0 {
+		return 0, 0, false, false
 	}
-	return c, int(t), true
+	c, okC := usage["credit"].(float64)
+	if !okC {
+		return 0, int(t), false, true
+	}
+	return c, int(t), true, false
 }
 
 // rotateBackoff 轮转间指数退避 + 抖动（WAF 403 修复 P0-2）：第 i 次轮转失败

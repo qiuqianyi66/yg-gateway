@@ -7,6 +7,10 @@
 - 相关纪律：`AGENTS.md`「事实语义纪律（三态分离）」与「Unknown 消解纪律」；
   `docs/adr/ADR-007-evidence-and-unknown.md`
 
+> **实施状态（2026-10-16）**：**P1 与 P2 已实施并实测有牙齿**（两条反向变异均 CAUGHT，
+> 见 `.harness/changes/2026-10-16-t7-unknown-admission/summary.md`）；
+> **P3、P4 未实施**（理由见 §七）。实施中有一处设计偏差，见 §三.0。
+
 ## 一、问题（为什么必须改）
 
 本仓的养号决策直接消费成本台账与缓存统计。当**解析失败**被迫用零值兜底时，
@@ -36,7 +40,22 @@ P1–P3 是同一类错误：**把「不知道」编码成某个具体值**。P4
 
 ## 三、设计（写台账入口的准入，而不是逐处打补丁）
 
-1. **术语固定**：`NoteModelCost(uid, model, credit, tokens)` 的语义收紧为「**这是一次观察**」。
+### 0. 实施偏差（如实记录）
+
+原计划在 `internal/pool` 的 `NoteModelCost` **入口**加准入（例如新增 `NoteModelCostUnknown`）。
+实施时判定**不需要动 pool 的 API**，理由是：
+
+- 受伤的唯一入口是**解析点**：`usage["credit"].(float64)` 零值兜底。`float64` 本身无法携带
+  provenance，所以「一个 `credit=0` 是观察还是未知」在 pool 入口**原理上不可判定**——
+  加参数只是把同一个判断挪个地方，还要改所有调用点与公开 API。
+- 「不消解」本身就是 pool 侧已有的准入语义：`TrackCostUnknown` 在请求路径登记，
+  `NoteModelCost` 才消解。所以只要**不调用** `NoteModelCost`，该 (uid,model) 的成本未知就保持未消解
+  （`/metrics` 的 `unknowns_open` 持续非零 = 可见信号）。
+- 因此实施为：**在解析点把三态判出来**（观察 / 无分母 / 未知），只在「观察」时调 `NoteModelCost`，
+  「未知」时打 WARN 且不消解。这与「写台账入口的准入」是同一件事，只是把准入放在了
+  唯一能判定的位置。**`NoteModelCost` 的语义同时被收紧并写进注释**：它只接受观察值。
+
+### 1. 术语固定：`NoteModelCost(uid, model, credit, tokens)` 的语义收紧为「**这是一次观察**」。
    调用方只有在**确实解析到上游数值**时才可调用它。
 2. **新增 unknown 入口**（`internal/pool`）：`NoteModelCostUnknown(uid, model, reason string)`：
    - **不写**成本样本（不产生 `per1k=0` 的假观测）；
@@ -60,8 +79,8 @@ P1–P3 是同一类错误：**把「不知道」编码成某个具体值**。P4
 |---|---|---|---|
 | A1 | 上游末帧 `usage.credit` 为字符串 `"0.1"`（类型错）而 `total_tokens` 正常 | 该请求结束 | 台账**不新增**该 (uid,model) 的成本样本（`count` 不变）；`unknowns_open` +1；日志出现带脱敏 uid 的 WARN |
 | A2 | 上游末帧 `usage.credit` 为数值 `0`（真实免费模型） | 该请求结束 | 仍按**观察**记录（tier 0 样本可写）——free 模型不得被误判为 unknown（防过度纠正） |
-| A3 | 上游没给 miss 字段（`UsageCacheMissTokens` 返回 `ok=false`） | 非流式请求结束 | reqlog 行**无** `cache_miss_tokens` 数字、含 `cache_miss_known: false` |
-| A4 | 上游显式给了 `prompt_cache_miss_tokens: 0` | 请求结束 | reqlog 行 `cache_miss_tokens: 0` 且 `cache_miss_known: true`（0 是观察） |
+| A3 | 上游没给 miss 字段且 prompt 不可用（`UsageCacheMissTokens`/`CacheTokens` 返回 miss 未知） | 请求结束 | reqlog 行**无** `cache_miss_tokens` 数字、含 `cache_miss_unknown: true`；该次**不进入**命中率统计（不喂 `noteCacheTokens`） |
+| A4 | 上游显式给了 `prompt_cache_miss_tokens: 0` | 请求结束 | 按**观察**处理（`missKnown=true`、进入命中率统计）；reqlog 行**不出现** `cache_miss_unknown`（0 因 `omitempty` 也不出现数字，历史行形态不变） |
 | A5 | 同上（A3/A4）在**流式**路径 | 流式请求结束 | 与非流式口径一致（两处同改，无分叉） |
 | A6 | `anthropic` 请求体 `"stream":"true"`（字符串） | 请求处理 | 仍走当前分支；日志出现 unknown/WARN（不静默） |
 | A7 | 上述每条改动 | 单测 | 每条新断言都能回答「还原什么行为会让它 FAIL」；`go test ./... -count=1` 全绿 |
@@ -82,3 +101,10 @@ P1–P3 是同一类错误：**把「不知道」编码成某个具体值**。P4
 - **不碰** `internal/panel/**`（并行会话在改）、`README.md`、`HANDOFF.md`（并行会话在改）。
 - 依赖方向：新增 `pool → unknown`？**已存在**（白名单里 `pool → auth, evidence, logfmt, unknown`），
   改动后必须仍 `check-boundaries.ps1` 退出 0。
+
+## 七、未实施项与理由（不粉饰）
+
+| # | 项 | 状态 | 理由 |
+|---|---|---|---|
+| P3 | `internal/server/anthropic.go` 的 `"stream":"true"`（字符串）类型错被吞 | **未实施** | 它的后果是「走错分支」而不是「写错数字」；修它要动 Anthropic 入站分支选择，属**行为变更**（可能影响请求路由），应单独立 PRD + 冒烟，不能与计量口径混在一个提交里 |
+| P4 | `cmd/login/main.go` 的 4xx 全归「登录未完成」 | **未实施** | 这是 CLI 提示文案与状态分档（`upstream-hint.md` 同族），不是计量口径；混进来会让本需求的验收标准变形 |

@@ -65,6 +65,10 @@ type chatStat struct {
 	cacheHit  int64
 	cacheMiss int64
 	hasCache  bool
+	// cacheMissUnknown：hit 观测到、但 miss **未知**（既无显式 miss 字段、prompt 也不可用）。
+	// 与 hasCache 互斥地表达「只有半个观测」：不进命中率统计（否则 0 冒充全命中），
+	// 但要在 reqlog 里留标记，使「这次为什么没有缓存统计」可查（T7）。
+	cacheMissUnknown bool
 
 	// 调用来源（客户端 IP / User-Agent）。空 = 未采集（logging.request_client_info
 	// 关闭，或非 chat 路径），展示层一律以 "-" 兜底。
@@ -218,21 +222,26 @@ func (s *chatStatsReader) parseSSELine(line string) {
 	}
 }
 
-// CacheTokens 返回末帧 usage 的缓存命中 / 未命中 token 数。miss 缺失时按
-// prompt - hit 推导；hit 与 miss 均不可得时 ok=false（不参与命中率统计）。
-func (s *chatStatsReader) CacheTokens() (hit, miss int64, ok bool) {
+// CacheTokens 返回末帧 usage 的缓存命中 / 未命中 token 数。
+//
+// 四态返回（REQ-usage-unknown-admission / T7）：
+//   - ok=false：hit 不可得（上游没回缓存维度）→ 不参与命中率统计
+//   - ok=true, missKnown=true：miss 是**观察**（上游显式给了，或由 prompt-hit 推导而来）
+//   - ok=true, missKnown=false：**miss 未知**（既没显式值、prompt 也不可用）——
+//     调用方**不得**把它当 0：0 等于「全部命中」，会把命中率抬到 100% 并压掉
+//     低命中率告警（issue #92 的那个信号），即用未知冒充了观察。
+func (s *chatStatsReader) CacheTokens() (hit, miss int64, missKnown, ok bool) {
 	if !s.hasCacheHit {
-		return 0, 0, false
+		return 0, 0, false, false
 	}
 	hit = int64(s.cacheHit)
-	miss = int64(s.cacheMiss)
-	if !s.hasCacheMiss {
-		if !s.hasPromptTokens || s.promptTokens < s.cacheHit {
-			return hit, 0, true
-		}
-		miss = int64(s.promptTokens - s.cacheHit)
+	if s.hasCacheMiss {
+		return hit, int64(s.cacheMiss), true, true
 	}
-	return hit, miss, true
+	if !s.hasPromptTokens || s.promptTokens < s.cacheHit {
+		return hit, 0, false, true
+	}
+	return hit, int64(s.promptTokens - s.cacheHit), true, true
 }
 
 // SawErrorFrame 报告流中是否透传过 SSE error 帧。
@@ -447,6 +456,9 @@ func (t *requestTrace) event(status int) reqlog.Event {
 		e.HasCredit = s.hasCredit
 		e.CacheHitTokens = s.cacheHit
 		e.CacheMissTokens = s.cacheMiss
+		// 未知与 0 必须在审计流里可区分：miss 未知时只打标记、不打数字
+		// （CacheMissTokens 为 0 时因 omitempty 本就不出现，所以历史行行为不变）。
+		e.CacheMissUnknown = s.cacheMissUnknown
 	}
 	e.ClientIP = t.clientIP
 	e.UserAgent = t.userAgent

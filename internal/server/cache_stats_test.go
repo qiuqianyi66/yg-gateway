@@ -21,23 +21,23 @@ func TestStatsReaderCacheTokens(t *testing.T) {
 	feedStatsLines(s,
 		`data: {"usage":{"prompt_tokens":1000,"completion_tokens":5,"total_tokens":1005,"credit":0.1,"prompt_cache_hit_tokens":900,"prompt_cache_miss_tokens":100}}`,
 	)
-	if hit, miss, ok := s.CacheTokens(); !ok || hit != 900 || miss != 100 {
-		t.Fatalf("hit=%d miss=%d ok=%v, want 900/100/true", hit, miss, ok)
+	if hit, miss, missKnown, ok := s.CacheTokens(); !ok || !missKnown || hit != 900 || miss != 100 {
+		t.Fatalf("hit=%d miss=%d missKnown=%v ok=%v, want 900/100/true/true", hit, miss, missKnown, ok)
 	}
 
 	s2 := newChatStatsReaderSince(strings.NewReader(""), time.Now())
 	feedStatsLines(s2,
 		`data: {"usage":{"prompt_tokens":8500,"prompt_cache_hit_tokens":8400}}`,
 	)
-	if hit, miss, ok := s2.CacheTokens(); !ok || hit != 8400 || miss != 100 {
-		t.Fatalf("derived miss: hit=%d miss=%d ok=%v, want 8400/100/true", hit, miss, ok)
+	if hit, miss, missKnown, ok := s2.CacheTokens(); !ok || !missKnown || hit != 8400 || miss != 100 {
+		t.Fatalf("derived miss: hit=%d miss=%d missKnown=%v ok=%v, want 8400/100/true/true", hit, miss, missKnown, ok)
 	}
 
 	s3 := newChatStatsReaderSince(strings.NewReader(""), time.Now())
 	feedStatsLines(s3,
 		`data: {"usage":{"prompt_tokens":100,"completion_tokens":5}}`,
 	)
-	if _, _, ok := s3.CacheTokens(); ok {
+	if _, _, _, ok := s3.CacheTokens(); ok {
 		t.Fatal("无缓存字段应 ok=false")
 	}
 }
