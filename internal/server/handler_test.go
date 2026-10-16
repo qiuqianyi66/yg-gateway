@@ -847,20 +847,15 @@ func TestChatHTTP4xxClientDoesNotPenalize(t *testing.T) {
 	}
 }
 
-// resetDynamicModelsCache 清空包级全局「动态模型目录缓存」（ids/fetched/lastFail）。
+// ageModelsFailCooldown 把某个 Handler 的「模型目录拉取失败时间戳」拨回 10 分钟前，
+// 用来模拟 5min 负缓存冷却期结束（仅此一处需要碰缓存内部：时间旅行只能改时间戳本身）。
 //
-// 为什么要显式重置（T5）：dynamicModelsCache 是**包级全局**，跨测试存活、且带 5min
-// 负缓存。任何「假上游返回空目录/500」的用例都会把 lastFail 写成 now，于是**同一二进制
-// 内后续**（含 -count>1 的下一轮）所有 /v1/models 用例都被负缓存短路成空列表——
-// TestModelsEndpoint 就是这么红的（-count=3 第 1 轮绿、第 2/3 轮 models count=0）。
-// 这是进程内状态，TestMain 的沙箱（HOME/cwd/TEMP）隔离不了它，只能每个用例自己清。
-// 新增依赖模型目录的用例**必须**首行调用本函数。
-func resetDynamicModelsCache() {
-	dynamicModelsCache.Lock()
-	dynamicModelsCache.ids = nil
-	dynamicModelsCache.fetched = time.Time{}
-	dynamicModelsCache.lastFail = time.Time{}
-	dynamicModelsCache.Unlock()
+// 为什么不再有「每个用例首行清缓存」（N3）：缓存已是 Handler 的实例字段，每个 NewHandler
+// 自带一份空缓存，跨用例污染在构造上就不存在了——隔离不再依赖「记得调」这条纪律。
+func ageModelsFailCooldown(h *Handler) {
+	h.modelsCache.mu.Lock()
+	h.modelsCache.lastFail = time.Now().Add(-10 * time.Minute)
+	h.modelsCache.mu.Unlock()
 }
 
 // TestModelsEndpoint /v1/models 的 OpenAI 兼容契约：object=list、CN 模型 id 带 cn:
@@ -869,15 +864,13 @@ func resetDynamicModelsCache() {
 //
 // 为什么不再用 upstream.New()（T5 治 flake）：旧版走**真实上游**拉目录，结果取决于
 // 两件与本仓逻辑无关的事——(1) 运行机器能否访问上游；(2) 全局缓存里有没有同包其它
-// 用例留下的负缓存（见 resetDynamicModelsCache）。两者都会让「断言 modelList 组装
-// 逻辑」的用例红成「环境问题」。现在：重置缓存 + 假上游喂固定目录。
+// 用例留下的负缓存。两者都会让「断言 modelList 组装逻辑」的用例红成「环境问题」。
+// 现在：假上游喂固定目录；缓存已是 Handler 的实例字段（N3），第 (2) 件事在构造上不存在了。
 //
 // 牙齿：删掉 modelList 的 "cn:" 前缀拼接 → 前缀断言 FAIL；把 models() 的 data 写死空
 // → 数量与 id 断言 FAIL；删掉 applyModelInfoFields 里任一透出分支（credits/
 // supports_images/is_default/supported_efforts…）→ 对应字段断言 FAIL。
 func TestModelsEndpoint(t *testing.T) {
-	resetDynamicModelsCache()
-
 	// 6 个模型（>5）+ 含 glm-5.2：数量与关键 id 两条断言都需要它。
 	// glm-5.2 刻意带上真实上游会下发的全字段（credits/descriptionZh/tags/vendor/
 	// isDefault/能力旗标/reasoning 档位），用来钉住「字段透出 + 空值省略」契约。
@@ -997,9 +990,6 @@ func TestModelsEndpoint(t *testing.T) {
 }
 
 func TestModelsDynamic(t *testing.T) {
-	// 清缓存
-	resetDynamicModelsCache()
-
 	// 假上游返回动态模型（含 agents + maxInputTokens/maxOutputTokens + reasoning 档位）
 	up := newFakeUpstream(t, func(authz string) (int, string, bool) {
 		return 200, `{"code":0,"data":{"models":[{"id":"dyn-model-a","maxInputTokens":65536,"maxOutputTokens":8192,"reasoning":{"effort":"medium","supportedEfforts":["low","medium","high"]}},{"id":"dyn-model-b","maxInputTokens":131072,"maxOutputTokens":16384},{"id":"glm-9.9","maxInputTokens":262144,"maxOutputTokens":32768}],"agents":[{"name":"cli","models":["dyn-model-a","dyn-model-b","glm-9.9"]}]}}`, false
@@ -1063,19 +1053,14 @@ func TestModelsDynamic(t *testing.T) {
 	}
 
 	// 第二次调用走缓存（把上游关掉也成功）
-	dynamicModelsCache.RLock()
-	cached := len(dynamicModelsCache.ids)
-	dynamicModelsCache.RUnlock()
-	if cached != 3 {
-		t.Errorf("cache not populated: %d", cached)
+	if got := len(h.cachedModelsSnapshot()); got != 3 {
+		t.Errorf("cache not populated: %d", got)
 	}
 }
 
 func TestModelsDynamicFallsBackToStatic(t *testing.T) {
 	// 纯动态化（产品决策）：上游失败 → 空列表（200），不再回落静态表——
 	// 拉不出目录即意味着上游不可用，假名单只会让客户端选到 11102 的模型。
-	resetDynamicModelsCache()
-
 	p := testPoolWith(&auth.Auth{UID: "u1", AccessToken: "at1", ExpiresAt: 9999999999})
 	up := newFakeUpstream(t, func(authz string) (int, string, bool) {
 		return 500, `boom`, false
@@ -1097,8 +1082,6 @@ func TestModelsDynamicFallsBackToStatic(t *testing.T) {
 func TestModelsFetchFailurePenalizesAccount(t *testing.T) {
 	// 吸收上游 9832283：models 拉取失败只进负缓存，不 NoteError——
 	// NoteError 喂的是 chat 熔断器，models 端点 5xx 跨界惩罚 chat 通道健康号。
-	resetDynamicModelsCache()
-
 	p := testPoolWith(&auth.Auth{UID: "u1", AccessToken: "at1", ExpiresAt: 9999999999})
 	p.SetBreaker(1, time.Hour, time.Hour) // 熔断阈值 1：若仍罚号，一次 fetch 失败即熔断
 	up := newFakeUpstream(t, func(authz string) (int, string, bool) {
@@ -1117,8 +1100,6 @@ func TestModelsFetchFailurePenalizesAccount(t *testing.T) {
 }
 
 func TestModelsNegativeCacheOnFetchFailure(t *testing.T) {
-	resetDynamicModelsCache()
-
 	var calls atomic.Int32 // FetchModels 企业/v3 两路并发探测回调，计数须原子
 	up := newFakeUpstream(t, func(authz string) (int, string, bool) {
 		calls.Add(1)
@@ -1142,9 +1123,7 @@ func TestModelsNegativeCacheOnFetchFailure(t *testing.T) {
 	}
 
 	// 冷却期结束（把失败时间戳拨回 10 分钟前）→ 应重新 fetch。
-	dynamicModelsCache.Lock()
-	dynamicModelsCache.lastFail = time.Now().Add(-10 * time.Minute)
-	dynamicModelsCache.Unlock()
+	ageModelsFailCooldown(h)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest("GET", "/v1/models", nil))
 	if rec.Code != 200 {
@@ -1152,6 +1131,62 @@ func TestModelsNegativeCacheOnFetchFailure(t *testing.T) {
 	}
 	if got := calls.Load(); got != 4 {
 		t.Errorf("want 4 probes after cooldown (2 rounds x 2), got %d", got)
+	}
+}
+
+// TestModelsCacheNotSharedAcrossHandlers 钉住 N3：模型目录缓存是**每个 Handler 一份**，
+// 一个 Handler 的失败负缓存不得污染另一个。
+//
+// 为什么必须有一条这样的用例：T5 用「每个用例首行手动清一次模型目录缓存」治好了
+// -count=3 的 flake，但那是**约定**——新增用例忘记清就复发；而复发时的症状是
+// 「modelList 组装逻辑的用例红成环境问题」（-count>1 第 2 轮起 models count=0），
+// 极难归因。本用例**故意不做任何重置**，让隔离性由构造（每个 NewHandler 自带空缓存）保证。
+//
+// 牙齿（两步都必要，只有第 2 步会变成空转的假绿）：
+//  1. 前置断言：让一个 Handler 撞 500，并证明它的负缓存**真的生效**（第 2 次请求不再打上游，
+//     探测次数停在 2）。注意：这条断言在「包级全局」设计下可能拿到 0——因为别的用例
+//     可能已经把全局的 lastFail 写成了 now；那本身就是这个 bug 的症状之一。
+//  2. 主断言：另一个 Handler 打 /v1/models 必须拿到完整目录。
+//
+// 若缓存退回包级全局，第 2 步被第 1 步的负缓存短路成空列表 → 红。
+func TestModelsCacheNotSharedAcrossHandlers(t *testing.T) {
+	var failProbes atomic.Int32
+	upFail := newFakeUpstream(t, func(string) (int, string, bool) {
+		failProbes.Add(1)
+		return 500, `boom`, false
+	})
+	hFail := NewHandler(Config{
+		Pool:     testPoolWith(&auth.Auth{UID: "u1", AccessToken: "at1", ExpiresAt: 9999999999}),
+		Upstream: upFail,
+	})
+	for i := 0; i < 2; i++ {
+		rec := httptest.NewRecorder()
+		hFail.ServeHTTP(rec, httptest.NewRequest("GET", "/v1/models", nil))
+		if rec.Code != 200 {
+			t.Fatalf("失败态 Handler 第 %d 次仍应返 200 空列表，got %d body=%s", i+1, rec.Code, rec.Body)
+		}
+	}
+	if got := failProbes.Load(); got != 2 {
+		t.Fatalf("失败态 Handler 的上游探测次数应为 2（1 轮 = 企业端点 + /v3 两路，之后进它自己的负缓存），实际 %d", got)
+	}
+
+	upOK := newFakeUpstream(t, func(string) (int, string, bool) {
+		return 200, `{"code":0,"data":{"models":[{"id":"m-a"},{"id":"m-b"},{"id":"m-c"}]}}`, false
+	})
+	hOK := NewHandler(Config{
+		Pool:     testPoolWith(&auth.Auth{UID: "u1", AccessToken: "at1", ExpiresAt: 9999999999}),
+		Upstream: upOK,
+	})
+	rec := httptest.NewRecorder()
+	hOK.ServeHTTP(rec, httptest.NewRequest("GET", "/v1/models", nil))
+	if rec.Code != 200 {
+		t.Fatalf("code=%d body=%s", rec.Code, rec.Body)
+	}
+	var resp map[string]any
+	json.Unmarshal(rec.Body.Bytes(), &resp)
+	data, _ := resp["data"].([]any)
+	if len(data) != 3 {
+		t.Fatalf("另一个 Handler 被前一个 Handler 的失败负缓存污染：拿到 %d 个模型（期望 3）", len(data))
 	}
 }
 

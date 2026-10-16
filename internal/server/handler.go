@@ -182,6 +182,9 @@ type Handler struct {
 	// keyRPM per-key RPM 限流器（P0-3）：每把下游 key 独立 1 分钟窗口计数，
 	// 上限来自 live snapshot 的 key.RPM（热生效）。nil = 不限流。
 	keyRPM *keyRPMGuard
+	// modelsCache 动态模型目录缓存（10min TTL + 5min 失败负缓存）。**实例字段**而非
+	// 包级全局：每个 NewHandler 自带一份空缓存，用例之间天然隔离（N3，见类型注释）。
+	modelsCache modelsCache
 }
 
 // NewHandler 构建 handler。
@@ -542,12 +545,58 @@ func countsMapFrom(total, healthy, cooling, disabled, inFlightFull int) map[stri
 	}
 }
 
-// dynamicModelsCache 动态模型缓存。
-var dynamicModelsCache struct {
-	sync.RWMutex
+// modelsCache 动态模型目录的进程内缓存：id 目录 + 10min TTL + 5min 失败负缓存。
+//
+// 为什么是 Handler 的**实例字段**而不是包级全局（N3：T5 的结构性根治）：
+// 包级可变全局在进程内跨用例存活，TestMain 的沙箱（HOME/cwd/TEMP）隔离不了它——任何
+// 「假上游返回空目录/500」的用例都会把负缓存写成 now，于是同一二进制内后续（含 -count>1
+// 的下一轮）所有 /v1/models 用例都被短路成空列表。T5 当时的修法是「每个用例首行手动清一次
+// 这个缓存」，那是**约定**：新增用例忘清就复发，而复发症状是「组装逻辑的用例红成环境问题」，
+// 极难归因。改成实例字段后隔离由构造保证，不靠纪律。同包的
+// upstream.Client.fetchGlobalModelsCache 早就是「按实例持有、测试新建 Client 即隔离」
+// 的模式，本处与它对齐。
+//
+// 并发：读多写少（每个 TTL 窗口一次写），RWMutex 足够。ids 仍是**共享的只读切片**
+// （不复制，与改前逐位一致——调用方只读，不持有所有权）。
+type modelsCache struct {
+	mu       sync.RWMutex
 	ids      []upstream.ModelInfo
 	fetched  time.Time // 最近一次成功拉取时间
 	lastFail time.Time // 最近一次拉取失败时间（负缓存）
+}
+
+// snapshot 返回 TTL 内的成功快照；缓存冷、为空或已过期 → nil。
+// 命中判据（非空 + 未过期）与改前 fetchDynamicModels / cachedModelsSnapshot 两处逐位一致。
+func (c *modelsCache) snapshot() []upstream.ModelInfo {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if len(c.ids) == 0 || time.Since(c.fetched) >= dynamicModelsTTL {
+		return nil
+	}
+	return c.ids
+}
+
+// inFailCooldown 是否处于拉取失败的负缓存冷却期内（冷却期内不再请求上游）。
+func (c *modelsCache) inFailCooldown() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return !c.lastFail.IsZero() && time.Since(c.lastFail) < modelsFetchFailCooldown
+}
+
+// noteFail 记一次拉取失败（进 5min 负缓存）。
+func (c *modelsCache) noteFail() {
+	c.mu.Lock()
+	c.lastFail = time.Now()
+	c.mu.Unlock()
+}
+
+// store 记一次成功拉取，并清空负缓存（成功即证明上游可用）。
+func (c *modelsCache) store(infos []upstream.ModelInfo) {
+	c.mu.Lock()
+	c.ids = infos
+	c.fetched = time.Now()
+	c.lastFail = time.Time{}
+	c.mu.Unlock()
 }
 
 const (
@@ -746,18 +795,13 @@ func (h *Handler) fetchGlobalModels() ([]string, *auth.Auth) {
 // 无冷却窗口，客户端重试即放大请求量——负缓存正是为此设计（见 handler_test 吸收
 // 上游 9832283 的注释）；且 cachedModelsSnapshot（gateway_hint 判定）依赖缓存写入。
 func (h *Handler) fetchDynamicModels() []upstream.ModelInfo {
-	dynamicModelsCache.RLock()
-	if len(dynamicModelsCache.ids) > 0 && time.Since(dynamicModelsCache.fetched) < dynamicModelsTTL {
-		out := dynamicModelsCache.ids
-		dynamicModelsCache.RUnlock()
-		return out
+	if hit := h.modelsCache.snapshot(); len(hit) > 0 {
+		return hit
 	}
 	// 失败负缓存：冷却期内不再请求上游。
-	if !dynamicModelsCache.lastFail.IsZero() && time.Since(dynamicModelsCache.lastFail) < modelsFetchFailCooldown {
-		dynamicModelsCache.RUnlock()
+	if h.modelsCache.inFailCooldown() {
 		return nil
 	}
-	dynamicModelsCache.RUnlock()
 
 	uids := h.cfg.Pool.AvailableUIDsForRealm("cn")
 	if len(uids) == 0 {
@@ -772,29 +816,18 @@ func (h *Handler) fetchDynamicModels() []upstream.ModelInfo {
 		// 拉取失败只进负缓存（5min lastFail），不 NoteError：NoteError 喂的是 chat
 		// 熔断器，models 端点偶发 5xx 跨界惩罚 chat 通道健康的账号；
 		// models 拉取失败 ≠ 账号 chat 不可用。
-		dynamicModelsCache.Lock()
-		dynamicModelsCache.lastFail = time.Now()
-		dynamicModelsCache.Unlock()
+		h.modelsCache.noteFail()
 		return nil
 	}
-	dynamicModelsCache.Lock()
-	dynamicModelsCache.ids = infos
-	dynamicModelsCache.fetched = time.Now()
-	dynamicModelsCache.lastFail = time.Time{} // 成功则清空负缓存
-	dynamicModelsCache.Unlock()
+	h.modelsCache.store(infos)
 	return infos
 }
 
 // cachedModelsSnapshot 只读模型目录缓存（TTL 内快照）；缓存冷/空 → nil。
 // 不发起任何上游调用（hint 判定用：错误路径加一次 FetchModels 网络调用既拖慢
 // 错误响应、又污染上游调用语义）。
-func cachedModelsSnapshot() []upstream.ModelInfo {
-	dynamicModelsCache.RLock()
-	defer dynamicModelsCache.RUnlock()
-	if len(dynamicModelsCache.ids) == 0 || time.Since(dynamicModelsCache.fetched) >= dynamicModelsTTL {
-		return nil
-	}
-	return dynamicModelsCache.ids
+func (h *Handler) cachedModelsSnapshot() []upstream.ModelInfo {
+	return h.modelsCache.snapshot()
 }
 
 func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
@@ -1411,7 +1444,7 @@ func (h *Handler) hintContext(bareModel string, hasImage bool) upstream.HintCont
 	if bareModel == "" {
 		return ctx
 	}
-	for _, mi := range cachedModelsSnapshot() {
+	for _, mi := range h.cachedModelsSnapshot() {
 		if mi.ID == bareModel {
 			ctx.ModelInCatalog = true
 			ctx.ModelSupportsImages = mi.SupportsImages
