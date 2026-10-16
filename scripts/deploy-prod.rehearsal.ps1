@@ -55,7 +55,9 @@ if (Test-Path -LiteralPath $reports) { Remove-Item -LiteralPath $reports -Recurs
 New-Item -ItemType Directory -Force -Path $reports | Out-Null
 
 $failures = New-Object System.Collections.ArrayList
+$script:checkTotal = 0
 function Check($cond, $msg) {
+    $script:checkTotal++
     if ($cond) {
         Write-Host ('  [OK]   ' + $msg) -ForegroundColor Green
     } else {
@@ -356,13 +358,64 @@ try {
 }
 
 # --------------------------------------------------------------------------
+Section '场景 D：停服后替换失败 → 必须把旧版重新拉起来（C1 回归）'
+# --------------------------------------------------------------------------
+# 为什么必须有这条：A1/A2/B/C 都进不到「已停服、但替换失败」这条路——A1 在停服前就被预检拦下，
+# A2/B 都能替换成功。而那条路原来直接 exit 1 就走了，**没有任何分支重启旧版**：退出码表却写
+# 「生产未被改动或已恢复原状」。那是 L-9 要消灭的「生产停住」换了个触发点。
+# 本场景把「替换必然失败」造出来，断言「旧版仍在跑」。
+try {
+    [void](New-Sandbox $GoodExe)
+    $exePath = Join-Path $sandbox 'yg-gateway.exe'
+
+    Start-SandboxInstance 'pre-d'
+    Check ([bool](Get-SandboxListenerPid $port)) '沙箱服务已启动（前置状态：旧版在跑）'
+
+    # 让「替换」必然失败：以 FileShare.Read 独占（不给 FILE_SHARE_DELETE）打开目标 exe
+    # → 改名替换被拒；但镜像仍可被读取，所以「把旧版重新拉起」这条路本身是可用的。
+    # 不用 FileShare.None：那会连启动都被拒，场景就退化成「什么都起不来」，验不到修复点。
+    $lock = [System.IO.File]::Open($exePath, 'Open', 'Read', 'Read')
+    try {
+        $r = Invoke-Deploy @('-Exe', $GoodExe, '-ProdDir', $sandbox, '-Port', "$port",
+            '-Feature', 'rehearsal-d', '-HealthTimeoutSec', '6', '-MinHealthy', '0', '-SkipSmoke',
+            '-ReportPath', (Join-Path $reports 'report-d.json'), '-LogDir', $sandbox)
+    } finally {
+        $lock.Close()
+    }
+
+    $exitOkD = ($r.ExitCode -eq 1)
+    Check $exitOkD ('退出码 = 1（替换失败，但已把旧版重新拉起 = 符合「已恢复原状」的语义），实际 ' + $r.ExitCode)
+    if (-not $exitOkD) { Show-DeployOutput $r 'D 退出码不符' }
+
+    $repD = Join-Path $reports 'report-d.json'
+    if (Test-Path -LiteralPath $repD) {
+        $d = Get-Content -LiteralPath $repD -Raw | ConvertFrom-Json
+        Check ($d.stage -ne 'replaced') ('报告 stage 不得写成 replaced（替换并没发生），实际 ' + $d.stage)
+        Check ($d.rolled_back -eq $true) '报告 rolled_back = true（已把旧版恢复运行）'
+        Check ($d.rollback_failed -eq $false) '报告 rollback_failed = false'
+    } else {
+        Check $false '产出了 JSON 报告'
+    }
+
+    Check ((Sha256 $exePath) -eq $goodHash) '沙箱 exe 内容未被改坏（替换失败就该原样）'
+    Start-Sleep -Seconds 1
+    Check ([bool](Get-SandboxListenerPid $port)) '**替换失败后旧版仍在跑**（这条就是 C1 的牙齿）'
+    $hD = $null
+    try { $hD = Invoke-WebRequest -Uri ('http://127.0.0.1:' + $port + '/healthz') -UseBasicParsing -TimeoutSec 5 } catch { $hD = $_.Exception.Response }
+    Check ($null -ne $hD) '替换失败后 /healthz 有响应'
+} finally {
+    Stop-Sandbox
+}
+
+# --------------------------------------------------------------------------
 Section '结果'
 # --------------------------------------------------------------------------
 if ($failures.Count -gt 0) {
-    Write-Host ('排练未通过（' + $failures.Count + ' 项断言失败）：') -ForegroundColor Red
+    Write-Host ('排练未通过：执行了 ' + $script:checkTotal + ' 项断言，其中 ' + $failures.Count + ' 项失败：') -ForegroundColor Red
     foreach ($f in $failures) { Write-Host ('   - ' + $f) -ForegroundColor Yellow }
     exit 1
 }
-Write-Host '排练全部通过（A1 非 PE 被预检拒绝且生产零触碰、A2 坏 PE 自动回滚、B 替换生效且不拖死调用方、C DryRun 无副作用）。' -ForegroundColor Green
+Write-Host ('排练全部通过（执行断言 ' + $script:checkTotal + ' 项，0 失败）：') -ForegroundColor Green
+Write-Host '  A1 非 PE 被预检拒绝且生产零触碰、A2 坏 PE 自动回滚、B 替换生效且不拖死调用方、C DryRun 无副作用、D 停服后替换失败也把旧版拉回来。' -ForegroundColor Green
 Write-Host ('报告留档：' + $reports) -ForegroundColor Gray
 exit 0

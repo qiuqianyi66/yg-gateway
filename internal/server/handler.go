@@ -565,22 +565,28 @@ type modelsCache struct {
 	lastFail time.Time // 最近一次拉取失败时间（负缓存）
 }
 
-// snapshot 返回 TTL 内的成功快照；缓存冷、为空或已过期 → nil。
-// 命中判据（非空 + 未过期）与改前 fetchDynamicModels / cachedModelsSnapshot 两处逐位一致。
-func (c *modelsCache) snapshot() []upstream.ModelInfo {
+// lookup 在**同一次读锁**内返回「TTL 内的成功快照」与「是否处于失败负缓存冷却期」。
+//
+// 为什么要合并（独立复审的修正）：改前的 fetchDynamicModels 是在一次 RLock 内连着判这两件事；
+// 拆成 snapshot() + inFailCooldown() 两次取锁后，中间可能被 store() 插入 → 极小概率多打一轮
+// 上游探测（2 次 FetchModels）。方向是安全的（只会多拉一次，不会返回错值），但既然这次重构
+// 宣称「行为等价」，锁粒度也一并收回到与改前一致。
+func (c *modelsCache) lookup() ([]upstream.ModelInfo, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	if len(c.ids) == 0 || time.Since(c.fetched) >= dynamicModelsTTL {
-		return nil
+	if len(c.ids) > 0 && time.Since(c.fetched) < dynamicModelsTTL {
+		return c.ids, false
 	}
-	return c.ids
+	return nil, !c.lastFail.IsZero() && time.Since(c.lastFail) < modelsFetchFailCooldown
 }
 
-// inFailCooldown 是否处于拉取失败的负缓存冷却期内（冷却期内不再请求上游）。
-func (c *modelsCache) inFailCooldown() bool {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	return !c.lastFail.IsZero() && time.Since(c.lastFail) < modelsFetchFailCooldown
+// snapshot 只读 TTL 内的成功快照；缓存冷、为空或已过期 → nil。
+// 命中判据（非空 + 未过期）与改前 fetchDynamicModels / cachedModelsSnapshot 两处逐位一致。
+func (c *modelsCache) snapshot() []upstream.ModelInfo {
+	// 忽略第二个返回值（是否处于失败负缓存冷却期）：本函数的调用方 cachedModelsSnapshot
+	// 只问「有没有可用的目录快照」，冷却态对它是无意义的（拉取策略由 lookup 的调用方决定）。
+	hit, _ := c.lookup()
+	return hit
 }
 
 // noteFail 记一次拉取失败（进 5min 负缓存）。
@@ -795,11 +801,12 @@ func (h *Handler) fetchGlobalModels() ([]string, *auth.Auth) {
 // 无冷却窗口，客户端重试即放大请求量——负缓存正是为此设计（见 handler_test 吸收
 // 上游 9832283 的注释）；且 cachedModelsSnapshot（gateway_hint 判定）依赖缓存写入。
 func (h *Handler) fetchDynamicModels() []upstream.ModelInfo {
-	if hit := h.modelsCache.snapshot(); len(hit) > 0 {
+	hit, inCooldown := h.modelsCache.lookup()
+	if len(hit) > 0 {
 		return hit
 	}
 	// 失败负缓存：冷却期内不再请求上游。
-	if h.modelsCache.inFailCooldown() {
+	if inCooldown {
 		return nil
 	}
 

@@ -16,15 +16,18 @@
 #   powershell -NoProfile -File scripts/deploy-prod.ps1 -Build -Feature t8-unknown   # 先 go build 再部署
 #   powershell -NoProfile -File scripts/deploy-prod.ps1 -DryRun                      # 只打印计划，不动任何东西
 #
-# 退出码：
+# 退出码（**1 与 4 的区别就是「生产现在能不能用」，别混**）：
 #   0 = 部署成功（含冒烟通过；-SkipSmoke 时不因冒烟失败）
-#   1 = 前置检查失败 / 停旧实例失败（生产未被改动或已恢复原状）
+#   1 = 本次换版未生效，且**已确认旧版在跑**（前置检查失败 = 生产未被触碰；
+#       停服/替换失败 = 已把旧版重新拉起）。旧版拉不起来就是 4，不是 1。
 #   2 = 新实例健康检查失败 → **已自动回滚**（服务回到旧版）
 #   3 = 部署+健康都过，但**冒烟失败**（不回滚：冒烟失败可能是上游账号问题，回滚会来回折腾）
-#   4 = 回滚也失败或未预期错误（**生产可能不可用，看 stderr**）
+#   4 = 任何一步失败且**旧版没能回到运行状态**，或未预期错误（**生产可能不可用，看 stderr**）
 #
 # 已知边界（明说的局限，不是放水）：
-#   - 不做「端口释放」以外的进程清理：如果还有别的进程占着 7863，脚本会明确报错而不是替你杀；
+#   - 不做「端口释放」以外的进程清理，而且**只杀身份核准的进程**：pid 文件过期（PID 复用）
+#     或端口被别的程序占着时，脚本明确报错、**不替你 taskkill**（Stop-OwnedProcess 会核对
+#     进程路径是否就是要换的那个二进制；读不到路径也按「不杀」处理）；
 #   - 冒烟只覆盖一次非流式 + 一次流式，不做全模型矩阵（那是 CI 的事）；
 #   - 从 config.json 取 api_key 用**正则**而不是 ConvertFrom-Json：生产 config.json 里存在
 #     大小写变体的重复键（如 'Kimi-K2.7-Code' / 'kimi-k2.7-code'），PowerShell 5.1 的
@@ -122,11 +125,105 @@ function Wait-PortReleased([int]$p, [int]$timeoutSec) {
     return (-not (Get-ListenerPid $p))
 }
 
-function Stop-Listener([int]$p) {
+# 只杀「确实是本次那个二进制」的进程。
+#
+# 为什么必须核身份（I1）：pid 文件会过期（机器重启后 PID 复用、或网关被别的方式重启过），
+# 端口监听者也可能是别的程序。脚本自己声明的政策是「不替你 taskkill 陌生进程」（见文件头
+# 「已知边界」），无条件 taskkill 与那句话直接矛盾，而且会杀掉无关进程。
+# 返回 $true = 目标已不存在或已停（都算「没有我们的人还在跑」）；$false = 有个我们不认识的进程。
+function Stop-OwnedProcess([string]$procId, [string]$expectedPath, [string]$what) {
+    if (-not $procId) { return $true }
+    $proc = $null
+    try { $proc = Get-Process -Id $procId -ErrorAction Stop } catch { return $true }   # 已经不在了
+    $path = $null
+    try { $path = $proc.Path } catch { $path = $null }
+    $want = (Resolve-Path -LiteralPath $expectedPath -ErrorAction SilentlyContinue).Path
+    $got = if ($path) { (Resolve-Path -LiteralPath $path -ErrorAction SilentlyContinue).Path } else { $null }
+    if (-not $got -or $got -ne $want) {
+        Write-Bad ($what + '（PID ' + $procId + '）不是本次要换的二进制' + $(if ($got) { '：' + $got } else { '：读不到其路径' }) + '——**不替你杀**，手工确认后重跑')
+        return $false
+    }
+    taskkill /PID $procId /F 2>&1 | Out-Null
+    return $true
+}
+
+function Stop-Listener([int]$p, [string]$expectedExe) {
     $targetPid = Get-ListenerPid $p
     if (-not $targetPid) { return $true }
-    taskkill /PID $targetPid /F 2>&1 | Out-Null
+    if (-not (Stop-OwnedProcess $targetPid $expectedExe ('端口 ' + $p + ' 的监听者'))) { return $false }
     return (Wait-PortReleased $p $PortReleaseTimeoutSec)
+}
+
+# 写 pid 文件前同样核身份：否则会把「不是我们启动的监听者」的 PID 写进去，
+# 下一轮换版就会照着一份错的 pid 去杀（I1 的种子）。
+function Update-PidFile([int]$p, [string]$expectedExe) {
+    $targetPid = Get-ListenerPid $p
+    if (-not $targetPid) { return }
+    $path = $null
+    try { $path = (Get-Process -Id $targetPid -ErrorAction Stop).Path } catch { $path = $null }
+    $want = (Resolve-Path -LiteralPath $expectedExe -ErrorAction SilentlyContinue).Path
+    $got = if ($path) { (Resolve-Path -LiteralPath $path -ErrorAction SilentlyContinue).Path } else { $null }
+    if (-not $got -or $got -ne $want) {
+        Write-Warn2 ('监听者 PID ' + $targetPid + ' 不是本次的二进制，不写 pid 文件（防下次换版按错的 pid 去杀）')
+        return
+    }
+    $pidFile = Join-Path (Join-Path $ProdDir 'data') 'yg-gateway.pid'
+    $parent = Split-Path -Parent $pidFile
+    if (-not (Test-Path -LiteralPath $parent)) { New-Item -ItemType Directory -Force -Path $parent | Out-Null }
+    [System.IO.File]::WriteAllText($pidFile, $targetPid)
+}
+
+# 把「换版失败后让旧版重新在跑」收敛成**唯一**一条路：所有失败分支都必须走它。
+#
+# 为什么（C1，排练场景 D 复现）：原实现在「健康检查失败」分支里写了完整的回滚，但
+# 「停服后替换失败」与「停服后端口没释放」两条分支直接 `exit 1` —— 那时服务**已经停了**
+# （旧实例被 taskkill），而退出码表把 1 写成「生产未被改动或已恢复原状」。操作者拿到 1 就走开，
+# 生产就躺在那里。回滚是这脚本唯一存在的理由，不能只在一条分支上可达。
+#
+# 返回 $true = 旧版在跑（生产确实处于「换版前的样子」）。
+function Invoke-Rollback([string]$configPath, [string]$backupPath) {
+    $state.stage = 'rolling-back'
+
+    # 1) 服务可能压根还活着（kill 没成功、端口仍被旧实例占着）——那已经是「原状」了。
+    $alive = Test-HealthOnce $Port
+    if ($alive -and $alive.Ok) {
+        Write-Ok '旧实例仍在响应 /healthz：无需重启，按「已恢复原状」处理'
+        $state.rolled_back = $true
+        $state.stage = 'rolled-back'
+        return $true
+    }
+
+    # 2) 停掉残留监听（身份核不过就不杀，但仍继续尝试把服务拉起来）。
+    if (-not (Stop-Listener $Port $targetExe)) { Write-Warn2 '回滚前端口未释放（残留监听者不是本次的二进制，已跳过）' }
+
+    # 3) 需要时才从备份恢复二进制：盘上已经是旧版就别白写一次。
+    #    替换失败的情形下盘上本来就是旧版，这一步会自然跳过。
+    if ((Sha256 $targetExe) -ne (Sha256 $backupPath)) {
+        $rbErr = Replace-Binary $backupPath $targetExe
+        if ($rbErr) {
+            Write-Warn2 ('从备份恢复二进制失败（继续尝试启动盘上现有的二进制）：' + $rbErr)
+            if (-not $state.error) { $state.error = $rbErr }
+        }
+        $state.exe_hash_after = Sha256 $targetExe
+    }
+
+    # 4) 拉起 + 健康轮询（独立日志，不覆盖失败现场）。
+    $state.rollback_log_path = Join-Path $LogDir ('yg-gateway-' + $stamp + '.rollback.err.log')
+    $rbOutLog = Join-Path $LogDir ('yg-gateway-' + $stamp + '.rollback.out.log')
+    $rbStart = Start-Instance $targetExe $configPath $rbOutLog $state.rollback_log_path
+    if (-not $rbStart.Ok) { Write-Warn2 ('回滚启动命令抛错：' + $rbStart.Error) }
+    $rbHealth = Wait-Health $Port $HealthTimeoutSec
+    if ($rbHealth -and $rbHealth.Ok) {
+        Update-PidFile $Port $targetExe
+        $state.rolled_back = $true
+        $state.stage = 'rolled-back'
+        Write-Ok ('已恢复旧版运行并通过健康检查（healthy=' + $rbHealth.Healthy + '/' + $rbHealth.Total + '）')
+        return $true
+    }
+    $state.rollback_failed = $true
+    $state.stage = 'rollback-failed'
+    Write-Bad '恢复旧版后健康检查仍未通过——**生产可能不可用**'
+    return $false
 }
 
 # 一次 HTTP 请求：**非 2xx 也要拿到 body**（/healthz 在 0 账号时返回 503，
@@ -234,15 +331,6 @@ function Wait-Health([int]$p, [int]$timeoutSec) {
         Start-Sleep -Seconds 1
     }
     return $last
-}
-
-function Update-PidFile([int]$p) {
-    $targetPid = Get-ListenerPid $p
-    if (-not $targetPid) { return }
-    $pidFile = Join-Path (Join-Path $ProdDir 'data') 'yg-gateway.pid'
-    $parent = Split-Path -Parent $pidFile
-    if (-not (Test-Path -LiteralPath $parent)) { New-Item -ItemType Directory -Force -Path $parent | Out-Null }
-    [System.IO.File]::WriteAllText($pidFile, $targetPid)
 }
 
 # 预检：候选 exe 必须是 Windows PE（MZ 头 + PE\0\0 签名），否则**根本不进换版流程**。
@@ -385,6 +473,26 @@ try {
     Write-Ok ('新 exe：' + $Exe + '  sha256=' + $state.source_exe_hash.Substring(0, 16))
     Write-Step ('当前生产：sha256=' + $state.exe_hash_before.Substring(0, 16) + '  监听 PID=' + $(if (Get-ListenerPid $Port) { Get-ListenerPid $Port } else { '(无)' }))
 
+    # 借 cmd 落日志的启动命令对路径字符敏感：`&`/`^`/`%`/`!` 是 cmd 元字符，末尾反斜杠会吃掉
+    # 右引号。生产路径本来不含这些，但 -Exe/-ProdDir/-LogDir 是**调用方参数**（-LogDir 默认
+    # `$env:TEMP`，含用户名），所以这里是真检查而不是假设。
+    foreach ($p in @($Exe, $ProdDir, $LogDir)) {
+        if ($p -match '[&^%!]') {
+            Write-Bad ('路径含 cmd 元字符（& ^ % !），会破坏启动命令的重定向：' + $p)
+            $state.stage = 'rejected-unsafe-path'
+            $state.error = 'unsafe path char for cmd redirection'
+            $exitCode = 1
+            return
+        }
+        if ($p.EndsWith('\')) {
+            Write-Bad ('路径以反斜杠结尾，会在 cmd 命令串里吃掉右引号：' + $p)
+            $state.stage = 'rejected-unsafe-path'
+            $state.error = 'path ends with backslash'
+            $exitCode = 1
+            return
+        }
+    }
+
     # 候选必须是合法 PE —— 挡在「停服」之前（理由见 Test-PeImage 注释）
     $peErr = Test-PeImage $Exe
     if ($peErr) {
@@ -436,16 +544,20 @@ try {
     Write-Head '2/6 停旧实例 + 轮询端口释放（L-9 规则 1）'
     # -----------------------------------------------------------------------
     $pidFile = Join-Path (Join-Path $ProdDir 'data') 'yg-gateway.pid'
+    $stopFailed = $false
     if (Test-Path -LiteralPath $pidFile) {
         $oldPid = (Get-Content -LiteralPath $pidFile -Raw).Trim()
-        if ($oldPid) { taskkill /PID $oldPid /F 2>&1 | Out-Null; Write-Step ('按 pid 文件停：' + $oldPid) }
+        if ($oldPid) {
+            if (Stop-OwnedProcess $oldPid $targetExe 'pid 文件里的进程') { Write-Step ('按 pid 文件停：' + $oldPid) }
+            else { $stopFailed = $true }
+        }
         Remove-Item -LiteralPath $pidFile -Force -ErrorAction SilentlyContinue
     }
-    if (-not (Stop-Listener $Port)) {
-        Write-Bad ('端口 ' + $Port + ' 在 ' + $PortReleaseTimeoutSec + 's 内没有释放——**不动**生产 exe，手工查占用进程')
-        $state.stage = 'stop-failed'
-        $state.error = 'port not released'
-        $exitCode = 1
+    if ($stopFailed -or -not (Stop-Listener $Port $targetExe)) {
+        Write-Bad ('停旧实例没成功（端口 ' + $Port + ' 在 ' + $PortReleaseTimeoutSec + 's 内没释放 / pid 文件里的进程不是本次的二进制）')
+        Write-Step '保持不动生产 exe；把旧版弄回运行状态，然后以退出码 1 结束'
+        $state.error = 'port not released or pid mismatch'
+        $exitCode = $(if (Invoke-Rollback $configPath $backupPath) { 1 } else { 4 })
         return
     }
     Write-Ok ('端口 ' + $Port + ' 已释放')
@@ -453,12 +565,25 @@ try {
     # -----------------------------------------------------------------------
     Write-Head '3/6 替换二进制'
     # -----------------------------------------------------------------------
-    $state.stage = 'replaced'
     $swapErr = Replace-Binary $Exe $targetExe
     if ($swapErr) {
-        Write-Bad ('替换失败：' + $swapErr); $state.error = $swapErr; $exitCode = 1; return
+        Write-Bad ('替换失败：' + $swapErr)
+        $state.error = $swapErr
+        Write-Step '把旧版弄回运行状态，然后以退出码 1 结束'
+        $exitCode = $(if (Invoke-Rollback $configPath $backupPath) { 1 } else { 4 })
+        return
     }
     $state.exe_hash_after = Sha256 $targetExe
+    # 替换后必须核对哈希（I2）：备份侧一直有哈希断言，替换侧原来只把哈希写进报告、不作判据。
+    # 「Move-Item 返回成功但目标没变」我没能构造出来，但缺口就是缺口：换版没发生却被健康检查
+    # 与冒烟（跑的都是旧版本）判成 done，是本仓最忌讳的假绿。
+    if ($state.exe_hash_after -ne $state.source_exe_hash) {
+        Write-Bad ('替换后哈希与候选不一致（' + $state.exe_hash_after.Substring(0, 16) + ' != ' + $state.source_exe_hash.Substring(0, 16) + '）——按替换失败处理')
+        $state.error = 'post-replace hash mismatch'
+        $exitCode = $(if (Invoke-Rollback $configPath $backupPath) { 1 } else { 4 })
+        return
+    }
+    $state.stage = 'replaced'
     Write-Ok ('已替换：sha256=' + $state.exe_hash_after.Substring(0, 16))
 
     # -----------------------------------------------------------------------
@@ -481,7 +606,7 @@ try {
     if ($health -and $health.Ok) {
         $state.health_ok = $true
         $state.stage = 'healthy'
-        Update-PidFile $Port
+        Update-PidFile $Port $targetExe
         Write-Ok ('健康：HTTP ' + $health.Status + ' healthy=' + $health.Healthy + '/' + $health.Total)
     } else {
         if ($health) { Write-Bad ('健康检查未达标：HTTP ' + $health.Status + ' healthy=' + $health.Healthy + '（要求 >= ' + $MinHealthy + '）') }
@@ -490,38 +615,10 @@ try {
         # -------------------------------------------------------------------
         Write-Head '5b 自动回滚（用独立日志，不覆盖失败现场）'
         # -------------------------------------------------------------------
-        $state.stage = 'rolling-back'
-        $null = Stop-Listener $Port
-        $rbErr = Replace-Binary $backupPath $targetExe
-        if ($rbErr) {
-            Write-Bad ('回滚替换失败：' + $rbErr + '——生产处于不可用状态')
-            $state.stage = 'rollback-failed'
-            $state.rollback_failed = $true
-            $state.error = $rbErr
-            $exitCode = 4
-            return
-        }
-        $state.exe_hash_after = Sha256 $targetExe
-        $state.rollback_log_path = Join-Path $LogDir ('yg-gateway-' + $stamp + '.rollback.err.log')
-        $rbOutLog = Join-Path $LogDir ('yg-gateway-' + $stamp + '.rollback.out.log')
-        $rbStart = Start-Instance $targetExe $configPath $rbOutLog $state.rollback_log_path
-        if (-not $rbStart.Ok) { Write-Warn2 ('回滚启动命令抛错：' + $rbStart.Error) }
-        $rbHealth = Wait-Health $Port $HealthTimeoutSec
-        if ($rbHealth -and $rbHealth.Ok) {
-            Update-PidFile $Port
-            $state.rolled_back = $true
-            $state.stage = 'rolled-back'
-            Write-Ok ('已回滚到备份版本并通过健康检查（healthy=' + $rbHealth.Healthy + '/' + $rbHealth.Total + '）')
-            Write-Step ('失败现场日志：' + $state.log_path)
-            Write-Step ('回滚日志：' + $state.rollback_log_path)
-        } else {
-            $state.rollback_failed = $true
-            $state.stage = 'rollback-failed'
-            Write-Bad ('回滚后健康检查仍未通过——**生产可能不可用**')
-            Write-Step ('失败现场日志：' + $state.log_path)
-            Write-Step ('回滚日志：' + $state.rollback_log_path)
-        }
-        $exitCode = $(if ($state.rollback_failed) { 4 } else { 2 })
+        $restored = Invoke-Rollback $configPath $backupPath
+        Write-Step ('失败现场日志：' + $state.log_path)
+        if ($state.rollback_log_path) { Write-Step ('回滚日志：' + $state.rollback_log_path) }
+        $exitCode = $(if ($restored) { 2 } else { 4 })
         return
     }
 
