@@ -78,7 +78,9 @@ $allow = @{
 #
 # 模板落在 .git/ 下：不入库、不污染工作区；缺失时现场生成。
 $deps = @{}
-$tmplFile = Join-Path $repoRoot '.git\golist.tmpl'
+# 分段 Join-Path（不写 '.git\golist.tmpl'）：Linux 上反斜杠不是分隔符，会盖出一个
+# 名叫 `.git\golist.tmpl` 的普通文件，污染工作区且 CI 里表现为莫名 untracked。
+$tmplFile = Join-Path (Join-Path $repoRoot '.git') 'golist.tmpl'
 if (-not (Test-Path $tmplFile)) {
     New-Item -ItemType Directory -Force -Path (Split-Path $tmplFile) | Out-Null
     [System.IO.File]::WriteAllText($tmplFile, '{{.ImportPath}}{{range .Imports}} {{.}}{{end}}' + "`n")

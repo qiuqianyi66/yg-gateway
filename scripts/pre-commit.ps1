@@ -14,6 +14,13 @@
 #   powershell -NoProfile -File scripts/pre-commit.ps1 -Fast     # 跳过 go test ./...
 #   powershell -NoProfile -File scripts/pre-commit.ps1 -Install  # 额外安装 .git/hooks/pre-commit
 #
+# CI 用法（.github/workflows/go-binaries.yml 的 gate job）：
+#   pwsh -NoProfile -File scripts/pre-commit.ps1 -Fast -AllFiles -Base origin/main
+#   - -AllFiles：gofmt 查**全仓** ./cmd ./internal（CI 工作区干净，查「改动文件」恒空 → 假绿）
+#   - -Base <ref>：R10 与「改动文件」按 `git diff <ref>...HEAD` 判定（CI 里改动已提交，
+#     工作区 diff 恒空；不传 base 会把这项变成「检查了 0 个文件」的假绿）
+#   - -Fast：go test 由 CI 的 test job 独占，gate job 不重复跑（check-depth 内部仍会跑一次带覆盖率的）
+#
 # 退出码：0 = 全部通过；1 = 有检查失败；2 = 脚本自身失败
 #
 # 已知边界（明说的局限，不是放水）：
@@ -28,7 +35,9 @@
 
 param(
     [switch]$Fast,
-    [switch]$Install
+    [switch]$Install,
+    [switch]$AllFiles,
+    [string]$Base = ''
 )
 
 $ErrorActionPreference = 'Continue'
@@ -38,8 +47,20 @@ Set-Location $repoRoot
 
 $goExe = 'C:\Program Files\Go\bin\go.exe'
 if (-not (Test-Path $goExe)) { $goExe = 'go' }
-$gofmtExe = Join-Path (Split-Path $goExe) 'gofmt.exe'
-if (-not (Test-Path $gofmtExe)) { $gofmtExe = 'gofmt' }
+
+# 主机可执行文件探测：本机（Windows PowerShell 5.1）没有独立 pwsh；CI（ubuntu runner）
+# 只有 pwsh、没有 `powershell`。子脚本一律用它调起，别写死 `powershell`。
+$hostExe = 'powershell'
+$pwshCmd = Get-Command pwsh -ErrorAction SilentlyContinue
+if ($pwshCmd) { $hostExe = $pwshCmd.Source }
+
+# gofmt 优先取 go 同目录的 gofmt.exe（Windows 官方发行版形态）；拿不到就退 PATH 上的 gofmt
+# （Linux runner）。注意 $goExe 退化成 'go' 时 Split-Path 返回空串，Join-Path 会抛绑定错误。
+$gofmtExe = 'gofmt'
+if (Test-Path $goExe) {
+    $candidate = Join-Path (Split-Path $goExe) 'gofmt.exe'
+    if (Test-Path $candidate) { $gofmtExe = $candidate }
+}
 
 $env:GOPROXY = 'https://goproxy.cn,direct'
 $env:CGO_ENABLED = '0'
@@ -55,15 +76,30 @@ function Write-Pass($msg) { Write-Host ("  [OK]   " + $msg) -ForegroundColor Gre
 function Write-Bad($msg) { Write-Host ("  [FAIL] " + $msg) -ForegroundColor Red }
 
 # ---------------------------------------------------------------------------
-# 本次改动涉及的文件（工作区 + 暂存区 + 未跟踪）
+# 本次改动涉及的文件
+#   本地：工作区 + 暂存区 + 未跟踪
+#   CI（-Base）：与 base 的已提交差分 —— CI 工作区是干净的，工作区 diff 恒为空，
+#   若照搬本地口径，下面所有「本次改动」检查都会变成「检查了 0 个文件」的假绿。
 # ---------------------------------------------------------------------------
 $changed = New-Object System.Collections.ArrayList
-foreach ($set in @(
-        @(& git diff --name-only --diff-filter=ACMR 2>$null),
-        @(& git diff --cached --name-only --diff-filter=ACMR 2>$null),
-        @(& git ls-files --others --exclude-standard 2>$null))) {
-    foreach ($f in $set) {
+
+if ($Base) {
+    $null = & git rev-parse --verify --quiet "$Base^{commit}" 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "错误：-Base 指定的 ref 解析失败：$Base" -ForegroundColor Red
+        exit 2
+    }
+    foreach ($f in @(& git diff --name-only --diff-filter=ACMR "$Base...HEAD" 2>$null)) {
         if ($f -and -not $changed.Contains($f)) { [void]$changed.Add($f) }
+    }
+} else {
+    foreach ($set in @(
+            @(& git diff --name-only --diff-filter=ACMR 2>$null),
+            @(& git diff --cached --name-only --diff-filter=ACMR 2>$null),
+            @(& git ls-files --others --exclude-standard 2>$null))) {
+        foreach ($f in $set) {
+            if ($f -and -not $changed.Contains($f)) { [void]$changed.Add($f) }
+        }
     }
 }
 
@@ -84,16 +120,25 @@ $prodGoFiles = @($goFiles | Where-Object { $_ -notlike '*_test.go' })
 # ---------------------------------------------------------------------------
 # 检查 1：gofmt 零漂移（只查本次改动的文件）
 # ---------------------------------------------------------------------------
-Write-Section '检查 1/5：gofmt（本次改动的 .go 文件）'
-if ($goFiles.Count -eq 0) {
+Write-Section '检查 1/5：gofmt'
+# 本地只看本次改动的 .go 文件（存量已清零，增量严格拦截）；
+# CI 用 -AllFiles 看全仓——CI 工作区干净，「改动文件」恒为空，只看改动等于不检查。
+$gofmtTargets = @()
+if ($AllFiles) {
+    $gofmtTargets = @('./cmd', './internal')
+    Write-Host '  范围：全仓 ./cmd ./internal（-AllFiles）' -ForegroundColor Gray
+} else {
+    $gofmtTargets = @($goFiles)
+}
+if ($gofmtTargets.Count -eq 0) {
     Write-Pass '无 .go 改动'
 } else {
-    $unformatted = @(& $gofmtExe -l @goFiles 2>$null)
+    $unformatted = @(& $gofmtExe -l @gofmtTargets 2>$null)
     if ($unformatted.Count -gt 0) {
         foreach ($f in $unformatted) { Write-Bad ("gofmt 漂移: " + $f) }
         Add-Failure "gofmt 漂移 $($unformatted.Count) 个文件（修法：gofmt -w <文件>）"
     } else {
-        Write-Pass "$($goFiles.Count) 个 .go 文件格式干净"
+        Write-Pass "gofmt 干净（$($gofmtTargets.Count) 个目标）"
     }
 }
 
@@ -115,8 +160,13 @@ $identPattern = '^\s*_ = ([A-Za-z_][A-Za-z0-9_]*)\s*(//.*)?$'
 # 收集 diff 的新增行（含未跟踪文件的全部行）
 $added = New-Object System.Collections.ArrayList
 $diffText = @()
-$diffText += @(& git diff -U0 --no-color --no-ext-diff 2>$null)
-$diffText += @(& git diff --cached -U0 --no-color --no-ext-diff 2>$null)
+if ($Base) {
+    # CI：改动已提交，只有与 base 相比才能看到「本次新增了哪些行」。
+    $diffText += @(& git diff -U0 --no-color --no-ext-diff "$Base...HEAD" 2>$null)
+} else {
+    $diffText += @(& git diff -U0 --no-color --no-ext-diff 2>$null)
+    $diffText += @(& git diff --cached -U0 --no-color --no-ext-diff 2>$null)
+}
 
 $curFile = $null
 $newLine = 0
@@ -245,7 +295,7 @@ if ($Fast) {
 # 检查 5：治理门禁（依赖方向 + 深度棘轮）
 # ---------------------------------------------------------------------------
 Write-Section '检查 5/5：边界与深度棘轮'
-$bout = @(powershell -NoProfile -File scripts/check-boundaries.ps1 2>&1)
+$bout = @(& $hostExe -NoProfile -File scripts/check-boundaries.ps1 2>&1)
 if ($LASTEXITCODE -ne 0) {
     $bout | Select-Object -First 30 | ForEach-Object { Write-Host ("    " + $_) -ForegroundColor DarkGray }
     Write-Bad 'check-boundaries.ps1 失败（依赖方向违规）'
@@ -254,7 +304,7 @@ if ($LASTEXITCODE -ne 0) {
     Write-Pass '依赖方向检查通过'
 }
 
-$dout = @(powershell -NoProfile -File scripts/check-depth.ps1 2>&1)
+$dout = @(& $hostExe -NoProfile -File scripts/check-depth.ps1 2>&1)
 if ($LASTEXITCODE -ne 0) {
     $dout | Select-Object -Last 20 | ForEach-Object { Write-Host ("    " + $_) -ForegroundColor DarkGray }
     Write-Bad 'check-depth.ps1 失败（深度指标回退）'
