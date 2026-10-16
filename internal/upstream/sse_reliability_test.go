@@ -1,45 +1,112 @@
 package upstream
 
 import (
+	"bufio"
 	"io"
+	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
 
-// TestStreamHintHeadersBeforeFirstFrame 首帧前就把 200 + SSE 响应头刷给客户端
-// （F-704）。
+// 文件说明（2026-10-16 修订）：两个「流式进行中就想检查输出」的测试改用**真实 httptest.Server**。
 //
-// 牙齿：把 WriteHeader(http.StatusOK) + Flush 那两行删掉 → 本测试 FAIL
-// （此前响应头是惰性的，只有第一次 Write 才连同 200 刷出去）。
-func TestStreamHintHeadersBeforeFirstFrame(t *testing.T) {
-	// 上游「迟迟不吐首帧」：用一个阻塞 reader，验证在没有任何 data 帧的情况下
-	// 响应头已经提交。httptest.ResponseRecorder 的 Flush 会把 Code 定格，
-	// 因此这里能直接断言 Code/Header。
-	rec := httptest.NewRecorder()
-	gate := make(chan struct{})
-	r := &blockingReader{gate: gate}
-	done := make(chan error, 1)
-	go func() { done <- StreamHint(rec, r, nil) }()
-	// 等一小会儿让 StreamHint 走到 header 提交点（不该依赖首帧）。
-	time.Sleep(50 * time.Millisecond)
-	if rec.Code != 200 {
-		t.Errorf("Code=%d want 200 before first frame", rec.Code)
+// 起因：CI 的 -race 首次跑出 data race——旧写法把 httptest.ResponseRecorder 直接喂给 StreamHint，
+// 然后在测试 goroutine 里读 `rec.Code` / `rec.Header()` / `rec.Body.String()`，而 StreamHint
+// 仍在另一个 goroutine 里写同一份状态（`h.Set(...)` 在 sse.go:625、`WriteHeader` 在 sse.go:640）。
+// `httptest.ResponseRecorder` 只对**自己的方法**加锁，外部直读字段不受保护，
+// 所以这是**测试写法**的问题（生产路径上 http.ResponseWriter 只被处理该请求的 goroutine 写）。
+//
+// 改走真 HTTP 之后：
+//   - 服务端只有 handler goroutine 写 ResponseWriter，客户端只有测试 goroutine 读 body，
+//     两侧天然不共享内存 → 无竞态；
+//   - 顺带把 F-704 要保证的事验得更实：**Flusher 真把首帧前的响应头刷给了客户端**
+//     （旧写法只验了 recorder 里的字段，那不代表字节真的出网了）。
+//
+// 读取一律带超时：行为回归时测试**失败**而不是挂死（挂死会被 go test 的 10 分钟 panic 兜住，
+// 但定位价值远低于一条明确的断言消息）。
+
+// newStreamHintServer 起一个真实 HTTP 服务，把 StreamHint 放在 handler 里跑，并把它的返回值
+// 通过带缓冲的 channel 交回测试（缓冲 1 → 即使测试不读也不会泄漏 goroutine）。
+func newStreamHintServer(t *testing.T, r io.Reader, opts ...StreamOption) (*httptest.Server, <-chan error) {
+	t.Helper()
+	errCh := make(chan error, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		errCh <- StreamHint(w, r, nil, opts...)
+	}))
+	t.Cleanup(srv.Close)
+	return srv, errCh
+}
+
+// getWithDeadline 发一个 GET 并在超时前取回响应（= 响应头已到客户端）。
+// 超时说明「首帧前提交响应头」的行为回归了：此时 GET 会一直阻塞到第一段 body 才返回。
+func getWithDeadline(t *testing.T, url string, d time.Duration) *http.Response {
+	t.Helper()
+	type result struct {
+		resp *http.Response
+		err  error
 	}
-	if ct := rec.Header().Get("Content-Type"); !strings.Contains(ct, "text/event-stream") {
+	ch := make(chan result, 1)
+	go func() {
+		resp, err := http.Get(url)
+		ch <- result{resp, err}
+	}()
+	select {
+	case r := <-ch:
+		if r.err != nil {
+			t.Fatalf("GET %s: %v", url, r.err)
+		}
+		return r.resp
+	case <-time.After(d):
+		t.Fatalf("GET %s 在 %v 内没拿到响应头 —— 「首帧前提交 200 + SSE 头」的行为回归了", url, d)
+		return nil
+	}
+}
+
+// releaseGate 返回一个「只关一次」的放行函数。
+//
+// 为什么必须保证一定放行：blockingReader 不放行 → StreamHint 永不返回 → handler 卡住 →
+// `httptest.Server.Close()`（经 t.Cleanup）会一直等这个未完成的请求 → **测试挂死**（10 分钟 panic 兜底）
+// 而不是快速失败。行为回归时我们要的是后者，所以放行放在 defer 里、并用 Once 防重复关闭。
+func releaseGate(gate chan struct{}) func() {
+	var once sync.Once
+	return func() { once.Do(func() { close(gate) }) }
+}
+
+// TestStreamHintHeadersBeforeFirstFrame 首帧前就把 200 + SSE 响应头刷给客户端（F-704）。
+//
+// 牙齿：把 `WriteHeader(http.StatusOK)` + `Flush` 那两行删掉 → 本测试 FAIL
+// （`getWithDeadline` 会超时，因为响应头要等第一段 body 才发出）。
+func TestStreamHintHeadersBeforeFirstFrame(t *testing.T) {
+	gate := make(chan struct{})
+	release := releaseGate(gate)
+	defer release() // 失败路径也必须放行，否则 srv.Close() 挂死（见 releaseGate 注释）
+
+	srv, errCh := newStreamHintServer(t, &blockingReader{gate: gate})
+
+	resp := getWithDeadline(t, srv.URL, 2*time.Second)
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		t.Errorf("status=%d want 200 before first frame", resp.StatusCode)
+	}
+	if ct := resp.Header.Get("Content-Type"); !strings.Contains(ct, "text/event-stream") {
 		t.Errorf("Content-Type=%q want text/event-stream", ct)
 	}
-	if rec.Body.Len() != 0 {
-		t.Errorf("body=%q want empty before first frame", rec.Body.String())
-	}
+
 	// 放行后流应能收尾（空流 → errEmptyStream，这是既有约定，不是失败）。
-	close(gate)
-	if err := <-done; !IsEmptyStreamError(err) {
-		t.Fatalf("StreamHint err=%v want errEmptyStream", err)
+	release()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
 	}
-	if !strings.Contains(rec.Body.String(), "data: [DONE]") {
-		t.Errorf("missing [DONE]: %q", rec.Body.String())
+	if e := <-errCh; !IsEmptyStreamError(e) {
+		t.Fatalf("StreamHint err=%v want errEmptyStream", e)
+	}
+	if !strings.Contains(string(body), "data: [DONE]") {
+		t.Errorf("missing [DONE]: %q", body)
 	}
 }
 
@@ -97,34 +164,79 @@ func TestAggregateTotalTooLarge(t *testing.T) {
 //
 // 牙齿：把心跳 goroutine 去掉 → 本测试 FAIL（等不到 ping）。
 func TestStreamHintKeepAlivePings(t *testing.T) {
-	rec := httptest.NewRecorder()
 	gate := make(chan struct{})
-	r := &blockingReader{gate: gate}
-	done := make(chan error, 1)
-	go func() { done <- StreamHint(rec, r, nil, WithKeepAlive(20*time.Millisecond)) }()
-	// 等到出现 ping（最多等 1s）。
-	deadline := time.Now().Add(time.Second)
-	for time.Now().Before(deadline) {
-		if strings.Contains(rec.Body.String(), ": ping") {
-			break
+	release := releaseGate(gate)
+	defer release() // 失败路径也必须放行，否则 srv.Close() 挂死（见 releaseGate 注释）
+
+	srv, errCh := newStreamHintServer(t, &blockingReader{gate: gate}, WithKeepAlive(20*time.Millisecond))
+
+	resp := getWithDeadline(t, srv.URL, 2*time.Second)
+	defer resp.Body.Close()
+
+	// 读线程只做「逐行读并投递」，判定在主 goroutine；缓冲给足，避免服务端写被读端拖住。
+	lines := make(chan string, 256)
+	go func() {
+		br := bufio.NewReader(resp.Body)
+		for {
+			ln, err := br.ReadString('\n')
+			if ln != "" {
+				lines <- strings.TrimRight(ln, "\r\n")
+			}
+			if err != nil {
+				close(lines)
+				return
+			}
 		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	close(gate)
-	if err := <-done; !IsEmptyStreamError(err) {
-		t.Fatalf("StreamHint err=%v want errEmptyStream", err)
-	}
-	if !strings.Contains(rec.Body.String(), ": ping") {
-		t.Fatalf("no ping frame in body: %q", rec.Body.String())
-	}
-	// ping 必须是 SSE 注释行（冒号开头），标准客户端会忽略它。
-	for _, ln := range strings.Split(strings.TrimRight(rec.Body.String(), "\n"), "\n") {
-		if ln == ": ping" || ln == "data: [DONE]" || strings.HasPrefix(ln, "data: ") {
-			continue
+	}()
+
+	sawPing := false
+	deadline := time.After(time.Second)
+waitPing:
+	for {
+		select {
+		case ln, ok := <-lines:
+			if !ok {
+				break waitPing
+			}
+			if ln == ": ping" {
+				sawPing = true
+				break waitPing
+			}
+		case <-deadline:
+			break waitPing
 		}
-		if ln != "" {
+	}
+	if !sawPing {
+		t.Fatalf("1 秒内没有收到 `: ping` 注释帧（心跳行为回归）")
+	}
+
+	// 放行并收尾：读到 EOF，收集全部行。
+	release()
+	var all []string
+	for ln := range lines {
+		all = append(all, ln)
+	}
+	if e := <-errCh; !IsEmptyStreamError(e) {
+		t.Fatalf("StreamHint err=%v want errEmptyStream", e)
+	}
+
+	var hasDone bool
+	for _, ln := range all {
+		switch {
+		case ln == ": ping":
+			// 等待阶段之后可能还有 ping（本循环只是收尾，不再重复判定心跳存在性）。
+		case ln == "data: [DONE]":
+			hasDone = true
+		case ln == "" || strings.HasPrefix(ln, "data: "):
+			// 正常帧
+		default:
 			t.Errorf("unexpected line: %q", ln)
 		}
+	}
+	// 心跳存在性由**等待阶段**的 sawPing 判定：那条 `: ping` 已被等待循环消费，
+	// 收尾集合里自然不再有它（第一版实现重复判定了一次，导致假失败）。
+	if !hasDone {
+		t.Errorf("流里没有收尾帧 [DONE]：%v", all)
 	}
 }
 
