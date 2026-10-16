@@ -135,6 +135,8 @@ Unknown 是**一等公民实体**，不是面板上的一个展示区：
   - `powershell -NoProfile -File scripts/check-boundaries.ps1`（依赖方向，退出码非 0 即违规）
   - `powershell -NoProfile -File scripts/check-depth.ps1`（体量/覆盖率棘轮，只许收紧；`-Update` 抬棘轮）
 - 提交前总闸：`powershell -NoProfile -File scripts/pre-commit.ps1`（全量；`-Fast` 跳过 `go test`）
+- **动手前先读 `.harness/LESSONS.md`**（会伪造结论的坑清单 + Seen 计数制：同一类坑第 2 次出现
+  即升级为规则或机器检查）
 - 本机无 gcc，`-race` 不可用（**由 CI 独占**）；并发正确性靠设计 + 单测保证
 
 ## 变更追踪
