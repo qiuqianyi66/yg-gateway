@@ -679,12 +679,18 @@ function renderAccountsUnsafe(list) {
     const avatar = (s.nickname || '?').charAt(0).toUpperCase();
     const realmTag = s.realm === 'global' ? '<span class="realm-tag">国际</span>' : (s.enterprise ? '<span class="realm-tag">企业</span>' : '');
     const groupTag = s.group ? '<span class="realm-tag" style="background:var(--accent,#4a9)">组:' + esc(s.group) + '</span>' : '';
+    // unknown 成本徽章（AGENTS.md「Unknown 消解纪律」）：该账号还有哪些 (账号,模型)
+    // 的实际成本没摸清。正常运营下多为 0——有值即提示"这条未知还欠一次真实观测"，
+    // 悬停看 question + requires（需要什么才能消解）。数据来自 overview→accounts→unknowns。
+    const unk = s.unknowns || [];
+    const unkTip = unk.length ? esc(unk.map(u => u.question + '\n需要：' + u.requires).join('\n\n')) : '';
+    const unkTag = unk.length ? '<span class="tag warn" title="' + unkTip + '" style="cursor:help">' + unk.length + ' 未知成本</span> ' : '';
     return '<div class="acc-card ' + cls + '" title="uid: ' + esc(s.uid) + '">' +
       '<div class="acc-card-head">' +
         '<div class="acc-avatar">' + esc(avatar) + '</div>' +
         '<div><div class="acc-name">' + (s.nickname ? esc(s.nickname) : '<span style="color:var(--ink-3)">未命名</span>') + ' ' + realmTag + ' ' + groupTag + '</div>' +
         '<div class="acc-uid">' + esc(short) + '</div></div>' +
-        '<div class="acc-status">' + tag + '</div>' +
+        '<div class="acc-status">' + unkTag + tag + '</div>' +
       '</div>' +
       '<div class="acc-cred"><div class="n">' + cred + '</div><div class="bar"><i style="width:' + pct + '%"></i></div></div>' +
       '<div class="acc-stats">' +
@@ -808,7 +814,13 @@ async function loadOverview(quiet) {
     $('navState').textContent = d.healthy > 0 ? '服务正常' : (d.total ? '无可用账号' : '待添加账号');
     const p = $('navPulse');
     p.className = 'pulse' + (d.healthy > 0 ? '' : (d.total ? ' warn' : ' bad'));
-    $('accNote').textContent = d.in_flight_full ? d.in_flight_full + ' 个账号在途占满' : '';
+    // 账号池提示行：在途占满 + 未知成本总数（AGENTS.md「Unknown 消解纪律」——
+    // 有 (账号,模型) 成本没摸清时，这里给一句话入口，明细在账号卡片悬停里）。
+    const accNotes = [];
+    if (d.in_flight_full) accNotes.push(d.in_flight_full + ' 个账号在途占满');
+    const unkTotal = (d.accounts || []).reduce((a, s) => a + ((s.unknowns || []).length), 0);
+    if (unkTotal) accNotes.push(unkTotal + ' 个 (账号,模型) 成本未知，悬停账号卡片查看明细');
+    $('accNote').textContent = accNotes.join(' · ');
     const up = Math.floor(d.uptime_sec);
     $('subMeta').textContent = '运行 ' + (up >= 86400 ? Math.floor(up / 86400) + ' 天 ' : '') + Math.floor(up % 86400 / 3600) + ' 时 ' + Math.floor(up % 3600 / 60) + ' 分';
     renderAccounts(d.accounts || []);
@@ -934,19 +946,33 @@ function outCell(m, pr) {
 /* rateCell 倍率列：牌价 vs 生效价。上游 credits 是牌价（转正后基准倍率），
    modelPromotions 给当前生效折扣（限时免费 factor=0 / 夜间五折 0.5 等）——
    WorkBuddy 客户端显示的正是生效价。有折扣：生效价大字 + 标签 + 划线牌价，
-   悬停带时段说明；无 factor 只有标签（错峰类）：牌价 + 标签。 */
+   悬停带时段说明；无 factor 只有标签（错峰类）：牌价 + 标签。
+   下方附实测积分成本率（usage 计费样本，derivation）：有样本才显示，
+   无样本不显示（AGENTS.md 四态：没样本 = unknown，不伪造成本）。 */
+function fmtCostPpm(v) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return '—';
+  if (n >= 100) return String(Math.round(n));
+  if (n >= 10) return n.toFixed(1);
+  return trimFixed(n.toFixed(2));
+}
+function costLine(m) {
+  if (m.cost_ppm == null || !m.cost_samples) return '';
+  return '<div class="note">实测 ' + fmtCostPpm(m.cost_ppm) + ' 积分/M · ' + m.cost_samples + ' 样本</div>';
+}
 function rateCell(m) {
   const tip = m.promo_note ? ' title="' + esc(m.promo_note) + '"' : '';
+  const cost = costLine(m);
   if (m.promo_factor != null && m.promo_credits) {
     const base = m.credits ? ' <s style="color:var(--ink-3);font-size:11.5px">' + esc(m.credits) + '</s>' : '';
     const label = m.promo_label ? ' <span class="tag ok">' + esc(m.promo_label) + '</span>' : '';
-    return '<span' + tip + ' style="cursor:help"><b>' + esc(m.promo_credits) + '</b>' + label + base + '</span>';
+    return '<span' + tip + ' style="cursor:help"><b>' + esc(m.promo_credits) + '</b>' + label + base + '</span>' + cost;
   }
   if (m.promo_label) {
     return '<span' + tip + ' style="cursor:help">' + (m.credits ? esc(m.credits) : '—') +
-      ' <span class="tag warn">' + esc(m.promo_label) + '</span></span>';
+      ' <span class="tag warn">' + esc(m.promo_label) + '</span></span>' + cost;
   }
-  return m.credits ? esc(m.credits) : '—';
+  return (m.credits ? esc(m.credits) : '—') + cost;
 }
 
 async function loadModels() {
@@ -4412,7 +4438,37 @@ let pgBusy = false;    // 发送中标记（防连点）
 
 function pgModelOptions() {
   if (!Array.isArray(pgModels) || !pgModels.length) return '<option value="">模型列表为空</option>';
-  return pgModels.map(m => '<option value="' + esc(m.id) + '">' + esc(m.id) + '</option>').join('');
+  // 默认推荐低成本主力（积分优化，对应 .harness/rules/COST-CONTROL.md）：
+  // deepseek-v4.1-flash 实测 ~1 积分/M，而目录首个模型未必便宜（hy4 系实测
+  // 110~133 积分/M）。找不到时保持第一个（不破坏上游目录顺序语义）。
+  const pref = pgModels.find(m => /deepseek-v4\.1-flash$/i.test(m.id)) || pgModels[0];
+  const prefId = pref && pref.id;
+  return pgModels.map(m => {
+    const tip = m.promo_note || m.description || '';
+    return '<option value="' + esc(m.id) + '"' + (m.id === prefId ? ' selected' : '') +
+      (tip ? ' title="' + esc(tip) + '"' : '') + '>' +
+      esc(pgModelLabel(m)) + '</option>';
+  }).join('');
+}
+
+/* pgModelLabel Playground 模型下拉的选项文案（对齐 WorkBuddy 模型选择器：
+   「模型名 · 倍率 · 免费/优惠标签」）。倍率显示当前生效价（promo_credits，
+   WorkBuddy 客户端显示的正是生效价），无促销时显示牌价 credits；免费
+   （限时免费 factor=0 或牌价为 0）标「免费」，其余促销标签（夜间折扣 /
+   错峰使用等）原样透出；无促销但支持图片的模型标「视觉」，一眼挑出
+   能传图的模型。 */
+function pgModelLabel(m) {
+  const parts = [String(m.name || m.id || '')];
+  const eff = (m.promo_credits != null && m.promo_credits !== '') ? m.promo_credits : m.credits;
+  const rate = String(eff || '').trim();
+  parts.push(rate ? rate : '—');
+  const factor = m.promo_factor == null ? null : Number(m.promo_factor);
+  const creditsNum = parseFloat(String(m.credits || '').replace(/[^\d.]/g, ''));
+  const isFree = factor === 0 || (Number.isFinite(creditsNum) && creditsNum === 0);
+  if (isFree) parts.push(m.promo_label || '免费');
+  else if (m.promo_label) parts.push(m.promo_label);
+  else if (m.supports_images) parts.push('视觉');
+  return parts.join(' · ');
 }
 async function pgLoadModels() {
   const sel = $('pgModel');

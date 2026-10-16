@@ -430,6 +430,28 @@ func (p *Panel) models(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusServiceUnavailable, "没有可用账号：请先在面板添加账号再查询")
 		return
 	}
+	// 实测积分成本率合并（usage 计费样本，72h 滚动窗口，derivation）：把
+	// credit_by_model 的 credits_per_1m_tokens 按裸模型名挂到模型条目，前端在
+	// 倍率列下方显示「实测 X 积分/M · N 样本」。无样本不显示——不伪造成本
+	//（AGENTS.md 四态语义：没样本 = unknown，不是"免费/未知"）。
+	if p.cfg.Usage != nil {
+		snap := p.cfg.Usage.SnapshotWindow(usage.Window{Hours: 72}, nil, nil, nil, nil)
+		costs := make(map[string]usage.CreditAgg, len(snap.CreditByModel))
+		for _, ca := range snap.CreditByModel {
+			costs[ca.Key] = ca
+		}
+		for i := range out {
+			id, _ := out[i]["id"].(string)
+			base := id
+			if j := strings.LastIndexByte(base, ':'); j >= 0 {
+				base = base[j+1:]
+			}
+			if ca, ok := costs[base]; ok && ca.CreditSamples > 0 {
+				out[i]["cost_ppm"] = ca.CreditsPer1MTokens
+				out[i]["cost_samples"] = ca.CreditSamples
+			}
+		}
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "models": out})
 }
 
@@ -790,6 +812,7 @@ func (p *Panel) syncNicknames() {
 //   - hours：滚动窗口（默认 72，上限 1440=60 天），卡片汇总/按域/按账号/按模型/
 //     时序**全部**按该窗口统计；显式 hours=0 表示全部历史（含 90 天前折叠出的日桶）；
 //   - 都不给：等同于 hours=72（保持旧调用方行为）。
+//
 // usageMonthly 返回当月 per-key 累计 token（P1-A：面板 Key 卡片显示"已用/配额"）。
 // 响应 {"month": "2026-10", "keys": {"key-id": 12345, ...}}。
 func (p *Panel) usageMonthly(w http.ResponseWriter, r *http.Request) {

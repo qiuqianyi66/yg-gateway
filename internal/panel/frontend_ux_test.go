@@ -601,3 +601,46 @@ func TestAppJSResponsiveAccGrid(t *testing.T) {
 		t.Error(".acc-grid 未用 min(340px, 100%)：窄屏卡片会溢出")
 	}
 }
+
+// TestAppJSUnknownsBadge 账号卡片的 unknown 成本徽章与总览提示行必须存在。
+//
+// 背景：AGENTS.md「Unknown 消解纪律」要求"不知道的事"可被看见——欠什么观测、
+// 还差什么，不能只存在后端 registry 里让面板无从得知。这里断言两条展示出口：
+//   - 账号卡片状态区：有 unknowns 时输出「N 未知成本」warn 徽章，title 带
+//     question + requires（需要什么才能消解）；
+//   - 账号池提示行：汇总「N 个 (账号,模型) 成本未知」，给一句话入口。
+//
+// 牙齿：删掉 renderAccountsUnsafe 里的 unkTag 或 loadOverview 的 accNote 汇总 → FAIL。
+func TestAppJSUnknownsBadge(t *testing.T) {
+	src := readAppJS(t)
+	for _, want := range []string{
+		"const unk = s.unknowns || [];",
+		"const unkTip = unk.length ? esc(unk.map(u => u.question + '\\n需要：' + u.requires).join('\\n\\n')) : '';",
+		"未知成本</span>",
+		"const unkTotal = (d.accounts || []).reduce((a, s) => a + ((s.unknowns || []).length), 0);",
+		"悬停账号卡片查看明细",
+	} {
+		if !strings.Contains(src, want) {
+			t.Errorf("unknowns 展示缺失：未找到 %q", want)
+		}
+	}
+}
+
+// TestAppJSPgDefaultCheapModel Playground 模型下拉必须默认推荐低成本主力。
+//
+// 背景：调试台默认选中目录第一个模型，而目录首个未必便宜（hy4 系实测
+// 110~133 积分/M vs deepseek-v4.1-flash ~1 积分/M）——试玩一发自选就烧高成本。
+// COST-CONTROL.md 已定 deepseek-v4.1-flash 为低成本主力，下拉默认选中它。
+//
+// 牙齿：删掉 pref 查找/selected 逻辑 → FAIL。
+func TestAppJSPgDefaultCheapModel(t *testing.T) {
+	src := readAppJS(t)
+	for _, want := range []string{
+		"pgModels.find(m => /deepseek-v4\\.1-flash$/i.test(m.id)) || pgModels[0]",
+		"m.id === prefId ? ' selected' : ''",
+	} {
+		if !strings.Contains(src, want) {
+			t.Errorf("Playground 默认模型推荐缺失：未找到 %q", want)
+		}
+	}
+}
