@@ -40,8 +40,35 @@ func (c *Client) BlackcatNeed(a *auth.Auth) (int64, error) {
 	return 0, nil
 }
 
+// nightChatGap 夜猫子相邻两次真实对话之间的间隔。原为函数内字面量 `4 * time.Second`，
+// N4 提为常量：一是让「默认值没被改小」成为可断言的事实（blackcat_test.go 钉住它），
+// 二是把「等多久」从实现细节变成显式契约。
+//
+// 为什么不能直接删掉这个等待：连续发对话会被上游当成脚本行为，4s 是实测可用的节奏。
+// 删它是拿风控观感换测试速度——测试要的是「不用真等」，所以修法是**可注入**而不是删除。
+const nightChatGap = 4 * time.Second
+
+// SetNightChatSleep 仅供测试注入「夜猫子两次对话之间的等待」实现；生产代码不应调用。
+// 注入的函数**会收到生产默认时长**（nightChatGap），因此测试既能跳过真实等待，
+// 又能断言默认值本身没有被改小。传 nil = 恢复生产默认（time.Sleep）。
+func (c *Client) SetNightChatSleep(fn func(time.Duration)) {
+	c.nightChatSleep = fn
+}
+
+// sleepNightChat 执行一次夜间对话间隔等待：生产默认 time.Sleep(nightChatGap)，
+// 测试注入时走注入实现。
+func (c *Client) sleepNightChat() {
+	if c.nightChatSleep != nil {
+		c.nightChatSleep(nightChatGap)
+		return
+	}
+	time.Sleep(nightChatGap)
+}
+
 // RunNightChats 夜猫子：发 need 次 glm-5.2 真实对话（读干流）并上报事件链。
 // 返回成功次数。对话内容极短（1+1），消耗可忽略。
+// 每次成功后等 nightChatGap（可注入，见 SetNightChatSleep）——含最后一次，
+// 与改动前逐位一致（不顺手省掉末次等待：那是另一件事，不该夹在测试提速里做）。
 func (c *Client) RunNightChats(a *auth.Auth, need int) (int64, error) {
 	var ok int64
 	for i := 0; i < need; i++ {
@@ -63,7 +90,7 @@ func (c *Client) RunNightChats(a *auth.Auth, need int) (int64, error) {
 			return ok, fmt.Errorf("第 %d 次上报失败: %w", i+1, err)
 		}
 		ok++
-		time.Sleep(4 * time.Second)
+		c.sleepNightChat()
 	}
 	return ok, nil
 }
