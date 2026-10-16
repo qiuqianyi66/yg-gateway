@@ -82,6 +82,7 @@ $state = [ordered]@{
     rollback_failed      = $false
     skipped_smoke        = [bool]$SkipSmoke
     smoke_ok             = $false
+    smoke_model          = ''
     smoke                = @()
     log_path             = ''
     rollback_log_path    = ''
@@ -402,7 +403,7 @@ try {
         Write-Step ('1. 备份 ' + $targetExe + ' → ' + $targetExe + '.pre-<后缀>-' + $dateStamp + '.bak')
         Write-Step ('2. 停监听（端口 ' + $Port + '）并轮询端口释放（最多 ' + $PortReleaseTimeoutSec + 's）')
         Write-Step ('3. 替换为 ' + $Exe)
-        Write-Step ('4. 启动并 -RedirectStandardError 到 ' + $LogDir)
+        Write-Step ('4. 启动（借 cmd 重定向，把新实例 stderr 落到 ' + $LogDir + '）')
         Write-Step ('5. 健康轮询 /healthz（最多 ' + $HealthTimeoutSec + 's，MinHealthy=' + $MinHealthy + '）')
         Write-Step ('6. 冒烟：' + $(if ($SkipSmoke) { '(已 -SkipSmoke)' } else { '/v1/models + 非流式 + 流式' }))
         Write-Step '7. 任一步失败 → 自动回滚到备份'
@@ -565,31 +566,60 @@ try {
         [void]$smoke.Add([pscustomobject]@{ name = 'chat'; ok = $false; detail = '拿不到可用模型，跳过对话冒烟' })
         Write-Bad '拿不到可用模型，跳过非流式/流式冒烟'
     } else {
+        $state.smoke_model = $useModel
+        Write-Step ('冒烟用模型：' + $useModel)
         $payload = @{ model = $useModel; messages = @(@{ role = 'user'; content = 'ping' }); max_tokens = 16 } | ConvertTo-Json -Depth 5 -Compress
         $payloadStream = @{ model = $useModel; messages = @(@{ role = 'user'; content = 'ping' }); max_tokens = 16; stream = $true } | ConvertTo-Json -Depth 5 -Compress
 
         # 冒烟 2：非流式
+        #
+        # 判据为什么不是「content 非空」（实弹发现，见 change summary）：目录里第一个模型可能
+        # 是**推理模型**——实测 cn:auto → hy4-preview，max_tokens=16 全被 reasoning_content
+        # 吃掉，content 为空但 finish_reason=length，HTTP 200。那是模型行为，不是网关故障。
+        # 网关的契约是「转发成功并回一个合法的 OpenAI chat.completion」，所以判据取：
+        # 200 + ≥1 个 choice + 该 choice 的 message 里 content 或 reasoning_content 有内容。
+        # 这仍然是「有牙齿」的：choices 为空、message 缺失、两个字段都空、非 200 —— 都会红。
         $nonStream = Get-HttpResult ($base + '/v1/chat/completions') -method 'POST' -body $payload -headers $authHeaders -timeoutSec $SmokeTimeoutSec
-        $content = ''
-        if ($nonStream -and $nonStream.Body) {
-            # 分两步：`[string]($x | ConvertFrom-Json).choices[0]` 会被解析成
-            # 先转字符串再取成员，取不到东西又不报错。
+        $nonOk = $false
+        $nonDetail = ''
+        if ($nonStream -and $nonStream.Status -eq 200) {
             try {
                 $parsedNon = $nonStream.Body | ConvertFrom-Json
-                $content = [string]$parsedNon.choices[0].message.content
-            } catch { $content = '' }
+                $nonChoices = @($parsedNon.choices)
+                if ($nonChoices.Count -ge 1) {
+                    $msg = $nonChoices[0].message
+                    $content = [string]$msg.content
+                    $reasoning = [string]$msg.reasoning_content
+                    $nonOk = ($content.Trim().Length -gt 0 -or $reasoning.Trim().Length -gt 0)
+                    $nonDetail = 'content ' + $content.Length + ' / reasoning ' + $reasoning.Length + ' 字符，finish_reason=' + $nonChoices[0].finish_reason
+                } else {
+                    $nonDetail = 'HTTP 200 但 choices 为空'
+                }
+            } catch {
+                $nonDetail = 'HTTP 200 但响应不是合法 JSON'
+            }
+        } else {
+            $nonDetail = 'HTTP ' + $(if ($nonStream) { $nonStream.Status } else { '无响应' })
         }
-        $nonOk = ($nonStream -and $nonStream.Status -eq 200 -and $content.Trim().Length -gt 0)
-        [void]$smoke.Add([pscustomobject]@{ name = '非流式'; ok = $nonOk; detail = $(if ($nonOk) { 'HTTP 200，content ' + $content.Length + ' 字符' } else { 'HTTP ' + $(if ($nonStream) { $nonStream.Status } else { '无响应' }) }) })
-        if ($nonOk) { Write-Ok ('非流式冒烟：HTTP 200，content ' + $content.Length + ' 字符（' + $useModel + '）') } else { Write-Bad ('非流式冒烟失败：HTTP ' + $(if ($nonStream) { $nonStream.Status } else { '无响应' })) }
+        [void]$smoke.Add([pscustomobject]@{ name = '非流式'; ok = $nonOk; detail = $nonDetail })
+        if ($nonOk) { Write-Ok ('非流式冒烟：' + $nonDetail) } else { Write-Bad ('非流式冒烟失败：' + $nonDetail) }
 
         # 冒烟 3：流式（SSE，必须有 data: 与 [DONE]）
+        #
+        # 「含 data:」这条单独是不够的：`data: [DONE]` 同时满足「含 data:」和「含 [DONE]」，
+        # 于是「只回了终止符」的退化响应会被判通过。所以额外要求**至少一行非 [DONE] 的
+        # data: 行**（真正的增量帧）。
         $stream = Get-HttpResult ($base + '/v1/chat/completions') -method 'POST' -body $payloadStream -headers $authHeaders -timeoutSec $SmokeTimeoutSec
         $body = ''
         if ($stream -and $stream.Body) { $body = $stream.Body }
-        $streamOk = ($stream -and $stream.Status -eq 200 -and $body.Contains('data:') -and $body.Contains('[DONE]'))
-        [void]$smoke.Add([pscustomobject]@{ name = '流式'; ok = $streamOk; detail = $(if ($streamOk) { 'HTTP 200，含 data: 与 [DONE]' } else { 'HTTP ' + $(if ($stream) { $stream.Status } else { '无响应' }) + '，无 data:/[DONE]' }) })
-        if ($streamOk) { Write-Ok '流式冒烟：HTTP 200，含 data: 与 [DONE]' } else { Write-Bad ('流式冒烟失败：HTTP ' + $(if ($stream) { $stream.Status } else { '无响应' })) }
+        $hasDelta = $false
+        foreach ($line in ($body -split "`n")) {
+            if ($line.TrimStart().StartsWith('data:') -and -not $line.Contains('[DONE]')) { $hasDelta = $true; break }
+        }
+        $streamOk = ($stream -and $stream.Status -eq 200 -and $hasDelta -and $body.Contains('[DONE]'))
+        $streamDetail = 'HTTP ' + $(if ($stream) { $stream.Status } else { '无响应' }) + '，data 增量帧=' + $hasDelta + '，[DONE]=' + $body.Contains('[DONE]')
+        [void]$smoke.Add([pscustomobject]@{ name = '流式'; ok = $streamOk; detail = $streamDetail })
+        if ($streamOk) { Write-Ok ('流式冒烟：' + $streamDetail) } else { Write-Bad ('流式冒烟失败：' + $streamDetail) }
     }
 
     $state.smoke = @($smoke)

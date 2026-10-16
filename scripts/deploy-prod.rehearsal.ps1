@@ -176,7 +176,16 @@ Check $true ('已知可用 exe：' + $GoodExe + '  sha256=' + $goodHash.Substrin
 $otherHash = ''
 if (Test-Path -LiteralPath $OtherExe) {
     $otherHash = Sha256 $OtherExe
-    Check ($otherHash -ne $goodHash) ('第二个可跑 exe 与第一个不同：' + $otherHash.Substring(0, 16))
+    if ($otherHash -eq $goodHash) {
+        # 两个路径指向**同一个构建**（例如刚重新构建过仓库根的 exe）——这不是失败，
+        # 只是「第二个可跑 exe」这个夹具不存在了：场景 B 仍然验机制（备份/替换/健康/
+        # 不拖死），但不验「哈希确实变了」。把这条当硬断言是错的：排练不该依赖
+        # 「恰好有一个旧的、内容不同的二进制躺在某处」——那会让排练在正常重构后假红。
+        Write-Host '  [WARN] 第二个 exe 与第一个是同一个构建（哈希相同）：场景 B 只验机制、不验哈希变化' -ForegroundColor Yellow
+        $otherHash = ''
+    } else {
+        Check $true ('第二个可跑 exe 与第一个不同：' + $otherHash.Substring(0, 16))
+    }
 } else {
     Write-Host ('  [WARN] 没有第二个可跑 exe（' + $OtherExe + '）：场景 B 只验机制、不验哈希变化') -ForegroundColor Yellow
 }
