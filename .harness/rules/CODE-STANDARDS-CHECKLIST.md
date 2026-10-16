@@ -129,7 +129,16 @@ _ = c.RefreshToken(a)
 - 🔴 禁提交：`auths/`、`config.json`、`data/`、`*.exe`。只读 `config.example.json`。
 - 🟢 `upstream` 是**唯一出站口**；`auth` 是**凭证唯一持有者**。
 - 🔴 `internal/*` 不得循环依赖（当前 DAG）；只有 `cmd/*` 可有 `func main()`。
-- 🟢 每次改动建 `.harness/changes/{feat-name}/`（`summary.md` + `review.md`），分支同名 `feature/{feat-name}`。
+- 🟢 每次改动建 `.harness/changes/{feat-name}/`，分支同名 `feature/{feat-name}`。**产出随路径分级**：
+  - **L0 文档 / L1 前端展示**：`summary.md`
+  - **L2 业务逻辑 / L3 架构**：`summary.md` + `review.md`（六维评审，格式见
+    `.harness/changes/security-hardening/review.md`：结论 → 正确性/性能/安全/一致性/可维护性/架构合规 → 待办 → 独立 reviewer 二轮）
+
+  > 为什么改成按分级要求（2026-10-16 实测）：旧文写「`summary.md` + `review.md`」，
+  > 但 12 个 change 目录里只有 2 个配了 `review.md`（恰好都是 L2/L3），其余 10 个没有。
+  > 规则比实践严 → 人学会忽略规则；改为与分级一致后，「L2/L3 缺 review.md」才是可指摘的具体缺失。
+  > 配套动作：给当时唯一缺件的 L2 改动补了
+  > `.harness/changes/2026-10-16-depth-tasks-4-6/review.md`。
 - 🟢 文档分层：先 `docs/prd/` 后 `docs/plans/`；ADR 三条件全满足才写。
 
 ---
