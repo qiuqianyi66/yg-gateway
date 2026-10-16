@@ -90,8 +90,9 @@
 | B | 12 项断言全过（含 2116ms < 30s） | 同上（`report-b.json`） |
 | C | 4 项断言全过 | 同上（`report-c-dryrun.json`） |
 | 稳定性 | 连跑 2 次全绿 | 见 change summary |
+| **生产实弹：冒烟三条** | ✅ `stage=done` / `health_ok=true`（healthy 3/4）/ `smoke_ok=true` / `rolled_back=false` / 5.5s（2026-10-16 21:18） | `%TEMP%\n1-livefire3-report.json` + `n1-livefire3-console.log`；详见 change summary §2.4 |
 
-## 五、实施中发现的三个真问题（都不是需求的一部分，是动手才暴露的）
+## 五、实施中发现的四个真问题（都不是需求的一部分，是动手才暴露的）
 
 1. **PS 5.1 的 `Invoke-WebRequest` 在非 2xx 时 body 已被读掉**（L-13）：
    健康检查把「服务活着但 0 账号（503）」读成「没有响应」→ 误触发回滚，
@@ -102,5 +103,12 @@
 3. **把非 PE 当 exe 启动会弹模态对话框**（L-12）：Windows 兼容层弹「不支持的
    16 位应用程序」，`cmd` 卡在等人点确定上；err 日志 0 字节、文件被占住、
    桌面留一个要人手点的窗口。这条直接催生了 A1 的预检。
+4. **冒烟判据本身是假的（生产实弹才发现）**：非流式判「`content` 非空」——而目录里第一个
+   模型可能是**推理模型**（实测 `cn:auto` → `hy4-preview`），`max_tokens: 16` 全被
+   `reasoning_content` 吃掉、`content` 为空但 HTTP 200、`finish_reason=length`；
+   流式判「含 `data:` 且含 `[DONE]`」——而 `data: [DONE]` 一行同时满足两者。
+   两者都会**放过退化响应或误杀正常响应**。已改为「转发成功且响应合法」的判据 +
+   「至少一行非 `[DONE]` 的 `data:` 行」。
 
-三条都写进 `.harness/LESSONS.md`（L-12/L-13/L-14），并在排练里各有一条回归断言。
+1–3 写进 `.harness/LESSONS.md`（L-12/L-13/L-14）；4 只在实弹中可见（沙箱没账号打不了冒烟），
+记录在 change summary §2.5。四条都在排练或实弹里有对应的验证。

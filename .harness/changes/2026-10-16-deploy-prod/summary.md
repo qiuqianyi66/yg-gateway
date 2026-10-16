@@ -86,10 +86,69 @@ powershell -NoProfile -File scripts/pre-commit.ps1      # exit 0（六项全过�
 无 `.go` 改动 → gofmt/R10 无事可做；`go build`/`go vet`/`go test ./...`（20 包 ok）/
 `check-boundaries`/`check-depth` 全过。检查 3/6（PS 引号陷阱）扫过新增的 `.ps1` 行：无违规。
 
-### 2.4 未验证的部分（明说）
+### 2.4 生产实弹（2026-10-16 21:15–21:18，用户批准后执行）
 
-- **冒烟三条没有在排练里跑过**：沙箱没账号，打真实上游必然失败。它需要一次**生产实弹**
-  换版（低峰执行，会短暂重启 7863）。
+| 轮次 | 结果 |
+|---|---|
+| 第 1 轮（**我的调度串写坏了**，见 §2.6） | 换版本身成功：生产 `4EE83B41` → `8F357C25`，备份 `yg-gateway.exe.pre-n1-livefire-20261016.bak` = 旧 T7（哈希核对一致），健康 3/4。**但报告/控制台日志路径被坏串切成垃圾，冒烟结果丢失** |
+| 第 2 轮 | 全流程可见，`stage=smoke-failed`：`/v1/models` 200（20 个模型）、流式过、**非流式判失败（HTTP 200）**。脚本行为正确——**冒烟失败不回滚**、备份保留、报告落盘 |
+| 第 3 轮（修掉判据后） | ✅ **`stage=done`、`health_ok=true`（healthy 3/4）、`smoke_ok=true`、`rolled_back=false`、用时 5.5s**；冒烟用模型 `cn:deepseek-v4.1-flash` |
+
+**生产终态**：exe = `8F357C25…`（当前 HEAD 的构建），健康
+`{"healthy":3,"realm_servable":{"cn":true,"global":false},"total":4}`，
+监听进程 = `data\yg-gateway.pid` 里的 26988（**pid 文件写入这条也顺带实证了**：第 2/3 轮都是
+「按 pid 文件停」）。备份共三份：T7 一份 + 新构建两份（同哈希，留作审计）。
+
+> 退出码注：包装 `.cmd` 的 `echo EXITCODE=%ERRORLEVEL%` 没展开（最后一轮），所以退出码没直接
+> 落到日志。但脚本只在 `$exitCode -eq 0` 时打印「换版完成」，第 3 轮打印了它，且报告
+> `stage=done` —— 退出码 0 由脚本自身的分支条件确定。
+
+### 2.5 实弹暴露的两个问题（都是**判据**的问题，不是网关的问题）
+
+**① 非流式冒烟判据太天真（已修，第 3 轮验证）**
+
+第 2 轮的现象是「HTTP 200 却判失败」。手工复现拿到原始响应：
+
+```json
+{"choices":[{"finish_reason":"length","index":0,
+  "message":{"content":"","reasoning_content":"We need","role":"assistant"}}],
+ "model":"hy4-preview", ... "completion_thinking_tokens":16, "completion_tokens":16, ...}
+```
+
+**根因**：目录里第一个模型是 `cn:auto` → 路由到**推理模型** `hy4-preview`，`max_tokens: 16`
+全被 `reasoning_content` 吃掉 → `content` 为空、`finish_reason=length`。这是**模型行为**，
+网关转发完全正常（合法 chat.completion 信封）。
+
+- **旧判据**：`content` 非空 → 在推理模型上必然假红。
+- **新判据**：200 + ≥1 个 choice + 该 choice 的 `message` 里 `content` 或 `reasoning_content`
+  有内容 → 表达的是「网关转发成功并回了一个合法响应」这个真正的契约。
+  仍有牙齿：`choices` 为空、`message` 缺失、两字段皆空、非 200，逐条会红。
+- 顺带把**用了哪个模型**记进报告（`smoke_model`）——这次为了定位它多花了一个来回。
+
+**② 流式判据有个洞（已修）**
+
+旧判据是「含 `data:` **且** 含 `[DONE]`」，而 `data: [DONE]` **一行同时满足两者**——
+「只回了终止符」的退化响应会被判通过。新判据额外要求**至少一行非 `[DONE]` 的 `data:` 行**
+（真正的增量帧），并把 `data 增量帧=` / `[DONE]=` 两个布尔写进详情。
+
+### 2.6 我的调度串写错了（如实记录，非脚本缺陷）
+
+第 1 轮我用「字符串拼接」生成包装 `.cmd`：
+
+```powershell
+'... -ReportPath "' + $tmp + '\n1-livefire-report.json" ...'
+```
+
+命令被运输层按行拆开后，`.cmd` 里变成 `-ReportPath "`→换行→`C:\...\Temp`→换行→`\n1-...`，
+cmd 把下一行当成新命令、重定向目标断成两截 → **报告与控制台日志都没落盘**（所以第 1 轮只有
+「生产确实换了版」这一项证据）。这与 L-1/L-10 同族：**在行敏感的地方用字符串拼接造文件**。
+第 2/3 轮改成用编辑工具写**字面** `.cmd`（内容里用单引号 PS 串 + `*>&1 | Out-File` 抓全部输出流），
+问题消失。已作为候选补充进 L-10 的规则 1（「别拼行」的同族形态）。
+
+### 2.7 仍未验证的部分（明说）
+
+- **受伤路径的实弹**：本轮的坏 exe / 非 PE 两条路只在**排练沙箱**里跑过（排练 A1/A2 全绿），
+  没有在生产上故意喂坏 exe —— 那会真的承担回滚风险，不值得为「多一层证据」去换。
 - **预检只保证「是合法 PE」**：头部完好但内容损坏的 exe 仍会进入流程，由健康轮询兜底（A2 覆盖）。
 
 ## 三、怎么回滚
