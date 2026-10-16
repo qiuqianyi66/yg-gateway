@@ -370,7 +370,13 @@ reqlog 记录**不含请求体**（21 个字段清单见 `.harness/changes/2026-
    （`gh auth login` 或 PAT 之后即可）。**已先做过安全扫描**：47 个待推送提交里
    无 `auths/`、`config.json`、`*.exe`、密钥形态（`sk-`/`ghp_`/`Bearer <长串>`/私钥块）命中——
    但注意**该远端仓库是 public**，push 即公开。
-4. **T7 的改动尚未部署到生产实例**（`D:\yg-gateway\yg-gateway.exe` 仍是旧构建）：
-   新字段 `cache_miss_unknown` 至今未在产线日志出现即为证。部署前必须备份（R15）并冒烟；
-   且**不要用当前工作区构建**——工作区含并行会话未提交的 `internal/panel/*`（会一起 embed 进二进制）。
-   部署属并行会话的既定工作流（交接文档 §6），本轮未越界代做。
+4. ~~T7 尚未部署到生产实例~~ → **已部署并冒烟通过**（2026-10-16 19:03）：新 exe
+   `4EE83B41102E0846…`（旧版 `109E67E060C49E87…` 备份为 `D:\yg-gateway\yg-gateway.exe.pre-t7-unknown-20261016.bak`）。
+   冒烟：`/healthz` healthy(3/4)、`/v1/models` 20 个、`/panel/` 200（面板带并行会话的样式）、
+   非流式一发成功（`credit=0` 的真免费模型按**观察**记账——正是 T7 的 A2 边界）、流式一发
+   `STREAM_OK` + `[DONE]` 正常收尾。
+   **构建口径（重要）**：生产当时跑的是「含并行会话未提交 `internal/panel/*`」的构建，
+   因此部署用的是**当前工作区**（HEAD + 他们的 WIP）而非纯 HEAD——否则会把他们的面板工作打回旧版。
+   **第一次尝试失败并自动回滚**（生产中断约 1 分钟）：kill 后只等 2 秒、端口没释放；
+   且 `start.bat` 的 `>> data\stdout.log` 不落子进程输出，失败时无日志可查。
+   教训已记为 `.harness/LESSONS.md` L-9（等端口释放 + `Start-Process -RedirectStandardError` 落盘 + 回滚用独立日志）。
