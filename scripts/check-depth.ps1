@@ -10,6 +10,13 @@
 #   - ratchet 只要求"不许比上次更差"，存量债不阻塞，新增债立即拦截。
 #     指标变好时用 -Update 主动抬高棘轮（冻结收益）。
 #
+# 口径声明（两种「行数」不是一个东西，对外引用必须说清是哪种）：
+#   - **文件行数** = **非空行**（`Get-Content | Measure-Object -Line`，不计空行）——
+#     即本脚本 maxFileLines / oversizeFiles 用的口径。
+#   - **函数行数** = 代码行（排除空行与 `//` 开头的行），见下方「度量 2/2」段。
+#   参照物：internal/upstream/client.go 实测 = **2185 非空行 / 2315 实际行**（差 130 空行）。
+#   本脚本与 `.harness/rules/编码规范.md` 第九节必须同口径——改任一侧先改这里。
+#
 # 用法：
 #   powershell -NoProfile -File scripts/check-depth.ps1          # 检查（CI / 提交前）
 #   powershell -NoProfile -File scripts/check-depth.ps1 -Update  # 抬棘轮（仅当指标确实变好）
@@ -50,6 +57,7 @@ if (-not $prodFiles) {
 $fileStats = foreach ($f in $prodFiles) {
     [pscustomobject]@{
         Path  = $f.FullName.Replace("$repoRoot\", "")
+        # 口径：**非空行**（不含空行）。声明见文件头「口径声明」，别与函数口径混用。
         Lines = (Get-Content $f.FullName | Measure-Object -Line).Lines
     }
 }
