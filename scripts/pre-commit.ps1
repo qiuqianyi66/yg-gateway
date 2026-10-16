@@ -8,6 +8,7 @@
 #                    （判据见 .harness/rules/ERROR-HANDLING.md）
 #   3. 门禁四件套    go build / go vet / go test
 #   4. 治理门禁      check-boundaries.ps1（依赖方向）+ check-depth.ps1（深度棘轮）
+#   5. PS 地形      引号陷阱（L-1）+ 字面名垃圾文件（L-3）
 #
 # 用法：
 #   powershell -NoProfile -File scripts/pre-commit.ps1           # 全量（提交前必跑）
@@ -120,7 +121,7 @@ $prodGoFiles = @($goFiles | Where-Object { $_ -notlike '*_test.go' })
 # ---------------------------------------------------------------------------
 # 检查 1：gofmt 零漂移（只查本次改动的文件）
 # ---------------------------------------------------------------------------
-Write-Section '检查 1/6：gofmt'
+Write-Section '检查 1/7：gofmt'
 # 本地只看本次改动的 .go 文件（存量已清零，增量严格拦截）；
 # CI 用 -AllFiles 看全仓——CI 工作区干净，「改动文件」恒为空，只看改动等于不检查。
 $gofmtTargets = @()
@@ -152,7 +153,7 @@ if ($gofmtTargets.Count -eq 0) {
 #   (b) 其余新增忽略点（`_ = ...` / `, _ := ...` / `, _ = ...`）→ 必须带解释注释
 #       （同行 `//`，或紧邻上两行内含「忽略」/`ignore`）。
 # ---------------------------------------------------------------------------
-Write-Section '检查 2/6：R10 静默忽略（新增行）'
+Write-Section '检查 2/7：R10 静默忽略（新增行）'
 
 $ignorePattern = '^\s*_ = |^\s*_ := |,\s*_\s*:?='
 $identPattern = '^\s*_ = ([A-Za-z_][A-Za-z0-9_]*)\s*(//.*)?$'
@@ -261,7 +262,7 @@ if ($r10bad.Count -gt 0) {
 # 判据：.ps1 里出现该形态**一律是 bug**（正确写法：行内引用用「」，需要字面双引号用单引号串
 # 或 here-string；确实要转义引号则用反引号转义）。
 # ---------------------------------------------------------------------------
-Write-Section '检查 3/6：PowerShell 引号陷阱（新增行）'
+Write-Section '检查 3/7：PowerShell 引号陷阱（新增行）'
 $psTrap = New-Object System.Collections.ArrayList
 foreach ($a in $added) {
     if ($a.File -notlike '*.ps1') { continue }
@@ -276,9 +277,46 @@ if ($psTrap.Count -gt 0) {
 }
 
 # ---------------------------------------------------------------------------
-# 检查 4：构建与静态检查
+# 检查 4：仓库根的字面名垃圾文件（LESSONS.md L-3，Seen 2 → 按机制落地为机器检查）
+#
+# 为什么需要：给原生命令传「带变量的参数」时，PS 5.1 **不展开**变量——不只是单引号串，
+# 连**未加引号**的 `-flag=$var` 也不展开（探针实测：`cmd /c echo -coverprofile=$x` 原样输出
+# `$x`，而加了双引号才变成 `VAL`）。于是 `go test -coverprofile=$out` 会在**仓库根**
+# 写下一个名叫 `$out` 的文件（内容是覆盖率 profile），而且**不报错**：
+# 执行者以为产出了 profile、实际产出的是一坨垃圾文件。已踩 2 次
+# （`$out`/`$p`/`$tmp`，以及看起来像正常插值的未加引号 `$cov`/`$abs`）。
+#
+# 判据刻意收窄，避免误报：
+#   - 只看 **git 未跟踪** 的文件（`--exclude-standard`，已 `.gitignore` 的不管）；
+#   - 只看 **仓库根**，名字里带分隔符的（子目录）一律放过；
+#   - 名字以 `$` 开头，或整体形如 `out` / `p` / `tmp` / `cov` / `cover` / `profile`（可带前导点）
+#     —— 这类名字在仓库根出现只可能是变量名残留。
+# 作用域说明：这条检查天然是「本地」的（CI 工作区干净、无未跟踪文件），CI 里必然通过，
+# 这不是放水——它要拦的本来就是本地跑覆盖率时的手误。
 # ---------------------------------------------------------------------------
-Write-Section '检查 4/6：go build + go vet'
+Write-Section '检查 4/7：仓库根的字面名垃圾文件（L-3）'
+$literalBad = New-Object System.Collections.ArrayList
+foreach ($f in @(& git ls-files --others --exclude-standard 2>$null)) {
+    if (-not $f) { continue }
+    if ($f -match '[\\/]') { continue }
+    if ($f.StartsWith('$') -or $f -match '^\.?(out|p|tmp|cov|cover|profile)$') {
+        [void]$literalBad.Add($f)
+    }
+}
+if ($literalBad.Count -gt 0) {
+    foreach ($b in $literalBad) { Write-Bad ('仓库根出现字面名垃圾文件: ' + $b) }
+    Write-Host '  → 这几乎一定是「带变量的参数没被 PS 展开」：PS 5.1 里单引号串内的变量不展开，未加引号的 -flag=$var 同样不展开。' -ForegroundColor Gray
+    Write-Host '  → 正确写法：$out = Join-Path $env:TEMP "cov.out"; go test "-coverprofile=$out"（**双引号**，且路径落到 $env:TEMP）' -ForegroundColor Gray
+    Write-Host '  → 若确实是需要的文件名，请把它加到 .gitignore 或改名（仓库根不该有这类名字）。' -ForegroundColor Gray
+    Add-Failure "仓库根字面名垃圾文件 $($literalBad.Count) 个（L-3）"
+} else {
+    Write-Pass '仓库根无字面名垃圾文件'
+}
+
+# ---------------------------------------------------------------------------
+# 检查 5：构建与静态检查
+# ---------------------------------------------------------------------------
+Write-Section '检查 5/7：go build + go vet'
 $buildOut = @(& $goExe build ./... 2>&1)
 if ($LASTEXITCODE -ne 0) {
     $buildOut | Select-Object -First 40 | ForEach-Object { Write-Host ("    " + $_) -ForegroundColor DarkGray }
@@ -298,9 +336,9 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 # ---------------------------------------------------------------------------
-# 检查 5：测试
+# 检查 6：测试
 # ---------------------------------------------------------------------------
-Write-Section '检查 5/6：go test ./...'
+Write-Section '检查 6/7：go test ./...'
 if ($Fast) {
     Write-Host '  [SKIP] -Fast 已跳过测试（提交前请至少跑一次全量）' -ForegroundColor Yellow
 } else {
@@ -317,9 +355,9 @@ if ($Fast) {
 }
 
 # ---------------------------------------------------------------------------
-# 检查 6：治理门禁（依赖方向 + 深度棘轮）
+# 检查 7：治理门禁（依赖方向 + 深度棘轮）
 # ---------------------------------------------------------------------------
-Write-Section '检查 6/6：边界与深度棘轮'
+Write-Section '检查 7/7：边界与深度棘轮'
 $bout = @(& $hostExe -NoProfile -File scripts/check-boundaries.ps1 2>&1)
 if ($LASTEXITCODE -ne 0) {
     $bout | Select-Object -First 30 | ForEach-Object { Write-Host ("    " + $_) -ForegroundColor DarkGray }
