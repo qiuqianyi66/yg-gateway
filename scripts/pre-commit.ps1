@@ -120,7 +120,7 @@ $prodGoFiles = @($goFiles | Where-Object { $_ -notlike '*_test.go' })
 # ---------------------------------------------------------------------------
 # 检查 1：gofmt 零漂移（只查本次改动的文件）
 # ---------------------------------------------------------------------------
-Write-Section '检查 1/5：gofmt'
+Write-Section '检查 1/6：gofmt'
 # 本地只看本次改动的 .go 文件（存量已清零，增量严格拦截）；
 # CI 用 -AllFiles 看全仓——CI 工作区干净，「改动文件」恒为空，只看改动等于不检查。
 $gofmtTargets = @()
@@ -152,7 +152,7 @@ if ($gofmtTargets.Count -eq 0) {
 #   (b) 其余新增忽略点（`_ = ...` / `, _ := ...` / `, _ = ...`）→ 必须带解释注释
 #       （同行 `//`，或紧邻上两行内含「忽略」/`ignore`）。
 # ---------------------------------------------------------------------------
-Write-Section '检查 2/5：R10 静默忽略（新增行）'
+Write-Section '检查 2/6：R10 静默忽略（新增行）'
 
 $ignorePattern = '^\s*_ = |^\s*_ := |,\s*_\s*:?='
 $identPattern = '^\s*_ = ([A-Za-z_][A-Za-z0-9_]*)\s*(//.*)?$'
@@ -251,9 +251,34 @@ if ($r10bad.Count -gt 0) {
 }
 
 # ---------------------------------------------------------------------------
-# 检查 3：构建与静态检查
+# 检查 3：PowerShell 引号陷阱（只查 .ps1 的新增行）
+#
+# 为什么需要（LESSONS.md L-1，Seen 3 → 按机制落地机器检查）：
+# PowerShell 5.1 里**反斜杠不是转义符**——双引号串里出现「反斜杠 + 双引号」会**提前结束**这个串，
+# 后面的内容被当成命令或参数解析：轻则参数被切成别的路径（git 报 "/ 不在仓库内"），
+# 重则整条命令一个字符都不执行，而执行者以为已经跑过了。
+# 本仓已连踩三次：① pre-commit.ps1 自身解析失败 ② 内联命令整条未执行 ③ 提交命令把路径切坏。
+# 判据：.ps1 里出现该形态**一律是 bug**（正确写法：行内引用用「」，需要字面双引号用单引号串
+# 或 here-string；确实要转义引号则用反引号转义）。
 # ---------------------------------------------------------------------------
-Write-Section '检查 3/5：go build + go vet'
+Write-Section '检查 3/6：PowerShell 引号陷阱（新增行）'
+$psTrap = New-Object System.Collections.ArrayList
+foreach ($a in $added) {
+    if ($a.File -notlike '*.ps1') { continue }
+    if ($a.Text -notmatch '\\[\u0022]') { continue }
+    [void]$psTrap.Add(("{0}:{1}  {2}" -f $a.File, $a.Line, $a.Text.Trim()))
+}
+if ($psTrap.Count -gt 0) {
+    foreach ($t in $psTrap) { Write-Bad ("PowerShell 引号陷阱: " + $t) }
+    Add-Failure "PowerShell 引号陷阱 $($psTrap.Count) 处（PS 5.1 不支持反斜杠转义；行内引用用「」，字面引号用单引号串或 here-string）"
+} else {
+    Write-Pass '新增 .ps1 行无「反斜杠+双引号」形态'
+}
+
+# ---------------------------------------------------------------------------
+# 检查 4：构建与静态检查
+# ---------------------------------------------------------------------------
+Write-Section '检查 4/6：go build + go vet'
 $buildOut = @(& $goExe build ./... 2>&1)
 if ($LASTEXITCODE -ne 0) {
     $buildOut | Select-Object -First 40 | ForEach-Object { Write-Host ("    " + $_) -ForegroundColor DarkGray }
@@ -273,9 +298,9 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 # ---------------------------------------------------------------------------
-# 检查 4：测试
+# 检查 5：测试
 # ---------------------------------------------------------------------------
-Write-Section '检查 4/5：go test ./...'
+Write-Section '检查 5/6：go test ./...'
 if ($Fast) {
     Write-Host '  [SKIP] -Fast 已跳过测试（提交前请至少跑一次全量）' -ForegroundColor Yellow
 } else {
@@ -292,9 +317,9 @@ if ($Fast) {
 }
 
 # ---------------------------------------------------------------------------
-# 检查 5：治理门禁（依赖方向 + 深度棘轮）
+# 检查 6：治理门禁（依赖方向 + 深度棘轮）
 # ---------------------------------------------------------------------------
-Write-Section '检查 5/5：边界与深度棘轮'
+Write-Section '检查 6/6：边界与深度棘轮'
 $bout = @(& $hostExe -NoProfile -File scripts/check-boundaries.ps1 2>&1)
 if ($LASTEXITCODE -ne 0) {
     $bout | Select-Object -First 30 | ForEach-Object { Write-Host ("    " + $_) -ForegroundColor DarkGray }
