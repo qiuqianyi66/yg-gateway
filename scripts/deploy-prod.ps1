@@ -15,6 +15,8 @@
 #   powershell -NoProfile -File scripts/deploy-prod.ps1 -Feature t8-unknown
 #   powershell -NoProfile -File scripts/deploy-prod.ps1 -Build -Feature t8-unknown   # 先 go build 再部署
 #   powershell -NoProfile -File scripts/deploy-prod.ps1 -DryRun                      # 只打印计划，不动任何东西
+#   powershell -NoProfile -File scripts/deploy-prod.ps1 -Build -AllowDirty           # 明知工作区不干净仍构建部署
+#     （产物将**不可用提交号追溯**；报告里会记下 HEAD 与脏文件数，仅供事后对账）
 #
 # 退出码（**1 与 4 的区别就是「生产现在能不能用」，别混**）：
 #   0 = 部署成功（含冒烟通过；-SkipSmoke 时不因冒烟失败）
@@ -47,6 +49,7 @@ param(
     [string]$LogDir = '',
     [string]$ReportPath = '',
     [switch]$Build,
+    [switch]$AllowDirty,
     [switch]$SkipSmoke,
     [switch]$DryRun
 )
@@ -72,6 +75,9 @@ $state = [ordered]@{
     port                 = $Port
     source_exe           = ''
     source_exe_hash      = ''
+    git_head             = ''
+    git_dirty            = $false
+    git_dirty_files      = 0
     exe_hash_before      = ''
     exe_hash_after       = ''
     backup_path          = ''
@@ -446,7 +452,31 @@ try {
     Write-Ok ('生产 exe / 配置存在')
 
     if (-not $Exe) { $Exe = Join-Path $repoRoot 'yg-gateway.exe' }
+
+    # 记录「生产在跑的到底是哪份源码」（本脚本唯一答不出、而运维一定会问的问题）。
+    # 这条是实弹之后补的：当时构建出来的 exe 既不等于当时 HEAD（12fa651）的干净构建，
+    # 也不等于事后工作区的构建——**它不对应任何提交**，因为工作区里有别的会话的在途改动。
+    # 现在至少把 HEAD 与脏标记写进报告；-Build 时还会拒绝脏工作区（除非显式 -AllowDirty）。
+    $gitHead = @(& git -C $repoRoot rev-parse --short HEAD 2>$null)
+    if ($LASTEXITCODE -eq 0 -and $gitHead.Count -gt 0 -and $gitHead[0]) { $state.git_head = [string]$gitHead[0] }
+    $gitDirty = @(& git -C $repoRoot status --porcelain 2>$null | Where-Object { $_ })
+    $state.git_dirty_files = $gitDirty.Count
+    $state.git_dirty = ($gitDirty.Count -gt 0)
+    if ($state.git_dirty) {
+        Write-Warn2 ('工作区不干净（' + $gitDirty.Count + ' 个改动/未跟踪文件）：这份二进制将无法用提交号追溯')
+    }
+    Write-Step ('源码：HEAD=' + $(if ($state.git_head) { $state.git_head } else { '(读不到)' }) + '  脏文件=' + $state.git_dirty_files)
+
     if ($Build) {
+        if ($state.git_dirty -and -not $AllowDirty) {
+            Write-Bad ('-Build 但工作区有 ' + $state.git_dirty_files + ' 个未提交改动：构建出的二进制不对应任何提交')
+            Write-Step '要么先提交/暂存这些改动，要么显式加 -AllowDirty（表示你接受「这份产物不可追溯」）'
+            Write-Step '生产**未被触碰**（这条在停服之前拦下）'
+            $state.stage = 'rejected-dirty-tree'
+            $state.error = 'dirty working tree with -Build'
+            $exitCode = 1
+            return
+        }
         Write-Step ('-Build：go build → ' + $Exe)
         $env:GOPROXY = 'https://goproxy.cn,direct'
         $env:CGO_ENABLED = '0'

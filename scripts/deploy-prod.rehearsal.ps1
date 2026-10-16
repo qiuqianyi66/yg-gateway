@@ -331,8 +331,54 @@ try {
     }
     Check ((Sha256 $exePath) -eq (Sha256 $newExe)) '沙箱 exe = 传入的新 exe（替换真的发生了）'
     if ($otherHash) { Check ((Sha256 $exePath) -ne $goodHash) '新 exe 与旧 exe 哈希不同（替换可见）' }
+    if (Test-Path -LiteralPath $report) {
+        $jb = Get-Content -LiteralPath $report -Raw | ConvertFrom-Json
+        $headNow = @(git -C $repoRoot rev-parse --short HEAD 2>$null)
+        $dirtyNow = @(git -C $repoRoot status --porcelain 2>$null | Where-Object { $_ })
+        Check ($jb.git_head -eq [string]$headNow[0]) ('报告记了源码 HEAD（= ' + $headNow[0] + '，产物可追溯）')
+        Check ($jb.git_dirty_files -eq $dirtyNow.Count) ('报告记了脏文件数（= ' + $dirtyNow.Count + '）')
+    }
     Start-Sleep -Seconds 1
     Check ([bool](Get-SandboxListenerPid $port)) '新版本在跑（端口有监听）'
+} finally {
+    Stop-Sandbox
+}
+
+# --------------------------------------------------------------------------
+Section '场景 E：-Build + 脏工作区 → 必须在构建之前拒绝'
+# --------------------------------------------------------------------------
+# 为什么有这条：生产实弹之后才发现脚本答不出「生产在跑的是哪份源码」——当时部署的 exe
+# 既不等于当时 HEAD（12fa651）的**干净构建**（4AC4F50B），也不等于事后工作区的构建（31CD36CB）：
+# 它是**一个不对应任何提交的工作区快照**（工作区里有别的会话的在途改动）。
+# 现在 -Build 遇到脏工作区在构建之前就拒绝（除非 -AllowDirty），并把 HEAD/脏文件数写进报告。
+try {
+    [void](New-Sandbox $GoodExe)
+    $exePath = Join-Path $sandbox 'yg-gateway.exe'
+    $beforeE = Sha256 $exePath
+    $repoExe = Join-Path $repoRoot 'yg-gateway.exe'
+    $repoExeBefore = Sha256 $repoExe
+    $dirtyNow = @(git -C $repoRoot status --porcelain 2>$null | Where-Object { $_ })
+
+    if ($dirtyNow.Count -gt 0) {
+        $report = Join-Path $reports 'report-e.json'
+        $r = Invoke-Deploy @('-Build', '-Exe', $repoExe, '-ProdDir', $sandbox, '-Port', "$port",
+            '-Feature', 'rehearsal-e', '-SkipSmoke', '-ReportPath', $report, '-LogDir', $sandbox)
+        $exitOkE = ($r.ExitCode -eq 1)
+        Check $exitOkE ('工作区不干净（' + $dirtyNow.Count + ' 个文件）→ 退出码 1，实际 ' + $r.ExitCode)
+        if (-not $exitOkE) { Show-DeployOutput $r 'E 退出码不符' }
+        if (Test-Path -LiteralPath $report) {
+            $e = Get-Content -LiteralPath $report -Raw | ConvertFrom-Json
+            Check ($e.stage -eq 'rejected-dirty-tree') ('报告 stage = rejected-dirty-tree，实际 ' + $e.stage)
+            Check ($e.git_dirty -eq $true) '报告 git_dirty = true'
+            Check ($e.git_dirty_files -eq $dirtyNow.Count) ('报告 git_dirty_files = ' + $dirtyNow.Count)
+        } else {
+            Check $false '产出了 JSON 报告'
+        }
+        Check ((Sha256 $repoExe) -eq $repoExeBefore) '仓库根的 exe 未被重新构建（拒绝发生在构建之前）'
+        Check ((Sha256 $exePath) -eq $beforeE) '沙箱 exe 未被触碰'
+    } else {
+        Write-Host '  [WARN] 当前工作区是干净的：-Build 的拒绝路径无法测（不为了测它去弄脏仓库），本场景跳过' -ForegroundColor Yellow
+    }
 } finally {
     Stop-Sandbox
 }
@@ -416,6 +462,6 @@ if ($failures.Count -gt 0) {
     exit 1
 }
 Write-Host ('排练全部通过（执行断言 ' + $script:checkTotal + ' 项，0 失败）：') -ForegroundColor Green
-Write-Host '  A1 非 PE 被预检拒绝且生产零触碰、A2 坏 PE 自动回滚、B 替换生效且不拖死调用方、C DryRun 无副作用、D 停服后替换失败也把旧版拉回来。' -ForegroundColor Green
+Write-Host '  A1 非 PE 被预检拒绝且生产零触碰、A2 坏 PE 自动回滚、B 替换生效且不拖死调用方、C DryRun 无副作用、D 停服后替换失败也把旧版拉回来、E -Build 遇到脏工作区在构建前拒绝。' -ForegroundColor Green
 Write-Host ('报告留档：' + $reports) -ForegroundColor Gray
 exit 0
