@@ -128,10 +128,14 @@ Unknown 是**一等公民实体**，不是面板上的一个展示区：
 - Go 工具链：`C:\Program Files\Go\bin\go.exe`（≥1.27.2），
   `GOPROXY=https://goproxy.cn,direct`，`CGO_ENABLED=0`
 - 构建：`go build -trimpath -ldflags="-s -w" -o yg-gateway.exe ./cmd/server`
-- 门禁：`go test ./...`（21 包：18 ok + 3 no test files）、`go vet ./...`、
-  `gofmt -l ./cmd ./internal`（允许 3 个 pre-existing 漂移，新文件必须干净）
-- 边界：`powershell -File scripts/check-boundaries.ps1`
-- 本机无 gcc，`-race` 不可用；并发正确性靠设计 + 单测保证
+- 门禁（五项，本地与 CI 同源）：
+  - `go test ./...`（**23 包：20 ok + 3 no test files**）
+  - `go vet ./...`
+  - `gofmt -l ./cmd ./internal`（**必须无输出**；漂移已清零，新文件零容忍）
+  - `powershell -NoProfile -File scripts/check-boundaries.ps1`（依赖方向，退出码非 0 即违规）
+  - `powershell -NoProfile -File scripts/check-depth.ps1`（体量/覆盖率棘轮，只许收紧；`-Update` 抬棘轮）
+- 提交前总闸：`powershell -NoProfile -File scripts/pre-commit.ps1`（全量；`-Fast` 跳过 `go test`）
+- 本机无 gcc，`-race` 不可用（**由 CI 独占**）；并发正确性靠设计 + 单测保证
 
 ## 变更追踪
 
