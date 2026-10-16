@@ -16,10 +16,12 @@ on:
       - "go.sum"
       - "cmd/**"
       - "internal/**"
-      - "scripts/**"
+      - "scripts/**"                      # 门禁脚本住这里：改门禁必须被门禁跑一遍
+      - ".harness/**"                     # 规范 / 深度基线（棘轮数据）
       - "*.sh"
       - "config.example.json"
       - ".github/workflows/docker-ghcr.yml"
+      - ".github/workflows/gate.yml"      # 两条发布线共用的门禁实现
   workflow_dispatch:
 
 # 并发组：PR 取消过时构建；main/tag 按引用串行——发版时 main+tag 同推不再双跑
@@ -34,7 +36,18 @@ env:
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
+  # 治理门禁：与 go-binaries 共用同一份实现（见 .github/workflows/gate.yml）。
+  #
+  # 为什么镜像线也要门禁：镜像是**可运行产物**——只有二进制线跑门禁，等于留了一条
+  # 「改完 scripts/ 或 .harness/ 直接打镜像」的绕过路径。两条线都要，且必须是同一份实现。
+  gate:
+    uses: ./.github/workflows/gate.yml
+    with:
+      base_ref: ${{ github.base_ref }}
+
   build-and-publish:
+    # 门禁不过就不构建、不推送镜像（与 go-binaries 的 build 依赖 gate 同语义）。
+    needs: gate
     runs-on: ubuntu-latest
     permissions:
       contents: read

@@ -19,6 +19,7 @@ on:
       - ".harness/**"                     # 规范 / 深度基线（棘轮数据）/ 变更追踪
       - "config.example.json"
       - ".github/workflows/go-binaries.yml"
+      - ".github/workflows/gate.yml"      # 两条发布线共用的门禁实现
   workflow_dispatch:
 
 concurrency:
@@ -51,36 +52,13 @@ jobs:
           go install golang.org/x/vuln/cmd/govulncheck@latest
           "$(go env GOPATH)/bin/govulncheck" ./...
 
-  # 治理门禁：把 .harness/rules/ 的规范变成 CI 的退出码（脚本本体在 scripts/）。
-  # 与 test job 的分工：test 管功能（go test / go vet / node --check / govulncheck），
-  # gate 管治理（全仓 gofmt、依赖边界、深度棘轮、R10 新增静默忽略点），两者并行。
-  # 为什么不能只靠本地 pre-commit：--no-verify、忘记跑、或别的会话直接 push 都会绕过。
+  # 治理门禁：实现见 .github/workflows/gate.yml（可复用 workflow）。
+  # 为什么抽出去：docker-ghcr 这条镜像发布线要共用**同一份**实现——门禁复制成两份必然分叉，
+  # 分叉后会给「这条线过了、那条线没过」的假保证。
   gate:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          # 必须取全历史：R10 与「本次改动」是相对 base 提交算的差分
-          fetch-depth: 0
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-      - name: 解析 base（PR → origin/<base>；push → HEAD~1）
-        id: base
-        env:
-          BASE_REF: ${{ github.base_ref }}
-        run: |
-          if [ -n "$BASE_REF" ]; then
-            git fetch --no-tags origin "+refs/heads/$BASE_REF:refs/remotes/origin/$BASE_REF"
-            echo "ref=origin/$BASE_REF" >> "$GITHUB_OUTPUT"
-          else
-            echo "ref=HEAD~1" >> "$GITHUB_OUTPUT"
-          fi
-      # -Fast：go test 由 test job 独占（check-depth 内部仍会跑一次带覆盖率的，棘轮需要它）
-      # -AllFiles：CI 工作区干净，「本次改动的文件」恒为空 → 只查改动等于不查
-      # -Base：改动已提交，只有与 base 差分才能看到「本次新增了哪些行」
-      - name: 提交前总闸（全仓 gofmt / R10 新增行 / 边界 / 深度棘轮）
-        run: pwsh -NoProfile -File scripts/pre-commit.ps1 -Fast -AllFiles -Base "${{ steps.base.outputs.ref }}"
+    uses: ./.github/workflows/gate.yml
+    with:
+      base_ref: ${{ github.base_ref }}
 
   # 竞态检测：Linux runner 自带 gcc，启用 CGO 跑 -race（Windows 本地开发环境无 gcc，
   # 无法跑 -race，故数据竞争检测放到 CI）。独立 job 与 test 并行，不污染普通测试的

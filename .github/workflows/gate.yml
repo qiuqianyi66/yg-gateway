@@ -1,0 +1,60 @@
+name: gate
+
+# 可复用 workflow：治理门禁（全仓 gofmt / R10 新增静默忽略 / PowerShell 引号陷阱 / 边界 / 深度棘轮）。
+#
+# 被两条发布线共同调用：
+#   - go-binaries（五平台二进制）
+#   - docker-ghcr（多架构镜像）
+# 目的：**任何能产出可运行产物的路径，都必须先过同一道门禁**。
+#
+# 为什么抽成可复用（而不是每个 workflow 各粘一份）：
+#   门禁是最不能被复制的东西——两份实现必然分叉，而分叉后的门禁会给出
+#   「这条线过了、那条线没过」的**假保证**；分叉得越久，越没人知道哪份才算数。
+#   抽成一份之后，改门禁只改这里，两条线同时生效（PR paths 里也各自包含本文件，
+#   保证「改门禁」本身会被门禁跑一遍）。
+#
+# 代价（明说）：push 时两条 workflow 各跑一次 gate，重复约 2.5 分钟。
+# 公开仓库的 Actions 分钟数免费，且这换来「两条线都无法绕过门禁」的确定性——
+# 若将来要消除重复，正确做法是把两条发布线合并成一个 workflow（一个 gate job + 两个 build job），
+# 而不是把 gate 内联回去。
+on:
+  workflow_call:
+    inputs:
+      base_ref:
+        description: 差分基准分支名（PR 传 github.base_ref；push 留空则由脚本回落到 HEAD~1）
+        type: string
+        required: false
+        default: ""
+  workflow_dispatch:
+
+# 最小权限：门禁只读代码（checkout 需要 contents: read）。
+permissions:
+  contents: read
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # 必须取全历史：R10 与「本次改动」是相对 base 提交算的差分
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: 解析 base（PR → origin/<base>；push → HEAD~1）
+        id: base
+        env:
+          BASE_REF: ${{ inputs.base_ref }}
+        run: |
+          if [ -n "$BASE_REF" ]; then
+            git fetch --no-tags origin "+refs/heads/$BASE_REF:refs/remotes/origin/$BASE_REF"
+            echo "ref=origin/$BASE_REF" >> "$GITHUB_OUTPUT"
+          else
+            echo "ref=HEAD~1" >> "$GITHUB_OUTPUT"
+          fi
+      # -Fast：go test 由各 workflow 自己的 test job 独占（check-depth 内部仍会跑一次带覆盖率的，棘轮需要它）
+      # -AllFiles：CI 工作区干净，「本次改动的文件」恒为空 → 只查改动等于不查
+      # -Base：改动已提交，只有与 base 差分才能看到「本次新增了哪些行」
+      - name: 提交前总闸（全仓 gofmt / R10 新增行 / PowerShell 引号陷阱 / 边界 / 深度棘轮）
+        run: pwsh -NoProfile -File scripts/pre-commit.ps1 -Fast -AllFiles -Base "${{ steps.base.outputs.ref }}"
