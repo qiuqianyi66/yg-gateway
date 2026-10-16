@@ -169,6 +169,66 @@
   3. 看到「本地绿、CI 红」的第一反应是查「HEAD 与工作区的差集」，不是怀疑 CI。
 - **状态**：本次已定位并记录；修复需并行会话把 panel WIP 提交（本会话未越界代提交）。
 
+### L-12｜把非 PE 当 exe 启动会弹模态对话框，把 launcher 卡死 —— Seen: 1（**会伪造结论 + 短暂停服**）
+
+- **Seen 1**（2026-10-16，N1 排练）：为验证「坏 exe → 自动回滚」，把一个 **33 字节的文本文件**
+  当网关 exe 启动。Windows 兼容层弹出**模态对话框**「不支持的 16 位应用程序」，
+  而 launcher（`cmd.exe`）就阻塞在「等人点确定」上。**用户在桌面上看到了这个弹窗**。
+- **连锁现象**（三条都是同一个根因，看起来像三个不同的 bug）：
+  1. 新实例的 **err 日志 0 字节** —— 错误进了对话框，没进被重定向的 stderr → 失败时无日志可查；
+  2. 那个 exe 文件被**持续占住**（实测 15s 以上不释放）→ 覆盖式回滚写入失败（见 L-14）；
+  3. launcher 进程**永久残留**，桌面上留一个需要人工点的窗口（点完才继续）。
+- **另一条独立的坑（同一次实验里量到）**：`Start-Process -RedirectStandardOutput/-RedirectStandardError`
+  起的**常驻**孙子进程，会持有调用方 stdout 管道的写端 → 用 `& powershell -File xxx.ps1`
+  捕获输出时，外层**一直阻塞到该进程退出**。实测：内层脚本 3s 结束，外层阻塞 **8865ms**
+  （≈ 孙子进程的 8s 睡眠）；换成 cmd 重定向后外层 **3716ms** 正常返回。
+  危害：CI / agent harness / 任何「捕获输出」的调用方会白等一个常驻服务的寿命。
+- **规则**：
+  1. 启动服务前对候选二进制做 **PE 预检**（MZ + `PE\0\0` 签名），把「根本不是可执行文件」
+     挡在**停服与启动之前**——非 PE 读文件头就能判定，没有理由先启动它；
+  2. 要同时做到「日志落文件」＋「不拖住调用方」，用
+     `cmd /c "<exe>" -config "<cfg>" > "out" 2> "err"`，且**整串再包一层引号**
+     （不包的话 cmd 会剥掉最外一层引号、连同重定向一起吃掉 →
+     **进程静默不启动**：实测 listeners=0、日志 0 字节、**没有任何报错**；包了之后
+     listeners=1、stderr 1047 字节）；
+  3. **别**用 `Start-Process -RedirectStandardOutput/-RedirectStandardError` 起常驻服务。
+- **落点**：`scripts/deploy-prod.ps1`（`Test-PeImage` / `Start-Instance`）与
+  `scripts/deploy-prod.rehearsal.ps1`（A1 钉预检、B 钉「不拖死调用方」的 30s 上界）。
+
+### L-13｜PS 5.1 的 `Invoke-WebRequest` 非 2xx 时 body 已经被读掉 —— Seen: 1（**会伪造结论**）
+
+- **Seen 1**（2026-10-16，N1 排练）：换版脚本的健康检查对 **503** 响应读
+  `$_.Exception.Response.GetResponseStream()` → 读到**空串** → 「服务活着但 0 账号」被判成
+  「没有任何响应」→ 误触发回滚。代价：排练一次刷出 **14 项假失败**，
+  且**回滚把本来成功的部署退回了旧版**——看起来像「部署功能坏了」，实际是检查器坏了。
+- **根因**：`Invoke-WebRequest` 在非 2xx 时自己已经把 body 读进 `ErrorDetails`（这也是
+  `catch { "$_" }` 能直接打出响应体的原因），响应流到我们手上时已到 EOF。
+- **规则**：
+  1. 凡是要**判服务的结构化状态**（健康、就绪、错误体）的场合，不要用 `Invoke-WebRequest`，
+     直连 `System.Net.HttpWebRequest`：状态码与 body 都自己读，非 2xx 也有体；
+  2. 判「健康」不要只认 2xx —— `/healthz` 在 **0 账号时返回 503**（探针实测），
+     只认 200 会把「起来了但没账号」误判成「没起来」。
+- **落点**：`scripts/deploy-prod.ps1` 的 `Get-HttpResult` / `Test-HealthOnce`。
+
+### L-14｜覆盖一个被占用的 exe 会失败，必须改名替换 —— Seen: 1（**会让回滚写不回去**）
+
+- **Seen 1**（2026-10-16，N1 排练）：坏 exe 的 launcher 占着 `yg-gateway.exe`，
+  回滚时 `Copy-Item 备份 → yg-gateway.exe -Force` **持续失败**
+  （`file is being used by another process`，重试 10s 仍失败）——
+  **恰好发生在最需要回滚的时候**，而这正是换版脚本唯一存在的理由。
+- **实测三种写法**（同一锁状态下）：
+
+  | 写法 | 结果 |
+  |---|---|
+  | `Copy-Item 好exe → 原名字 -Force` | **失败** |
+  | `Copy-Item 好exe → 原名字.staged` + `Move-Item -Force` 改名替换 | **成功** |
+  | 杀掉占用者再直接覆盖 | （未测完；不必需，因为上一行已解决） |
+
+  差别在于：**覆盖要拿目标文件的写权限，改名只需要 `FILE_SHARE_DELETE`**。
+- **规则**：替换/恢复二进制一律「写 `*.staged` + `Move-Item -Force` 改名替换」，
+  不要直接覆盖目标名。同类场景：任何「正在被进程持有的工件」的原子替换。
+- **落点**：`scripts/deploy-prod.ps1` 的 `Replace-Binary`（正向替换与回滚**共用**它）。
+
 ## 二、已知 flake（待修缺陷，不是流程教训）
 
 | flake | 现象 | 现状 |
