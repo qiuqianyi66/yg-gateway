@@ -27,11 +27,14 @@ import (
 	"yg-gateway/internal/usage"
 )
 
-// TestMain 默认关闭聊天表格日志（chatLogEnabled=false），消除 go test 期间的 stdout 噪音。
-// 断言表格行输出的测试（logging_test.go 中的 ChatLogs/LogChatRow 系列）用 withChatLog 临时开启。
+// TestMain：进测试沙箱 → 关掉聊天表格日志 → 跑测试 → 出沙箱 + 校验不变量。
+// 沙箱（HOME/工作目录/临时目录隔离 + R1「测试不得写真实 auths/」守卫）实现在
+// main_test.go（每包一份，why 见那里）。chatLogEnabled=false 用于消除 go test 期间的
+// stdout 噪音；断言表格行输出的测试（logging_test.go 的 ChatLogs/LogChatRow 系列）
+// 用 withChatLog 临时开启。
 func TestMain(m *testing.M) {
 	chatLogEnabled = false
-	os.Exit(m.Run())
+	os.Exit(runTestSandbox(m))
 }
 
 const sseOK = "data: {\"id\":\"chatcmpl-1\",\"object\":\"chat.completion.chunk\",\"created\":1753600000,\"model\":\"glm-5.2\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"你好\"}}]}\n\n" +
@@ -844,8 +847,56 @@ func TestChatHTTP4xxClientDoesNotPenalize(t *testing.T) {
 	}
 }
 
+// resetDynamicModelsCache 清空包级全局「动态模型目录缓存」（ids/fetched/lastFail）。
+//
+// 为什么要显式重置（T5）：dynamicModelsCache 是**包级全局**，跨测试存活、且带 5min
+// 负缓存。任何「假上游返回空目录/500」的用例都会把 lastFail 写成 now，于是**同一二进制
+// 内后续**（含 -count>1 的下一轮）所有 /v1/models 用例都被负缓存短路成空列表——
+// TestModelsEndpoint 就是这么红的（-count=3 第 1 轮绿、第 2/3 轮 models count=0）。
+// 这是进程内状态，TestMain 的沙箱（HOME/cwd/TEMP）隔离不了它，只能每个用例自己清。
+// 新增依赖模型目录的用例**必须**首行调用本函数。
+func resetDynamicModelsCache() {
+	dynamicModelsCache.Lock()
+	dynamicModelsCache.ids = nil
+	dynamicModelsCache.fetched = time.Time{}
+	dynamicModelsCache.lastFail = time.Time{}
+	dynamicModelsCache.Unlock()
+}
+
+// TestModelsEndpoint /v1/models 的 OpenAI 兼容契约：object=list、CN 模型 id 带 cn:
+// 前缀（网关路由协议，与 resolveModel 对称）、条目数 ≥5，且上游目录的全字段按
+// 「空值省略」透出（credits/描述前缀/标签/能力旗标/档位/上下文窗口）。
+//
+// 为什么不再用 upstream.New()（T5 治 flake）：旧版走**真实上游**拉目录，结果取决于
+// 两件与本仓逻辑无关的事——(1) 运行机器能否访问上游；(2) 全局缓存里有没有同包其它
+// 用例留下的负缓存（见 resetDynamicModelsCache）。两者都会让「断言 modelList 组装
+// 逻辑」的用例红成「环境问题」。现在：重置缓存 + 假上游喂固定目录。
+//
+// 牙齿：删掉 modelList 的 "cn:" 前缀拼接 → 前缀断言 FAIL；把 models() 的 data 写死空
+// → 数量与 id 断言 FAIL；删掉 applyModelInfoFields 里任一透出分支（credits/
+// supports_images/is_default/supported_efforts…）→ 对应字段断言 FAIL。
 func TestModelsEndpoint(t *testing.T) {
-	h := NewHandler(Config{Pool: testPoolWith(&auth.Auth{UID: "u1", AccessToken: "at", ExpiresAt: 9999999999}), Upstream: upstream.New()})
+	resetDynamicModelsCache()
+
+	// 6 个模型（>5）+ 含 glm-5.2：数量与关键 id 两条断言都需要它。
+	// glm-5.2 刻意带上真实上游会下发的全字段（credits/descriptionZh/tags/vendor/
+	// isDefault/能力旗标/reasoning 档位），用来钉住「字段透出 + 空值省略」契约。
+	up := newFakeUpstream(t, func(authz string) (int, string, bool) {
+		return 200, `{"code":0,"data":{"models":[` +
+			`{"id":"glm-5.2","name":"GLM-5.2","descriptionZh":"智谱旗舰","credits":"x0.05 credits",` +
+			`"tags":["badge:限时免费","文本"],"vendor":"zhipu","isDefault":true,` +
+			`"maxInputTokens":131072,"maxOutputTokens":8192,"maxAllowedSize":131072,` +
+			`"supportsImages":true,"supportsReasoning":true,"supportsToolCall":true,` +
+			`"reasoning":{"effort":"medium","summary":"auto","canDisableThinking":true,` +
+			`"supportedEfforts":["low","medium","high"]}},` +
+			`{"id":"glm-5.3","maxInputTokens":131072,"maxOutputTokens":8192},` +
+			`{"id":"hy3-x","descriptionZh":"混元 3 旗舰","onlyReasoning":true,` +
+			`"maxInputTokens":65536,"maxOutputTokens":4096},` +
+			`{"id":"kimi-k3-1","maxInputTokens":262144,"maxOutputTokens":32768},` +
+			`{"id":"glm-4.7","maxInputTokens":65536,"maxOutputTokens":4096},` +
+			`{"id":"deepseek-v4","maxInputTokens":131072,"maxOutputTokens":16384}]}}`, false
+	})
+	h := NewHandler(Config{Pool: testPoolWith(&auth.Auth{UID: "u1", AccessToken: "at", ExpiresAt: 9999999999}), Upstream: up})
 	req := httptest.NewRequest("GET", "/v1/models", nil)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
@@ -861,24 +912,93 @@ func TestModelsEndpoint(t *testing.T) {
 	if len(data) < 5 {
 		t.Errorf("models count=%d", len(data))
 	}
-	found := false
+	var glm map[string]any
 	for _, m := range data {
-		if m.(map[string]any)["id"] == "cn:glm-5.2" {
-			found = true
+		mm, ok := m.(map[string]any)
+		if !ok {
+			t.Errorf("条目不是对象：%v", m)
+			continue
+		}
+		id, hasID := mm["id"].(string)
+		if !hasID {
+			t.Errorf("条目缺 id：%v", mm)
+			continue
+		}
+		if !strings.HasPrefix(id, "cn:") {
+			t.Errorf("CN 模型 id 必须带 cn: 前缀（同 resolveModel）: %q", id)
+		}
+		if id == "cn:glm-5.2" {
+			glm = mm
 		}
 	}
-	if !found {
-		t.Error("cn:glm-5.2 missing")
+	if glm == nil {
+		t.Fatal("cn:glm-5.2 missing")
+	}
+	// 字段透出契约（上游下发 → 面板/客户端可见）。空值省略由 glm-5.3 等条目覆盖
+	//（它们的可选字段在 /v1/models 里必须缺席——断言见下）。
+	if glm["credits"] != "x0.05 credits" {
+		t.Errorf("credits 应原样透出: %v", glm["credits"])
+	}
+	if got, want := glm["description"], "[x0.05 credit] 智谱旗舰"; got != want {
+		t.Errorf("description 应带积分倍率前缀: got %v want %v", got, want)
+	}
+	if glm["vendor"] != "zhipu" || glm["is_default"] != true {
+		t.Errorf("vendor/is_default 透出丢失: vendor=%v is_default=%v", glm["vendor"], glm["is_default"])
+	}
+	for _, k := range []string{"supports_images", "supports_reasoning", "can_disable_thinking", "supports_tool_call"} {
+		if glm[k] != true {
+			t.Errorf("能力旗标 %s 透出丢失: %v", k, glm[k])
+		}
+	}
+	if glm["context_length"].(float64) != 131072 || glm["max_output_tokens"].(float64) != 8192 {
+		t.Errorf("上下文窗口透出错误: ctx=%v out=%v", glm["context_length"], glm["max_output_tokens"])
+	}
+	tags, _ := glm["tags"].([]any)
+	if len(tags) != 2 || tags[0] != "badge:限时免费" {
+		t.Errorf("tags 透出丢失: %v", glm["tags"])
+	}
+	efforts, _ := glm["supported_efforts"].([]any)
+	if len(efforts) != 3 || efforts[0] != "low" || glm["default_effort"] != "medium" {
+		t.Errorf("档位透出丢失: efforts=%v default=%v", glm["supported_efforts"], glm["default_effort"])
+	}
+	// 「空值省略」：glm-5.3 没有描述/倍率/能力旗标 → 这些键整体缺席（不编造字段）。
+	for _, m := range data {
+		mm, ok := m.(map[string]any)
+		if !ok {
+			continue
+		}
+		if mm["id"] != "cn:glm-5.3" {
+			continue
+		}
+		for _, k := range []string{"credits", "description", "vendor", "is_default",
+			"supports_images", "supports_reasoning", "supports_tool_call", "only_reasoning"} {
+			if _, has := mm[k]; has {
+				t.Errorf("上游未下发的字段 %s 不得编造: %v", k, mm[k])
+			}
+		}
+	}
+	// 有描述但**没有倍率**时不得拼出 "[ credit]" 空前缀（fmtCreditsPrefix 的空值分支），
+	// 且 onlyReasoning 需一并透出。
+	for _, m := range data {
+		mm, ok := m.(map[string]any)
+		if !ok || mm["id"] != "cn:hy3-x" {
+			continue
+		}
+		if mm["description"] != "混元 3 旗舰" {
+			t.Errorf("无倍率时 description 应原样（不得带空倍率前缀）: %v", mm["description"])
+		}
+		if mm["only_reasoning"] != true {
+			t.Errorf("only_reasoning 透出丢失: %v", mm["only_reasoning"])
+		}
+		if _, has := mm["credits"]; has {
+			t.Errorf("上游未下发倍率时不得透出 credits: %v", mm["credits"])
+		}
 	}
 }
 
 func TestModelsDynamic(t *testing.T) {
 	// 清缓存
-	dynamicModelsCache.Lock()
-	dynamicModelsCache.ids = nil
-	dynamicModelsCache.fetched = time.Time{}
-	dynamicModelsCache.lastFail = time.Time{}
-	dynamicModelsCache.Unlock()
+	resetDynamicModelsCache()
 
 	// 假上游返回动态模型（含 agents + maxInputTokens/maxOutputTokens + reasoning 档位）
 	up := newFakeUpstream(t, func(authz string) (int, string, bool) {
@@ -954,11 +1074,7 @@ func TestModelsDynamic(t *testing.T) {
 func TestModelsDynamicFallsBackToStatic(t *testing.T) {
 	// 纯动态化（产品决策）：上游失败 → 空列表（200），不再回落静态表——
 	// 拉不出目录即意味着上游不可用，假名单只会让客户端选到 11102 的模型。
-	dynamicModelsCache.Lock()
-	dynamicModelsCache.ids = nil
-	dynamicModelsCache.fetched = time.Time{}
-	dynamicModelsCache.lastFail = time.Time{}
-	dynamicModelsCache.Unlock()
+	resetDynamicModelsCache()
 
 	p := testPoolWith(&auth.Auth{UID: "u1", AccessToken: "at1", ExpiresAt: 9999999999})
 	up := newFakeUpstream(t, func(authz string) (int, string, bool) {
@@ -981,11 +1097,7 @@ func TestModelsDynamicFallsBackToStatic(t *testing.T) {
 func TestModelsFetchFailurePenalizesAccount(t *testing.T) {
 	// 吸收上游 9832283：models 拉取失败只进负缓存，不 NoteError——
 	// NoteError 喂的是 chat 熔断器，models 端点 5xx 跨界惩罚 chat 通道健康号。
-	dynamicModelsCache.Lock()
-	dynamicModelsCache.ids = nil
-	dynamicModelsCache.fetched = time.Time{}
-	dynamicModelsCache.lastFail = time.Time{}
-	dynamicModelsCache.Unlock()
+	resetDynamicModelsCache()
 
 	p := testPoolWith(&auth.Auth{UID: "u1", AccessToken: "at1", ExpiresAt: 9999999999})
 	p.SetBreaker(1, time.Hour, time.Hour) // 熔断阈值 1：若仍罚号，一次 fetch 失败即熔断
@@ -1005,11 +1117,7 @@ func TestModelsFetchFailurePenalizesAccount(t *testing.T) {
 }
 
 func TestModelsNegativeCacheOnFetchFailure(t *testing.T) {
-	dynamicModelsCache.Lock()
-	dynamicModelsCache.ids = nil
-	dynamicModelsCache.fetched = time.Time{}
-	dynamicModelsCache.lastFail = time.Time{}
-	dynamicModelsCache.Unlock()
+	resetDynamicModelsCache()
 
 	var calls atomic.Int32 // FetchModels 企业/v3 两路并发探测回调，计数须原子
 	up := newFakeUpstream(t, func(authz string) (int, string, bool) {
