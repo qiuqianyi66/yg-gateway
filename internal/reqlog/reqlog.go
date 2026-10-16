@@ -485,10 +485,12 @@ func (w *archiveWriter) flush() {
 }
 
 func (w *archiveWriter) closeFile() {
-	if w.buf != nil {
-		_ = w.buf.Flush()
-	}
+	// 经 flush() 而非 `_ = w.buf.Flush()`：轮转/停机时缓冲里最多 64KB 审计日志一旦丢失
+	// 必须能在 stats().LastError 上看见（判据④：影响持久化正确性 / 计量完整性）。
+	w.flush()
 	if w.file != nil {
+		// 忽略：句柄关闭失败只影响 fd 回收（清理路径，判据②）；
+		// 内容落盘已由上面的 flush 保证。
 		_ = w.file.Close()
 	}
 	w.file = nil

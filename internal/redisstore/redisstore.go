@@ -77,6 +77,8 @@ func New(url, token string) Store {
 	defer cancel()
 	if err := client.Ping(ctx).Err(); err != nil {
 		log.Printf("[redisstore] 警告: upstash 连接失败 (%v)，降级 Noop（纯内存模式）", err)
+		// 忽略：Ping 已失败，此处只是回收连接（清理路径，判据②）；
+		// 不影响降级结果——调用方拿到的是 Noop，功能照常。
 		_ = client.Close()
 		return Noop{}
 	}

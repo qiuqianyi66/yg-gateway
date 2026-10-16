@@ -197,7 +197,14 @@ func main() {
 	if v := os.Getenv("WB2A_AUTH_DIR"); v != "" {
 		authDir = v
 	}
-	files, _ := filepath.Glob(filepath.Join(authDir, "workbuddy-*.json"))
+	// Glob 只在 pattern 非法时失败（如 authDir 含 '[' 等元字符）。静默吞掉会让命令
+	// 报「0 个账号」并以 0 退出——把「配置写错」伪装成「确实没有账号」，脚本据此
+	// 判断会把 0 积分当成事实（ERROR-HANDLING.md 判据④「影响计量」）。
+	files, err := filepath.Glob(filepath.Join(authDir, "workbuddy-*.json"))
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "credit: 枚举 auths 失败:", err)
+		os.Exit(1)
+	}
 	sort.Strings(files)
 
 	accounts := make([]accountResult, 0, len(files))

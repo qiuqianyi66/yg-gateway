@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"yg-gateway/internal/auth"
+	"yg-gateway/internal/logfmt"
 	"yg-gateway/internal/upstream"
 )
 
@@ -436,11 +437,19 @@ func (p *Panel) runGrowthQueued(a *auth.Auth, code string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	// 进度回读失败必须在日志里可见（R10 / ERROR-HANDLING.md 判据④「影响计量」）：
+	// after 为 nil 时下面的自动领奖会静默跳过，与「该任务确实不存在」不可区分。
+	// 只加 WARN，不改返回值语义（仍返回 msg, nil）。
 	var after *upstream.Task
+	var aerr error
 	if isMP {
-		after, _ = p.taskByCodeMP(a, code)
+		after, aerr = p.taskByCodeMP(a, code)
 	} else {
-		after, _ = p.taskByCodeWaiting(a, code)
+		after, aerr = p.taskByCodeWaiting(a, code)
+	}
+	if aerr != nil {
+		log.Printf("WARN: [panel] 队列 growth 进度回读失败 %s code=%s: %v（已跳过自动领奖）",
+			logfmt.Label(a.UID, a.Nickname), code, aerr)
 	}
 	if after != nil && after.Claimable {
 		var credit, energy int64

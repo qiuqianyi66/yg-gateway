@@ -1200,11 +1200,19 @@ func (p *Panel) runAutoAll(a *auth.Auth) []map[string]any {
 			out = append(out, item)
 			continue
 		}
+		// 进度回读失败必须在日志里可见（R10 / ERROR-HANDLING.md 判据④「影响计量」）：
+		// after 为 nil 时下面的自动领奖会静默跳过，与「该任务确实不存在」（本就无需领奖）
+		// 不可区分 —— 奖励会一直没被领而运维看不出来。只加 WARN，不改返回值格式。
 		var after *upstream.Task
+		var aerr error
 		if isMPTaskCode(act.TaskCode) {
-			after, _ = p.taskByCodeMP(a, act.TaskCode)
+			after, aerr = p.taskByCodeMP(a, act.TaskCode)
 		} else {
-			after, _ = p.taskByCodeWaiting(a, act.TaskCode)
+			after, aerr = p.taskByCodeWaiting(a, act.TaskCode)
+		}
+		if aerr != nil {
+			log.Printf("WARN: [panel] 进度回读失败 %s code=%s: %v（已跳过自动领奖，可在任务列表手动领取）",
+				logfmt.Label(a.UID, a.Nickname), act.TaskCode, aerr)
 		}
 		item["status"] = "done"
 		item["message"] = msg

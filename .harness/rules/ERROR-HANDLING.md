@@ -14,16 +14,22 @@
 
 ---
 
-## 二、实测分布（2026-10 · 生产代码，不含测试）
+## 二、实测分布（2026-10-16 复核，生产代码，不含测试）
 
-| 类别 | 数量 | 典型形态 |
+**口径**（唯一权威命令，见 §四；换命令必须重测并更新本表）：
+
+| 类别 | 行数 | 典型形态 |
 |---|---|---|
-| 类型断言 `x, _ = v.(T)` | 6 | `mi.CanDisableThinking, _ = r["canDisableThinking"].(bool)` |
-| 写响应 / 清理 `_, _ = w.Write(...)`、`_ = f.Close()` | ~60 | 写失败无法补救、Close 失败不影响主流程 |
-| JSON 解析（有兜底语义）`_ = json.Unmarshal(...)` | ~20 | 解析失败留下零值，消费方按"空值"处理 |
-| **其他** | ~37 | 需逐条判断，见下 |
+| 类型断言 `x, _ := v.(T)` / `x, _ = v.(T)` | **73** | `mi.CanDisableThinking, _ = r["canDisableThinking"].(bool)` |
+| 写响应 / 清理 `_, _ = w.Write(...)`、`_ = f.Close()`、`Flush`、`os.Remove` | **16** | 写失败无法补救、Close 失败不影响主流程 |
+| JSON 序列化/解析 `_, _ := json.Marshal(...)`、`_ = json.Unmarshal(...)` | **18** | 解析失败留下零值，消费方按"空值"处理 |
+| **其他** | **27** | 逐条判定，已全部过判据（见 §六） |
+| 合计 | **131** | 按包：upstream 最多，其后 server / panel |
 
-按包：`upstream` 75 / `server` 23 / `panel` 18 / `login` 5 / `pool` 4 / 其余少量。
+> **勘误（2026-10-16）**：本文早期版本写作「123 处，其中类型断言 6 处」——那是用
+> 另一种模式（`_ = |, _ :=|, _ =`）在**人眼抽样**下的估计值，把类型断言严重少算
+> （实测按行计数是 **73** 行）。数字不是规范的一部分，但**口径必须写死在命令上**，
+> 否则下一次审计会在错误的分类上继续推理。
 
 ---
 
@@ -91,3 +97,50 @@ Get-ChildItem -Recurse -Filter *.go -Path internal,cmd |
 2. 我写的 `_ =` 是丢弃返回值还是压制 unused？后者几乎总是错。
 3. 注释有没有说清"为什么可忽略"？只说"忽略"不算。
 4. 这条路径在**进程重启 / 高并发 / 上游异常**三种情况下还成立吗？
+
+---
+
+## 六、2026-10-16 全量审计结论（131 处已全部过判据）
+
+除类型断言 / 写响应 / 纯 Marshal 三类自明项外，**48 个"需要判断"的点已逐条读上下文
+并过判据**（每条读前后 ≥25 行、跨函数读调用方）。结论：
+
+### 已修（真吞错误，判据"不可忽略"）
+
+| 位置 | 问题 | 修法 |
+|---|---|---|
+| `internal/panel/autotask.go` `runAutoAll` 回读处 | 进度回读错误被 `_ =` 吞掉 → `after` 为 nil 时**自动领奖静默跳过**，与「任务不存在」不可区分（判据④ 计量） | 捕获 `aerr`，WARN 日志（含脱敏 `logfmt.Label`）；返回值格式不变 |
+| `internal/panel/taskcenter.go` `runGrowthQueued` 回读处 | 同上（队列路径同一语义被复制了一份 → 两处必须同改，否则口径分叉） | 同上 |
+| `cmd/credit/main.go` `filepath.Glob` | Glob 错误被吞 → 报「0 个账号」且 exit 0，把**配置写错伪装成没有账号**（判据④） | 打 stderr + `os.Exit(1)` |
+| `internal/reqlog/reqlog.go` `closeFile` | 轮转/停机时 `_ = w.buf.Flush()` 会**静默丢掉最多 64KB 审计日志**（判据④ 持久化完整性） | 改走 `w.flush()`（失败经 `setErr` 进 `stats().LastError`，面板可见） |
+| `cmd/server/main.go` 停机 | `_ = store.Close()` ——超时放弃排空时「最后一笔 Redis 镜像没写完」完全不可见 | 包 `if err != nil { log.Printf WARN }` |
+
+> 本轮同时在 `panel/autotask.go` 修掉了上一轮的 `_ = fail`（压制 unused 变量）——
+> 那类形态不是"忽略返回值"，是"结果本该被使用"，见 §四。
+
+### 已补注释（容易被误读为疏漏的位置）
+
+`internal/pool/persist.go`（MkdirAll → 判据③）、`internal/upstream/model_catalog.go`
+（MkdirAll → 判据③）、`internal/redisstore/redisstore.go`（Ping 失败后的 Close → 判据②）、
+`internal/reqlog/reqlog.go`（文件句柄 Close → 判据②）、`cmd/server/main.go`（停机 Close）。
+
+**注释形式统一为**：`// 忽略：<原因>，不影响 <什么>（判据<编号>）`。
+
+### 判定为可忽略（未改，抽样理由）
+
+- `names, _ := c.fetchGlobalModelsOnce(a)`、`msgs, _ = mergeAdjacentToolCalls(msgs)`、
+  `_, _ = a.BackfillRealm()`：第二返回值分别是 `infos` / `changed` / `string`，**不含
+  error** —— 看到 `, _ :=` 不要想当然认为丢了错误，先看签名。
+- `raw, _ := json.Marshal(结构体)`、`jar, _ := cookiejar.New(nil)`、`fl, _ := w.(http.Flusher)`：
+  判据④（必然可序列化 / 无错误 / 类型断言零值兜底）。
+- `x, _ := io.ReadAll(resp.Body)`：后续解析失败会被上报，错误不会消失（判据③）。
+
+### 留待产品定夺（未改，避免单方面改口径）
+
+| 位置 | 疑点 |
+|---|---|
+| `server/handler.go` 的 `usage.credit / total_tokens` 类型断言 | 零值兜底产物 `credit=0` 会被当真值写进成本台账（`NoteModelCost`），与判据④前提「值已被上游检查过」不符；收紧为 `c, ok := ...` 会改变计量口径 |
+| `server/chatrun.go` / `logging.go` 的 `UsageCacheMissTokens` | miss 未知时记 0，与「全命中」不可区分；**必须两处同改**，只改一处会造成流式/非流式口径分叉 |
+| `server/anthropic.go` 的 `json.Unmarshal(body, &peek)` | body 非法时下一步会报 400（判据③成立），但 `"stream":"true"` 类型错会被吞 → 静默走非流式分支 |
+| `cmd/login/main.go` 的 `runPoll` 状态码分档 | 4xx 全归「登录未完成」，真 401/403 时用户按到天亮也不会成功且看不到上游状态码（`upstream-hint.md` 同族问题） |
+
