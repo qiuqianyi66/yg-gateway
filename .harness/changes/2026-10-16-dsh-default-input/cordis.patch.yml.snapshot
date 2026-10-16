@@ -1,0 +1,312 @@
+# Your patch layer for this dsh profile, applied after every bundle layer:
+# a top-level YAML array of loader patch entries (id-targeted config
+# overrides, disables, and insert lists; `!!js` expressions allowed).
+- id: ui-settings-general
+  name: "@deepseek-ai/dsh-client-ui-settings-general"
+  config:
+    welcomeNoticeVersion: 2026-08-13.1
+- id: agent-default-model
+  name: "@deepseek-ai/dsh-agent-default-model"
+  config:
+    provider: yg-gateway
+    model: cn:deepseek-v4.1-flash
+- id: desktop-shell
+  name: dsh-plugin-desktop
+  config:
+    mode: compatibility
+    macosMaterial: transparent
+    windowsMaterial: off
+    openBrowser: true
+    networkExposure: loopback
+- id: desktop-notifications
+  name: dsh-plugin-desktop/notifications
+  config:
+    enabled: true
+    notifyOnTurnCompletion: true
+    notifyOnTurnFailure: true
+    notifyOnJobCompletion: true
+    notifyOnJobFailure: true
+- id: ui-settings-account
+  name: "@deepseek-ai/dsh-client-ui-settings-account"
+  config:
+    version: 1
+    step: done
+    purpose: both
+    process: detailed
+    completion: completed
+    usage: detailed
+    developerTools: true
+- id: ui-chat
+  name: "@deepseek-ai/dsh-client-ui-chat"
+  config:
+    transcriptView: standard
+    performanceUsage: detailed
+- id: ui-settings
+  name: "@deepseek-ai/dsh-client-ui-settings"
+  config:
+    enabled: true
+# A patch replaces the targeted row's whole config. The modsearch bundle
+# (added below this file's own layer in bundle order) pins the `web` row's
+# searchProvider without restating the base `fetchProvider`, so the fetch
+# seam is restated here with the shipped `http` provider.
+- id: web
+  config:
+    searchProvider: modsearch
+    fetchProvider: http
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Agent 预设：极简灰度版 (minimal-gray)
+#
+# 以「极简模式」(minimal) 为底：persona + 平台自适应持久 Shell。
+# 平台自适应 Shell 对抗 Bash 不适配：Windows 用 PowerShell，Unix 用 Bash。
+# 在极简之上，精选标准模式常用工具的最小组合：
+#   文件、搜索、网页、待办、提问、后台任务、技能、目标。
+# 其余一律按极简来（不带 plan 模式、compaction、subagent/workflow、present）。
+# ─────────────────────────────────────────────────────────────────────────────
+- insert:
+    - id: preset-minimal-gray
+      name: '@deepseek-ai/dsh-agent-preset'
+      config:
+        id: minimal-gray
+        name: 极简灰度版
+        description: 以极简模式为底，用平台自适应 Shell（Windows 用 PowerShell、Unix 用 Bash）对抗 Bash
+          不适配，并精选文件、搜索、网页、待办、提问、后台任务、技能与目标等标准模式常用工具的最小组合。
+        order: 5
+        plugins:
+          # ── 极简的底：persona ──────────────────────────────────────────────
+          - id: persona
+            name: '@deepseek-ai/dsh-persona'
+            config:
+              prefix: You are a helpful software engineer assistant.
+              complete: true
+              includeRuntimeContext: false
+          # ── 极简的底：平台自适应持久 Shell ────────────────────────────────
+          - id: persistent-shell
+            name: cordis:group
+            group: true
+            isolate:
+              terminals: true
+            config:
+              - id: pty
+                name: '@deepseek-ai/dsh-terminal'
+              - id: terminal-bash
+                name: '@deepseek-ai/dsh-terminal-bash'
+                disabled: !!js process.platform === 'win32'
+                config:
+                  timeoutMs: 300000
+              - id: persistent-bash
+                name: '@deepseek-ai/dsh-tool-bash-persistent'
+                disabled: !!js process.platform === 'win32'
+                config:
+                  timeoutMs: 300000
+                  description: |-
+                    Run commands in a bash shell
+                    * When invoking this tool, the contents of the "command" parameter does NOT need to be XML-escaped.
+                    * Network access depends on the task environment. Prefer configured mirrors/proxies when they are available.
+                    * State is persistent across command calls and discussions with the user.
+                    * To inspect a particular line range of a file, e.g. lines 10-25, try 'sed -n 10,25p /path/to/the/file'.
+                    * Please avoid commands that may produce a very large amount of output.
+                    * Please run long lived commands in the background, e.g. 'sleep 10 &' or start a server in the background.
+              - id: terminal-pwsh
+                name: '@deepseek-ai/dsh-terminal-bash'
+                disabled: !!js process.platform !== 'win32'
+                config:
+                  shellDialect: pwsh
+                  timeoutMs: 300000
+              - id: persistent-pwsh
+                name: '@deepseek-ai/dsh-tool-pwsh-persistent'
+                disabled: !!js process.platform !== 'win32'
+                config:
+                  timeoutMs: 300000
+                  description: |-
+                    Run commands in a PowerShell shell
+                    * When invoking this tool, the contents of the "command" parameter does NOT need to be XML-escaped.
+                    * You don't have access to the internet via this tool.
+                    * State is persistent across command calls and discussions with the user.
+                    * Use native Windows paths (C:\...) and $env:NAME variables; this is PowerShell, not bash.
+                    * Please avoid commands that may produce a very large amount of output.
+                    * Please run long lived commands in the background, e.g. 'Start-Job' or start a server with Start-Process.
+          # ── 精选标准模式常用工具（最小组合）────────────────────────────────
+          - id: tool-fs
+            name: '@deepseek-ai/dsh-tool-fs'
+          - id: tool-fs-search
+            name: '@deepseek-ai/dsh-tool-fs-search'
+            config:
+              sampleOverCapGlobResults: false
+          - id: tool-web
+            name: '@deepseek-ai/dsh-tool-web'
+            config:
+              fetch: true
+              searchTimeoutMs: 60000
+          - id: tool-todo
+            name: '@deepseek-ai/dsh-tool-todo'
+            config:
+              allowParallelInProgress: true
+          - id: tool-ask-user
+            name: '@deepseek-ai/dsh-tool-ask-user'
+          - id: tool-jobs
+            name: '@deepseek-ai/dsh-tool-jobs'
+          - id: skill-filesystem
+            name: '@deepseek-ai/dsh-skill-filesystem'
+          - id: tool-skill
+            name: '@deepseek-ai/dsh-tool-skill'
+          - id: command-goal
+            name: '@deepseek-ai/dsh-command-goal'
+          - id: tool-goal
+            name: '@deepseek-ai/dsh-tool-goal'
+- id: agent-preset-registry
+  name: "@deepseek-ai/dsh-agent-preset-registry"
+  config:
+    default: standard
+    selectedDefault: standard
+- id: ui-theme
+  name: "@deepseek-ai/dsh-client-ui-theme"
+  config:
+    preference: system
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 全局输出风格：deployment persona suffix（order 10200），本 profile 下所有会话
+# 都生效。改这里就是改「长期记忆」。
+# ─────────────────────────────────────────────────────────────────────────────
+- id: system-prompt
+  name: "@deepseek-ai/dsh-system-prompt"
+  config:
+    includeHarnessIdentity: false
+    personaPrefix: ""
+    personaSuffix: |-
+      Your working directory is {{cwd}}.
+
+      Output style - hard rules, applies to every reply:
+      - Default to 10 lines or fewer. Lead with the answer, not with context, plan, or preamble.
+      - Ask before exceeding that, unless the user explicitly asks for detail.
+      - Never restate the user's request, add background, or announce what you are about to do.
+      - No tables, no code blocks, no file dumps, no bullet padding, unless the user asks for them.
+      - Keep one line for any real risk, unverified claim, or irreversible action instead of dropping it.
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 成本优化补丁（2026-10-05，已备份 cordis.patch.yml.bak-20261005）
+# 降压缩阈值让 compaction 在小窗口下启动：
+#   默认 thresholdRatio 0.8 → 678K 才触发（每步 85-160K 永不触发）
+#   0.15 → ~150K 触发；retainTokens 40000 保留压缩后上下文预算
+# 代价：压缩时前缀缓存失效一次 + 一次摘要调用，净收益为正
+# ─────────────────────────────────────────────────────────────────────────────
+- id: compaction
+  config:
+    thresholdRatio: 0.15
+    retainTokens: 40000
+- id: llm-pi-ai
+  name: "@deepseek-ai/dsh-llm-pi-ai"
+  config:
+    providers:
+      yg-gateway:
+        displayName: YG Gateway
+        apiKeyEnv: YG_GATEWAY_API_KEY
+        api: openai-completions
+        baseURL: http://127.0.0.1:7863/v1
+        # provider 级默认输入模态：覆盖 models 未列出或将来新增的条目。
+        # 条目级 input 优先（plugin :682 `declaredInput(entry.input) ?? base?.input ?? [...request.defaultInput]`），
+        # 所以这里与下面 20 条逐条声明并存、互不冲突。
+        # 依据：2026-10-16 实测 /v1/models 的 21 个 cn:* 全部 supports_images=true
+        # （记录见 yg-gateway 仓 .harness/changes/2026-10-16-dsh-default-input/summary.md）。
+        defaultInput: ["text", "image"]
+        models:
+          - id: cn:auto
+            name: Auto
+            contextWindow: 256000
+            maxTokens: 32000
+            input: ["text", "image"]
+          - id: cn:hy4-preview
+            name: Hy4 preview
+            contextWindow: 1000000
+            maxTokens: 64000
+            input: ["text", "image"]
+          - id: cn:glm-5.3-flash
+            name: GLM-5.3-Flash
+            contextWindow: 1000000
+            maxTokens: 131072
+            input: ["text", "image"]
+          - id: cn:hy4-preview-f
+            name: Hy4 preview
+            contextWindow: 1000000
+            maxTokens: 64000
+            input: ["text", "image"]
+          - id: cn:glm-5.3
+            name: GLM-5.3
+            contextWindow: 1000000
+            maxTokens: 131072
+            input: ["text", "image"]
+          - id: cn:glm-5.1
+            name: GLM-5.1
+            contextWindow: 200000
+            maxTokens: 48000
+            input: ["text", "image"]
+          - id: cn:minimax-m3
+            name: MiniMax-M3
+            contextWindow: 512000
+            maxTokens: 524288
+            input: ["text", "image"]
+          - id: cn:hy3
+            name: Hy3
+            contextWindow: 192000
+            maxTokens: 64000
+            input: ["text", "image"]
+          - id: cn:hy3-x
+            name: Hy3
+            contextWindow: 192000
+            maxTokens: 64000
+            input: ["text", "image"]
+          - id: cn:step-5-preview
+            name: Step-5-Preview
+            contextWindow: 1000000
+            maxTokens: 64000
+            input: ["text", "image"]
+          - id: cn:space-bunny
+            name: Space-Bunny
+            contextWindow: 1000000
+            maxTokens: 128000
+            input: ["text", "image"]
+          - id: cn:deepseek-v4.1-flash
+            name: Deepseek-V4.1-Flash
+            contextWindow: 1000000
+            maxTokens: 393216
+            input: ["text", "image"]
+          - id: cn:glm-5.2
+            name: GLM-5.2
+            contextWindow: 1000000
+            maxTokens: 131072
+            input: ["text", "image"]
+          - id: cn:kimi-k3-1
+            name: Kimi-K3
+            contextWindow: 1000000
+            maxTokens: 1048576
+            input: ["text", "image"]
+          - id: cn:kimi-k2.8-preview
+            name: Kimi-K2.8-Preview
+            contextWindow: 1000000
+            maxTokens: 131072
+            input: ["text", "image"]
+          - id: cn:deepseek-v4-pro
+            name: Deepseek-V4-Pro
+            contextWindow: 1000000
+            maxTokens: 393216
+            input: ["text", "image"]
+          - id: cn:deepseek-v4-flash
+            name: Deepseek-V4-Flash
+            contextWindow: 1000000
+            maxTokens: 50000
+            input: ["text", "image"]
+          - id: cn:glm-5v-turbo
+            name: GLM-5v-Turbo
+            contextWindow: 200000
+            maxTokens: 64000
+            input: ["text", "image"]
+          - id: cn:kimi-k2.7
+            name: Kimi-K2.7-Code
+            contextWindow: 256000
+            maxTokens: 32000
+            input: ["text", "image"]
+          - id: cn:kimi-k2.6
+            name: Kimi-K2.6
+            contextWindow: 256000
+            maxTokens: 32000
+            input: ["text", "image"]
