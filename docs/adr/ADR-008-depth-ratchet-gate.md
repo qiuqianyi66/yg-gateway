@@ -3,7 +3,8 @@
 - 状态：已采纳
 - 日期：2026-10-16
 - 相关：`scripts/check-depth.ps1`、`scripts/check-boundaries.ps1`、`scripts/pre-commit.ps1`、
-  `.github/workflows/go-binaries.yml` 的 `gate` job、`.harness/rules/编码规范.md` 第九节、
+  `.github/workflows/release.yml` 的 `gate` job（2026-10-16 两条发布线合并前是
+  `go-binaries.yml` / `docker-ghcr.yml` 各调一次）、`.harness/rules/编码规范.md` 第九节、
   `.harness/rules/开发流程规范.md` 第五节、`.harness/changes/2026-10-16-ci-gate/summary.md`
 
 ## 背景

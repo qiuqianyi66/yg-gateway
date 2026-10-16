@@ -15,7 +15,7 @@
 #   powershell -NoProfile -File scripts/pre-commit.ps1 -Fast     # 跳过 go test ./...
 #   powershell -NoProfile -File scripts/pre-commit.ps1 -Install  # 额外安装 .git/hooks/pre-commit
 #
-# CI 用法（.github/workflows/go-binaries.yml 的 gate job）：
+# CI 用法（.github/workflows/release.yml 的 gate job；实现见 .github/workflows/gate.yml）：
 #   pwsh -NoProfile -File scripts/pre-commit.ps1 -Fast -AllFiles -Base origin/main
 #   - -AllFiles：gofmt 查**全仓** ./cmd ./internal（CI 工作区干净，查「改动文件」恒空 → 假绿）
 #   - -Base <ref>：R10 与「改动文件」按 `git diff <ref>...HEAD` 判定（CI 里改动已提交，

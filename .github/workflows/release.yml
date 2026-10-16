@@ -1,8 +1,21 @@
-name: go-binaries
+name: release
 
-# 可运行二进制构建/发布：
-#   - PR / push main → 测试 + 五平台编译验证（产物仅存 artifact，不发布）
-#   - push v* tag    → 同上 + 打包上传到 GitHub Release（zip/tar.gz + checksums）
+# 发布流水线（2026-10-16 由 go-binaries.yml + docker-ghcr.yml **合并**而来）。
+#
+# 为什么合并（原 D2 待拍板项，用户已拍板「合并」）：两条线各自 `uses: ./.github/workflows/gate.yml`，
+# 于是每次 push 门禁跑两遍（重复约 2.5 分钟）。门禁**必须**共用同一份实现（复制成两份必然分叉，
+# 分叉后会给「这条线过了、那条线没过」的假保证），所以消除重复的**正确做法是合并成一条
+# workflow**——一个 gate job + 两个产物 job——**不是**把 gate 内联回去。
+#
+# 合并前后等价的是：门禁仍然是两条产物线**共同的前置**（build 与 build-image 都 needs gate），
+# 门禁不过就不产出二进制、不打镜像。
+#
+# 产出：
+#   - PR / push main → test（go test/vet/node --check/govulncheck）+ gate + race
+#                      + 五平台二进制编译验证（仅存 artifact）
+#                      + 多架构镜像构建验证（不推送）
+#   - push main      → 额外把多架构镜像推到 ghcr.io
+#   - push v* tag    → 上述 + 打包上传 GitHub Release（zip/tar.gz + checksums）+ 推镜像 tag
 # 固化的发布纪律（曾两次人祸，见仓库 HANDOFF）：-s -w 剥离、二进制版本串 == 源码
 # appVersion、tag 版本 == 源码版本（-ci 后缀的测试 tag 豁免，用于演练发布线）。
 on:
@@ -10,24 +23,37 @@ on:
     branches: [main]
     tags: ["v*"]
   pull_request:
+    # 两条线原来的 paths 取**并集**：合并后一个流水线负责全部产物，所以任一产物相关文件
+    # 变更都要跑一遍。副作用是「只改 Dockerfile」的 PR 现在也会跑 test/race/build（原来只跑
+    # 镜像线）——多花的是分钟数，换的是「不会有一条产物线悄悄没被验证」。
     paths:
+      - "Dockerfile"
+      - ".dockerignore"
       - "go.mod"
       - "go.sum"
       - "cmd/**"
       - "internal/**"
-      - "scripts/**"                      # 门禁脚本住在 scripts/：改门禁本身必须被门禁跑一遍
+      - "scripts/**"                      # 门禁脚本住这里：改门禁必须被门禁跑一遍
       - ".harness/**"                     # 规范 / 深度基线（棘轮数据）/ 变更追踪
+      - "*.sh"
       - "config.example.json"
-      - ".github/workflows/go-binaries.yml"
-      - ".github/workflows/gate.yml"      # 两条发布线共用的门禁实现
+      - ".github/workflows/release.yml"
+      - ".github/workflows/gate.yml"      # 产物线共用的门禁实现
   workflow_dispatch:
 
+# 并发组：PR 取消过时构建；main/tag 按引用串行——发版时 main+tag 同推不再双跑
+# 同一份代码的多架构构建（QEMU arm64 一次不便宜）。
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
+
+env:
+  REGISTRY: ghcr.io
+  # github.repository 自动小写化，得到 ghcr.io/linguo2625469/workbuddy2api-panel
+  IMAGE_NAME: ${{ github.repository }}
 
 jobs:
   test:
@@ -53,8 +79,8 @@ jobs:
           "$(go env GOPATH)/bin/govulncheck" ./...
 
   # 治理门禁：实现见 .github/workflows/gate.yml（可复用 workflow）。
-  # 为什么抽出去：docker-ghcr 这条镜像发布线要共用**同一份**实现——门禁复制成两份必然分叉，
-  # 分叉后会给「这条线过了、那条线没过」的假保证。
+  # 为什么抽出去（而不是各写一份）：门禁复制成两份必然分叉，分叉后会给
+  # 「这条线过了、那条线没过」的假保证。两条产物线共用**同一份**实现，且都 needs 它。
   gate:
     uses: ./.github/workflows/gate.yml
     with:
@@ -134,6 +160,57 @@ jobs:
           name: ${{ env.name }}
           path: ${{ env.name }}
           retention-days: 7
+
+  # 多架构镜像（amd64/arm64）构建；非 PR 时推送 ghcr.io。
+  # 门禁不过就不构建、不推送镜像（与 build 依赖 gate 同语义）。
+  build-image:
+    needs: gate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU（arm64 交叉模拟）
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Docker meta
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=ref,event=branch
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,format=short
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          # 关闭 provenance attestation：避免 ghcr 页面出现 unknown/unknown 架构条目
+          provenance: false
 
   # 仅 tag 触发：校验 tag == 源码版本（-ci 演练 tag 豁免）→ 汇总资产 → 建 Release
   publish:
