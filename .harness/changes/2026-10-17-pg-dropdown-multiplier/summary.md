@@ -39,5 +39,9 @@
 ## 五、遗留（显式标注，不假装解决）
 
 - 上游倍率脏字符串（`x0.71 credits` / `0x`）仍原样透出——未做规范化（用户要求最小改动）。
-- 生产实例 `D:\yg-gateway` 仍在跑旧 exe（内嵌旧 app.js）：需 `deploy-prod.ps1 -Build` 换版后
-  下拉新文案才上线；本变更只改源码 + 提交。
+- ~~生产实例仍跑旧 exe~~ **已换版（2026-10-17 16:41）**：`deploy-prod.ps1 -Build -AllowDirty -Feature pg-dropdown-multiplier`，
+  备份 `D:\yg-gateway\yg-gateway.exe.pre-pg-dropdown-multiplier-20261017.bak`（旧 sha256=F0422B2EFDD7E898），
+  新 exe sha256=E7A676DEC72C1337；健康 4/4、`/v1/models` 20 模型、流式+非流式冒烟全过；
+  线上 `/panel/app.js` 已实测含「倍率未知」与同名区分逻辑。
+- 部署时工作区含并行会话 4 个脏文件（`cmd/server/config.go`、`cmd/server/api_keys_config_test.go` 等）——
+  按用户同意用 `-AllowDirty`，该 exe 无法用提交号追溯；并行会话提交后如需可追溯构建可再换版一次。
