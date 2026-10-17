@@ -55,3 +55,15 @@
 1. 先补 **B3-c**（空时段配置——最可能真出问题的一条）
 2. 再补 **B3-a**（过期边界，涉及"号能不能用"）
 3. **B3-b**（迟到阈值）可与 B4a（夜猫子末次 4s 等待）合并成一批"调度时间语义"改动，一起出 PRD
+
+## 七、收尾：B3-a 是**等价变异**，B3-b / B3-c 已补测试闭环
+
+| # | 结论 |
+|---|---|
+| **B3-a** | **等价变异，无需测试**。`if a.ExpiresAt <= 0 { return true }` 改成 `< 0` 时，`ExpiresAt == 0` 会落到下一行 `time.Now().Add(within).Unix() >= 0` —— 恒为 true。两条分支输出相同，**任何测试都无法区分**。按变异测试惯例记为 equivalent mutant（不是测试缺口）。原记录里"3 个真缺口"应更正为 **2 个**。 |
+| **B3-b** | 已闭环。`awaitWakeupGrace` 的判定抽成纯函数 `isOnTime(late)`（`late <= wakeupLateThreshold`，正好等于阈值算准点）——原实现 `time.Since(planned)` 持续增长，边界不可构造。新增 `TestIsOnTimeBoundary` 逐点钉住 0 / 毫秒 / 阈值−1ns / **阈值** / 阈值+1ns / 1min。牙齿：`<=` → `<` 时"阈值"那行 FAIL。 |
+| **B3-c** | 已闭环。新增 `TestReconfigureKeepsWindowsWhenEmpty`：六个时段先配好，再用全空参数 `Reconfigure` 一次，断言全部保留；反向再传非空验证"更新仍然生效"。牙齿：`len(activityHours) > 0` → `>= 0` → FAIL。 |
+
+**行为等价性证据**：抽 `isOnTime` 后 `go test ./internal/scheduler/ -count=1` 全绿（含既有的
+`TestAwaitWakeupGraceZeroDelayWhenOnTime` / `TestAwaitWakeupGraceLateCatchupWaitsForNetwork`），
+说明重构未改变行为——它们同时也是这次重构的安全网。

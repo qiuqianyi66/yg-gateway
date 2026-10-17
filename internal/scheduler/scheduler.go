@@ -293,12 +293,19 @@ var wakeupGraceDelay = 5 * time.Second
 // 毫秒级抖动（timer 正常触发的偏移量级）不算，避免准点触发被误宽限。
 const wakeupLateThreshold = 1 * time.Second
 
+// isOnTime 准点判定：`late` 在阈值内（**含正好等于阈值**）算准点，零延迟放行。
+//
+// 抽成纯函数是为了能在**边界上**被测试钉住（2026-10-17 B3 变异核验：把 `<=` 改成 `<`
+// 全仓测试仍绿）。原实现里 `time.Since(planned)` 持续增长，构造不出"恰好等于阈值"，
+// 边界因此无法断言。行为与原内联判定逐位一致：`<=` 意为「正好等于阈值算准点」。
+func isOnTime(late time.Duration) bool { return late <= wakeupLateThreshold }
+
 // awaitWakeupGrace 迟到唤醒补跑派发前的网络宽限：槽位时刻已过点超过阈值
 // （机器刚从睡眠唤醒）时先等满 wakeupGraceDelay 让网络栈/DNS 就绪再派发。
 // 准点/阈值内抖动零延迟直接放行。ctx 取消立即返回 false（优雅停机不等宽限
 // 睡满，本批放弃，下轮 nextWake 照旧从"现在"起算）。返回是否继续派发。
 func awaitWakeupGrace(ctx context.Context, planned time.Time) bool {
-	if late := time.Since(planned); late <= wakeupLateThreshold {
+	if isOnTime(time.Since(planned)) {
 		return ctx.Err() == nil // 准点触发：零延迟放行
 	}
 	log.Printf("wakeup grace %s: late catch-up for slot %s", wakeupGraceDelay, planned.Format("15:04"))
