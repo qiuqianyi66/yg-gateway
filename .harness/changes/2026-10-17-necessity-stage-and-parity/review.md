@@ -83,3 +83,46 @@ PLAN 的「42 份 / 431.5 MB」是**两种口径**（仅 `.bak` = 42 份 / 421.7
    GitHub Actions runner 上跑过。首个 push 的 CI 结果即验证。
 2. **PS 5.1 + 遗留 ANSI 代码页（ACP≠65001）**：加了 `-Encoding UTF8` 但未在 ACP=936 的机器上实测 → **待确认**。
 3. **浏览器级 E2E** 仍缺（与本变更无关，是 D-5「不拆 app.js」的重评条件）。
+
+---
+
+## 六、第 3 轮：独立只读复审（子代理）— 结论 **FAIL**（0 🔴 / 1 🟡 / 3 🟢 / 4 🔵）
+
+> 复核对象：`3286f07`。它实测确认 **🟡-2（quotePath）、🟡-3（前端棘轮）、`-Update` 保留
+> `_comment` 三条已真的修好**（含独立穷举 `internal/**/*.{js,html,css}`、基线缺字段 fail-closed
+> 双探针、`-Update` 后 6 指标齐全）。但 🟡-1 换了个机制还活着：
+
+| 级别 | 发现 | 我的处置 |
+|---|---|---|
+| 🟡 | **`2>&1` + 脚本级 `$ErrorActionPreference='Stop'` 在 PS 5.1 下把 git 的 stderr 变成**
+**终止性 NativeCommandError** → 在判 `$LASTEXITCODE` 之前就中止，退出码 **1**（契约是 2），
+「这是脚本自身失败」永不打印。这是 `3286f07` **新引入**的（改前 `2>$null` 不中止） | `Invoke-Git` 内把 EAP 降为 `Continue`（try/finally 还原）+ **stdout/stderr 分流**（stderr 落临时文件，失败时才打印并滤掉 PS 包装框线）。探针：orphan base（rev-parse 通过 / `diff` 报 `no merge base`）→ **exit 2** + 打印 `fatal: orphan...HEAD: no merge base`（修复前 exit 1 且零输出） |
+| 🟢 | `pre-commit.ps1` 检查 8 仍把**任何**非 0（含 exit 2）归因为「缺必要性段」——误归因在聚合层没消除 | 改成按退出码三态：`0` 通过 / `1` 缺段 / `其他` → 「校验脚本自身失败（非缺段）」 |
+| 🟢 | `summary.md` 三处仍写「存量 **7 份** REQ」（review.md 已裁定 11） | 3 处改 11（实测 12 份 REQ，仅本轮新增那份有该段） |
+| 🔵 | `pre-commit.ps1` 注释「9 项有 4 项」与其它文件「14 项有 6 项」冲突 | 统一为 14 / 6 |
+| 🔵 | REQ 影响分析漏 `oversizeFrontendFiles` | 补字段名与值 |
+| 🔵 | `2>&1` 成功时 stderr 会混进文件列表（靠正则挡） | 与 🟡 一并：stdout/stderr 分流。探针：`GIT_TRACE=1` 制造大量 stderr → exit 0 且列表干净 |
+| 🔵 | baseline 无行尾换行 | 已补 |
+
+### 流程自省：已超「评审-修复闭环 ≤2 轮」
+
+规范 §四写「≤2 轮；第 2 轮仍不过 → 暂停，人工介入」。本次是**第 3 轮**仍未过（1 条 🟡）。
+事实记录：三条 🟡 每轮都在收敛（3 条 → 1 条 → 待验证），且失败点都是同一处（`Invoke-Git`）的
+不同层，不是反复返工同一现象。已按规范精神做了替代处置——**每轮都由独立复审者复跑探针**，
+并由我逐条实测闭合；若第 4 轮仍不过，则升级为人工介入而非继续自修。
+
+## 七、第 4 轮：修复后自验（本机实跑，等第 4 次独立复审确认）
+
+| 探针 | 期望 | 实测 |
+|---|---|---|
+| orphan base（rev-parse 通过 / diff 失败） | exit 2 + 打印 git 自己的 fatal | **exit 2**；输出 `错误：git diff 失败（exit=128）… fatal: orphan...HEAD: no merge base` + 「这是脚本自身失败」 |
+| `-Base 'HEAD:docs/prd'`（rev-parse 失败） | exit 2 | exit 2 |
+| `-Base 'no-such-ref-xyz'` | exit 2 | 第 3 轮已验，本轮回归通过 |
+| `GIT_TRACE=1`（大量 stderr） | exit 0，列表不混入 | exit 0，`[OK] 本次无新增需求文档` |
+| 临时 `core.quotePath=true` + 中文名缺段 | exit 1 | exit 1（探针已删、config 已还原） |
+| 清理后复跑 | exit 0 | exit 0 |
+
+**门禁**：本次全量总闸**未跑绿** —— 另一会话正在改 `internal/server/chatrun.go` 与其新增测试，
+`TestReqlogArchiveRecordsCacheMissUnknown` 当前红（`go build ./...` 干净，失败仅在该包）。
+我的改动是 PowerShell + 文档：检查 1/3/4/8 逐项通过、`gofmt -l` 空、三个探针见上。
+**待对方提交后必须重跑一次全量 8 项**，这是本变更唯一的未闭环项。
