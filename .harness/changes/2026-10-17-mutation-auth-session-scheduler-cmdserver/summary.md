@@ -135,3 +135,27 @@ powershell -NoProfile -File scripts/mutation/mutation-check.ps1 `
 ```
 脚本内置四条护栏：L-2 的 `go env GOMOD` 断言、基线必须先绿、锚点必须唯一、每个变异跑完立刻还原
 并在收尾断言副本干净。
+## 十、三条复审缺口全部闭环（2026-10-17 收尾）
+
+| ID | 缺口 | 现状 |
+|---|---|---|
+| **B3-a** | `auth`：`SaveAtomic` 吞掉 `os.Rename` 错误（R10） | ✅ 已修（`6b1a886`）：新增 `TestSaveAtomicPropagatesRenameFailure`（目标路径做成非空目录 → rename 必失败） |
+| **B3-b** | `session`：去掉「空闲号优先」双段策略，包内测试全绿 | ✅ 已修（本轮）：新增 `TestRouterPrefersIdleAccount`。构造：找两个 `hashIndex(_,2)` 同桶的 key——idle 优先生效时第二个 key 的 idle 集只剩另一个号必然分到不同号；失效时两者同桶必然撞号。**牙齿**：副本里把 `pool2 := idle` 改成 `uids`（并 `_ = idle` 防未使用）→ 该用例 FAIL、其余全绿 |
+| **B3-c** | `cmd/server`：顶层 `api_key` 与多 Key 归一化口径不一致 | ✅ 已修（`9823ebd`）：比较时对 `c.APIKey` 也 `TrimSpace`（只改比较，不改运行时鉴权语义），新增 `TestAPIKeysPaddedSingleKeyDuplicateRejected`（入口用 `ParseConfig`，因为 `Load` 会 normalize 两遍把缺口盖住） |
+
+**入库的变异清单最终计数**（`scripts/mutation/mutations/`，全部可复跑）：
+
+| 包 | 条目 | 结果 |
+|---|---|---|
+| auth | 6 | 6 咬住 |
+| session | 6（原 5 + B3-b） | 6 咬住 |
+| scheduler | 4 | 4 咬住 |
+| cmd/server | 7 | 7 咬住 |
+| **合计** | **23** | **23 咬住 / 0 存活 / 0 无效** |
+
+### 10.1 编号撞车（下一轮必须先统一）
+
+同日另一个会话也用了 `B3-a / B3-b / B3-c` 这套编号，但指的是**另外三件事**
+（`internal/scheduler` 的准点边界与空时段覆盖，见 `fdd6c7b`）。本目录的 A/B/C 指
+「复审自选的 3 个变异」。**两套编号同名不同物**，PLAN 里若只写「B3 已闭环」会让人误判。
+建议下一轮把它们改名为 `B3-r1/r2/r3`（r = review），再回填状态。
