@@ -154,7 +154,7 @@ Get-ChildItem internal -Recurse -Filter *.js | ForEach-Object { (Get-Content $_.
 
 | # | 项 | 实测证据 | 规模 | 级别 |
 |---|---|---|---|---|
-| **B1** | **`cache_miss_unknown` 从未在产线出现过**（A3 只验「面板空态」，这条没覆盖） | 扫 `D:\yg-gateway\data\request-logs\requests-*.jsonl`：**6916 行中 `cache_miss_tokens` 出现 6542 次、`cache_miss_unknown` 出现 0 次**。⚠️ 口径：6 个文件只读到 5 个（当日文件被网关进程占用）→ **当日的文件是未知，不是「没有」**（`AGENTS.md`：没覆盖=未知） | 1h | L1 |
+| **B1a** ✅ | **`cache_miss_unknown` 的归档链路端到端证据**——已补：真实 handler 请求 → 真实 Recorder → 真实 `*.jsonl`，4 个子用例双向断言；按 L-2 做两次变异（还原旧实现→「未知」用例红；无条件标记→「已观测」用例红，哈希闭环无残留） | `.harness/changes/2026-10-17-cache-miss-unknown-evidence/summary.md`。**仍然未知**：产线从未实际出现该标记（6916 行 0 次）——消解需要一次真实上游返回「只有 hit、无 miss、无 prompt」，不受我们控制 | 已完成 | L1 |
 | **B2** | **N6 在交接文档里被转述失真**：`HANDOFF-2026-10-16-ci-closed.md` §3 N6 列的 4 条（退避与额度解耦 / 快过期积分纯函数 / 流式 error 门禁 / 写回前回读）**全仓搜不到**，也不是它引用那份 wiki 的内容 | 全仓 grep 四条短语 → 0 命中。wiki 自己「top 3 照做」= **①剪枝前先回填派生值**（`model_costs` tier 是 inference，而 reqlog 归档 7 天到期后永久失去纠成本机会）**②持久化版本闸门 + 迁移前备份 + 版本过新拒启动**（`usage.json` 有 `Version` 但 `load()` 从不校验；`state.json` 连版本字段都没有）**③跨文件写前意图 + 启动前滚**（`auths/*.json` 与 `state.json` 无对账）。第 4 条「该改（小）」= 明细清理挪到启动期+周期 | 数小时~1天 | L2（②③ 需先立 ADR） |
 | **B3** | **N7 的真实缺口：`auth` / `session` / `scheduler` / `cmd/server` 四包从未做过独立变异核验**（A6 说的是 panel/autotask 的**深度**不够，不是这个缺口） | `2026-10-16-t3-mutation/summary.md` 只对 `upstream`/`panel` 做了独立复验，其余四个包是**自述**。配方在 T3 里（`%TEMP%` 副本 + `go env GOMOD` 断言 + 改前改后哈希闭环 + 每包 5 条语义变异） | 数小时 | L2 |
 | **B4** | **部署脚本落地后新开的口子**（`scripts/deploy-prod.ps1`，见 9.3） | — | 0.5~1h 除 B4-a | L1 |
@@ -224,7 +224,7 @@ Get-ChildItem internal -Recurse -Filter *.js | ForEach-Object { (Get-Content $_.
 |---|---|---|---|
 | **B2a** | **N6 转述失真仍是活文档**：`docs/superpowers/plans/HANDOFF-2026-10-16-ci-closed.md` 与 `HANDOFF-2026-10-16-depth-next.md` 仍写着「4 条高价值建议一条都没实现」，而那 4 条**全仓 grep 0 命中**（不是 wiki 的内容） | 30min（L0） | **无** |
 | **B4c** | `AGENTS.md` §部署纪律仍写手工步骤（"构建+复制+启动同一条命令"），**没指向** `scripts/deploy-prod.ps1` 与它的退出码表 | 10min（L0） | **无** |
-| **B1** | `cache_miss_unknown` 从未在产线出现过（A3 只验空态）→ 用沙箱 + 假上游造一条 unknown，验「有值态」的面板观感 | 半天 | **无** |
+| **B1b** | **A3 的剩余部分：造一条 unknown 验「有值态」的面板观感**（B1 已被拆成两半：归档链路 ✅ 见 §9.2 的 B1a；这里只剩面板观感） | 半天 | **无** |
 | **B4b** | 启动失败时 launcher 可能残留 `cmd.exe`（无害但累积）；需写清「命令行含目标 exe 且父进程已死」的清理判据 | 2h | **无** |
 | **B5** | `build-image` 在 PR 上也跑 QEMU 双架构（墙钟瓶颈 ~2-3min/PR） | 1h | **无** |
 | **B3** | `auth`/`session`/`scheduler`/`cmd/server` 四包从未做过独立变异核验 | 1 天（分批） | **无** |

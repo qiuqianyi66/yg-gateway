@@ -2,9 +2,12 @@ package server
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"yg-gateway/internal/auth"
 	"yg-gateway/internal/reqlog"
 )
 
@@ -193,4 +196,105 @@ func TestReqlogCacheMissUnknownIsAdditive(t *testing.T) {
 	if got2 := string(raw2); strings.Contains(got2, `"cache_miss_unknown"`) {
 		t.Errorf("观察到的 miss=0 不得带未知标记，got %s", got2)
 	}
+}
+
+// TestReqlogArchiveRecordsCacheMissUnknown 端到端补证（PLAN B1）：**真实请求 → 真实归档文件**。
+//
+// 为什么需要它：仓里已有两个测试，但都不覆盖这段链路——
+//   - `TestCacheTokensMissUnknownIsNotZero` 只到 `chatStatsReader.CacheTokens()`（解析器）；
+//   - `TestReqlogCacheMissUnknownIsAdditive` 只到 `reqlog.Event → JSON`（序列化器）。
+//
+// 中间「chatrun 把状态填进 Event、Recorder 异步写入 *.jsonl」这一段没有任何测试，
+// 而产线的 `cache_miss_unknown` 至今**一次都没观测到**（`requests-*.jsonl` 6916 行里 0 次）。
+// 没有这两端连起来的证据，「产线会打这个标记」就只是推断。
+//
+// 覆盖两个方向（双向牙齿，只测一个方向会被「永远写 true」的假实现骗过）：
+//
+//	非流式 · 上游只给 hit（无 miss、无 prompt_tokens） → 落盘必须带 cache_miss_unknown:true，且**不得**出现 cache_miss_tokens
+//	流式   · 同上（末帧 usage 同形态）                → 同上
+//	非流式 · 上游显式给 miss                          → 落盘必须带 cache_miss_tokens 数字，且**不得**出现 cache_miss_unknown
+//
+// 还原什么会让它 FAIL：把 `chatrun.go` 里 `st.cacheHit, st.cacheMissUnknown = hit, true` 改回
+// 旧实现（miss 未知时写 0 并当成观察）→ 前两条红；把标记改成无条件 true → 第三条红。
+func TestReqlogArchiveRecordsCacheMissUnknown(t *testing.T) {
+	// 夹具要点：本仓**上游恒走 SSE**（CodeBuddy 只吐 event-stream），非流式是 handler 聚合出来的
+	// ——`chatflow_test.go` 的子用例 1 就是「非流式请求 + SSE 上游」。所以三个用例的上游体都是 SSE，
+	// 只有**请求**的 stream 字段不同。
+	const (
+		sseUnknown = "data: {\"id\":\"x\",\"object\":\"chat.completion.chunk\",\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hi\"}}]}\n\n" +
+			"data: {\"id\":\"x\",\"object\":\"chat.completion.chunk\",\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_cache_hit_tokens\":800}}\n\n" +
+			"data: [DONE]\n\n"
+		sseKnown = "data: {\"id\":\"x\",\"object\":\"chat.completion.chunk\",\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hi\"}}]}\n\n" +
+			"data: {\"id\":\"x\",\"object\":\"chat.completion.chunk\",\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_cache_hit_tokens\":100,\"prompt_cache_miss_tokens\":900,\"prompt_tokens\":1000}}\n\n" +
+			"data: [DONE]\n\n"
+	)
+
+	cases := []struct {
+		name        string
+		upstreamBdy string
+		reqStream   bool // 只有它决定 handler 走聚合还是透传
+		wantUnknown bool
+		wantMissTok string // "" = 该字段不得出现
+	}{
+		{name: "非流式·miss 未知", upstreamBdy: sseUnknown, reqStream: false, wantUnknown: true},
+		{name: "流式·miss 未知", upstreamBdy: sseUnknown, reqStream: true, wantUnknown: true},
+		{name: "非流式·miss 已观测", upstreamBdy: sseKnown, reqStream: false, wantUnknown: false, wantMissTok: `"cache_miss_tokens":900`},
+		{name: "流式·miss 已观测", upstreamBdy: sseKnown, reqStream: true, wantUnknown: false, wantMissTok: `"cache_miss_tokens":900`},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			line := chatThenReadArchiveLine(t, tc.upstreamBdy, tc.reqStream)
+
+			if got := strings.Contains(line, `"cache_miss_unknown":true`); got != tc.wantUnknown {
+				t.Errorf("cache_miss_unknown 出现=%v，want %v；行=%s", got, tc.wantUnknown, line)
+			}
+			if tc.wantUnknown {
+				if strings.Contains(line, `"cache_miss_tokens"`) {
+					t.Errorf("miss 未知时不得写 cache_miss_tokens（0 会被读成全部命中）；行=%s", line)
+				}
+			}
+			if tc.wantMissTok != "" && !strings.Contains(line, tc.wantMissTok) {
+				t.Errorf("miss 已观测时必须落盘 %s；行=%s", tc.wantMissTok, line)
+			}
+		})
+	}
+}
+
+// chatThenReadArchiveLine 打一次真实 chat 请求，返回归档文件里那一行（已脱敏的 Event JSON）。
+// upstreamBody 恒为 SSE 体（上游协议使然），仅请求侧区分流式/非流式。
+func chatThenReadArchiveLine(t *testing.T, upstreamBody string, reqStream bool) string {
+	t.Helper()
+	dir := t.TempDir()
+	rl := reqlog.New(reqlog.Config{Dir: dir, Enabled: true})
+	t.Cleanup(rl.Close) // close 带 sync.Once，重复调用安全
+
+	h := NewHandler(Config{
+		Pool:       testPoolWith(&auth.Auth{UID: "u1", AccessToken: "at", ExpiresAt: 9999999999}),
+		Upstream:   newFakeUpstream(t, func(string) (int, string, bool) { return 200, upstreamBody, true }),
+		RequestLog: rl,
+	})
+
+	body := `{"model":"m","messages":[{"role":"user","content":"hi"}],"stream":false}`
+	if reqStream {
+		body = `{"model":"m","messages":[{"role":"user","content":"hi"}],"stream":true}`
+	}
+	if rec := doChat(t, h, "", body); rec.Code != 200 {
+		t.Fatalf("status=%d want 200，body=%s", rec.Code, rec.Body.String())
+	}
+
+	rl.Close() // 刷盘（显式关一次，不依赖 t.Cleanup 的时机）
+	matches, err := filepath.Glob(filepath.Join(dir, "requests-*.jsonl"))
+	if err != nil || len(matches) != 1 {
+		t.Fatalf("归档文件应恰好 1 个，got %v (err=%v)", matches, err)
+	}
+	raw, err := os.ReadFile(matches[0])
+	if err != nil {
+		t.Fatalf("读归档失败：%v", err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(raw)), "\n")
+	if len(lines) != 1 {
+		t.Fatalf("应恰好 1 行事件，got %d 行：%s", len(lines), raw)
+	}
+	return lines[0]
 }
