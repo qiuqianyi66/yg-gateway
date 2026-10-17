@@ -121,7 +121,7 @@ $prodGoFiles = @($goFiles | Where-Object { $_ -notlike '*_test.go' })
 # ---------------------------------------------------------------------------
 # 检查 1：gofmt 零漂移（只查本次改动的文件）
 # ---------------------------------------------------------------------------
-Write-Section '检查 1/7：gofmt'
+Write-Section '检查 1/8：gofmt'
 # 本地只看本次改动的 .go 文件（存量已清零，增量严格拦截）；
 # CI 用 -AllFiles 看全仓——CI 工作区干净，「改动文件」恒为空，只看改动等于不检查。
 $gofmtTargets = @()
@@ -153,7 +153,7 @@ if ($gofmtTargets.Count -eq 0) {
 #   (b) 其余新增忽略点（`_ = ...` / `, _ := ...` / `, _ = ...`）→ 必须带解释注释
 #       （同行 `//`，或紧邻上两行内含「忽略」/`ignore`）。
 # ---------------------------------------------------------------------------
-Write-Section '检查 2/7：R10 静默忽略（新增行）'
+Write-Section '检查 2/8：R10 静默忽略（新增行）'
 
 $ignorePattern = '^\s*_ = |^\s*_ := |,\s*_\s*:?='
 $identPattern = '^\s*_ = ([A-Za-z_][A-Za-z0-9_]*)\s*(//.*)?$'
@@ -262,7 +262,7 @@ if ($r10bad.Count -gt 0) {
 # 判据：.ps1 里出现该形态**一律是 bug**（正确写法：行内引用用「」，需要字面双引号用单引号串
 # 或 here-string；确实要转义引号则用反引号转义）。
 # ---------------------------------------------------------------------------
-Write-Section '检查 3/7：PowerShell 引号陷阱（新增行）'
+Write-Section '检查 3/8：PowerShell 引号陷阱（新增行）'
 $psTrap = New-Object System.Collections.ArrayList
 foreach ($a in $added) {
     if ($a.File -notlike '*.ps1') { continue }
@@ -294,7 +294,7 @@ if ($psTrap.Count -gt 0) {
 # 作用域说明：这条检查天然是「本地」的（CI 工作区干净、无未跟踪文件），CI 里必然通过，
 # 这不是放水——它要拦的本来就是本地跑覆盖率时的手误。
 # ---------------------------------------------------------------------------
-Write-Section '检查 4/7：仓库根的字面名垃圾文件（L-3）'
+Write-Section '检查 4/8：仓库根的字面名垃圾文件（L-3）'
 $literalBad = New-Object System.Collections.ArrayList
 foreach ($f in @(& git ls-files --others --exclude-standard 2>$null)) {
     if (-not $f) { continue }
@@ -316,7 +316,7 @@ if ($literalBad.Count -gt 0) {
 # ---------------------------------------------------------------------------
 # 检查 5：构建与静态检查
 # ---------------------------------------------------------------------------
-Write-Section '检查 5/7：go build + go vet'
+Write-Section '检查 5/8：go build + go vet'
 $buildOut = @(& $goExe build ./... 2>&1)
 if ($LASTEXITCODE -ne 0) {
     $buildOut | Select-Object -First 40 | ForEach-Object { Write-Host ("    " + $_) -ForegroundColor DarkGray }
@@ -338,7 +338,7 @@ if ($LASTEXITCODE -ne 0) {
 # ---------------------------------------------------------------------------
 # 检查 6：测试
 # ---------------------------------------------------------------------------
-Write-Section '检查 6/7：go test ./...（-cover，输出复用给检查 7）'
+Write-Section '检查 6/8：go test ./...（-cover，输出复用给检查 7）'
 # 只跑**一次**全量测试：这份 `-cover` 输出既是「测试是否绿」的判据，也是检查 7 深度棘轮
 # 的覆盖率来源（先落 $env:TEMP，再传给 check-depth.ps1）。
 # 不加 -cover 会让 check-depth 内部又跑一遍全量 —— 同一个门禁里跑两遍，本机实测第二遍就是
@@ -372,7 +372,7 @@ if ($Fast) {
 # ---------------------------------------------------------------------------
 # 检查 7：治理门禁（依赖方向 + 深度棘轮）
 # ---------------------------------------------------------------------------
-Write-Section '检查 7/7：边界与深度棘轮'
+Write-Section '检查 7/8：边界与深度棘轮'
 $bout = @(& $hostExe -NoProfile -File scripts/check-boundaries.ps1 2>&1)
 if ($LASTEXITCODE -ne 0) {
     $bout | Select-Object -First 30 | ForEach-Object { Write-Host ("    " + $_) -ForegroundColor DarkGray }
@@ -400,6 +400,25 @@ if ($LASTEXITCODE -ne 0) {
 # 不加 -ErrorAction SilentlyContinue：删不掉就是真问题，要看得见（R10）；存在性用 Test-Path 判。
 if ($coverTmpPath -ne '' -and (Test-Path -LiteralPath $coverTmpPath)) {
     Remove-Item -LiteralPath $coverTmpPath -Force
+}
+
+# ---------------------------------------------------------------------------
+# 检查 8/8：新增需求文档必须有「必要性」段（阶段 0）
+#
+# 由来：2026-10-17 的待办清单里 9 项有 4 项经实测不需要做。规则见
+# .harness/rules/开发流程规范.md「零、阶段 0：必要性分析」；只对**本次新增**的
+# docs/prd/REQ-*.md 生效（存量不追溯），实现在 scripts/check-req-necessity.ps1。
+# ---------------------------------------------------------------------------
+Write-Section '检查 8/8：新增需求文档的必要性段（阶段 0）'
+$reqArgs = @('-NoProfile', '-File', 'scripts/check-req-necessity.ps1')
+if ($Base -ne '') { $reqArgs += @('-Base', $Base) }
+$rout = @(& $hostExe @reqArgs 2>&1)
+if ($LASTEXITCODE -ne 0) {
+    $rout | Select-Object -Last 12 | ForEach-Object { Write-Host ("    " + $_) -ForegroundColor DarkGray }
+    Write-Bad '新增需求文档缺「必要性」段（阶段 0）'
+    Add-Failure '阶段 0 必要性段缺失'
+} else {
+    Write-Pass '需求文档阶段 0 校验通过'
 }
 
 # ---------------------------------------------------------------------------

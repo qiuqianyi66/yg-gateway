@@ -202,13 +202,36 @@ $minCoverage = if ($coverages.Count -gt 0) {
 }
 
 # ---------------------------------------------------------------------------
+# 度量 5：前端产物体量（`internal/**/*.js`，即 go:embed 进二进制的那一层）
+#
+# 为什么单列：`internal/panel/app.js` 是全仓最大的生产文件（约 4.6k 行），但它**不在**
+# 上面的度量 1/2 里——那两项只扫生产 `.go`。于是前端体量此前完全没被门禁看见：可以无上限
+# 增长而不触发任何棘轮（`docs/PLAN-open-items-2026-10-17.md` 的 O1）。
+# 本轮只**纳入度量 + 冻结基线**（只许降不许涨），**不拆文件**：拆分属结构性改动，且没有
+# 浏览器级 E2E 兜底，风险大于收益（必要性分析见 `docs/PLAN-necessity-review-2026-10-17.md`）。
+# 口径：非空行（与度量 1/2 一致），排除 node_modules。
+# ---------------------------------------------------------------------------
+$frontendFiles = @(Get-ChildItem internal -Recurse -Filter *.js -ErrorAction SilentlyContinue |
+    Where-Object { $_.FullName -notmatch '[\\/]node_modules[\\/]' })
+$maxFrontendLines = 0
+$maxFrontendPath = ''
+foreach ($f in $frontendFiles) {
+    $n = @(Get-Content $f.FullName | Where-Object { $_.Trim() -ne '' }).Count
+    if ($n -gt $maxFrontendLines) {
+        $maxFrontendLines = $n
+        $maxFrontendPath = Get-RepoRelPath $f.FullName
+    }
+}
+
+# ---------------------------------------------------------------------------
 # 组装当前指标
 # ---------------------------------------------------------------------------
 $current = [ordered]@{
-    maxFileLines  = [int]$maxFileLines
-    oversizeFiles = [int]$oversizeFiles.Count
-    oversizeFuncs = [int]$oversizeFuncs
-    minCoverage   = [double]$minCoverage
+    maxFileLines      = [int]$maxFileLines
+    oversizeFiles     = [int]$oversizeFiles.Count
+    oversizeFuncs     = [int]$oversizeFuncs
+    minCoverage       = [double]$minCoverage
+    maxFrontendLines  = [int]$maxFrontendLines
 }
 
 Write-Host "=== 工程深度度量 ===" -ForegroundColor Cyan
@@ -216,6 +239,7 @@ Write-Host ("  最大文件行数      : {0}  (阈值 {1})" -f $current.maxFileL
 Write-Host ("  >{0} 行文件数     : {1}" -f $FILE_LIMIT, $current.oversizeFiles)
 Write-Host ("  >{0} 行函数数     : {1}" -f $FUNC_LIMIT, $current.oversizeFuncs)
 Write-Host ("  最低包覆盖率      : {0}%" -f $current.minCoverage)
+Write-Host ("  最大前端文件行数  : {0}  ({1})" -f $current.maxFrontendLines, $maxFrontendPath)
 Write-Host ("  覆盖率来源        : {0}" -f $coverageSource) -ForegroundColor DarkGray
 
 if ($Detail) {
@@ -250,7 +274,7 @@ $baseline = (Get-Content $baselinePath -Raw | ConvertFrom-Json).metrics
 $regressions = @()
 
 # 越大越差的三项
-foreach ($key in @('maxFileLines', 'oversizeFiles', 'oversizeFuncs')) {
+foreach ($key in @('maxFileLines', 'oversizeFiles', 'oversizeFuncs', 'maxFrontendLines')) {
     $baseVal = [int]$baseline.$key
     $curVal  = [int]$current[$key]
     if ($curVal -gt $baseVal) {
@@ -277,7 +301,7 @@ if ($regressions.Count -gt 0) {
 
 # 变好 → 提示可抬棘轮（但不自动写，避免静默放水）
 $improved = @()
-foreach ($key in @('maxFileLines', 'oversizeFiles', 'oversizeFuncs')) {
+foreach ($key in @('maxFileLines', 'oversizeFiles', 'oversizeFuncs', 'maxFrontendLines')) {
     if ([int]$current[$key] -lt [int]$baseline.$key) {
         $improved += "{0} {1} → {2}" -f $key, ([int]$baseline.$key), ([int]$current[$key])
     }
