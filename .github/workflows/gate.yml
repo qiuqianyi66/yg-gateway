@@ -21,7 +21,7 @@ on:
   workflow_call:
     inputs:
       base_ref:
-        description: 差分基准分支名（PR 传 github.base_ref；push 留空则由脚本回落到 HEAD~1）
+        description: 差分基准分支名（PR 传 github.base_ref；push 留空——门禁自己用事件里的 before SHA；两者都没有则回落 HEAD~1 并告警）
         type: string
         required: false
         default: ""
@@ -42,17 +42,55 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - name: 解析 base（PR → origin/<base>；push → HEAD~1）
+      - name: 解析 base（PR → origin/<base>；tag push → 上一个 tag；branch push → 事件的 before；否则 HEAD~1 并告警）
         id: base
         env:
           BASE_REF: ${{ inputs.base_ref }}
+          BEFORE_SHA: ${{ github.event.before }}
+          GIT_REF: ${{ github.ref }}
+          GIT_REF_NAME: ${{ github.ref_name }}
         run: |
-          if [ -n "$BASE_REF" ]; then
+          set -euo pipefail
+          if [ -n "${BASE_REF:-}" ]; then
             git fetch --no-tags origin "+refs/heads/$BASE_REF:refs/remotes/origin/$BASE_REF"
             echo "ref=origin/$BASE_REF" >> "$GITHUB_OUTPUT"
-          else
-            echo "ref=HEAD~1" >> "$GITHUB_OUTPUT"
+            echo "base = PR 基准 origin/$BASE_REF"
+            exit 0
           fi
+
+          # tag push：GitHub 对「新建 ref」给的 before 是 40 个 0，但基准**是可确定的**——
+          # 上一个 tag。这与 publish job 算 compare 链接的口径一致（release.yml 用
+          # `git describe --tags --abbrev=0 <tag>^`）。取不到（首个 tag）才回落并告警：
+          # 若在这里直接按「before 不可用」告警，每次发版都会刷一条 warning，
+          # 而 warning 刷多了就没人看了 —— 那等于把「不许静默降级」变成「习惯性忽略」。
+          if printf '%s' "${GIT_REF:-}" | grep -q '^refs/tags/'; then
+            PREV_TAG=$(git describe --tags --abbrev=0 "${GIT_REF_NAME}^" 2>/dev/null || true)
+            if [ -n "${PREV_TAG:-}" ] && git cat-file -e "${PREV_TAG}^{commit}" 2>/dev/null; then
+              echo "ref=$PREV_TAG" >> "$GITHUB_OUTPUT"
+              echo "base = 上一个 tag（$PREV_TAG）：本次 tag 的全部提交都进入差分"
+              exit 0
+            fi
+            echo "::warning::tag push 且找不到上一个 tag（首个 tag？）→ 回落 HEAD~1"
+            echo "ref=HEAD~1" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # branch push：基准必须是「本次推送之前的 HEAD」（github.event.before）。
+          # 固定用 HEAD~1 的后果：一次推 N>1 个提交时，R10 与「改动文件」只差分了**最后一个**提交，
+          # 前 N-1 个提交的新增行在 CI 里是盲区（REQ-ci-gate-base F-1，已实测：一次推 6 个
+          # 提交，CI 只查了其中 1 个）。本地 pre-commit 用工作区 diff 会查全，但 CI 的意义正是
+          # 「本地可能漏/可绕过」——它必须自己查全。
+          if [ -n "${BEFORE_SHA:-}" ] && ! printf '%s' "$BEFORE_SHA" | grep -qE '^0+$'; then
+            if git cat-file -e "${BEFORE_SHA}^{commit}" 2>/dev/null; then
+              echo "ref=$BEFORE_SHA" >> "$GITHUB_OUTPUT"
+              echo "base = push 事件的 before（$BEFORE_SHA）：本次推送的全部提交都进入差分"
+              exit 0
+            fi
+            echo "::warning::before SHA $BEFORE_SHA 不在当前历史里（强推/改写历史？）→ 回落 HEAD~1，本次推送的早期提交可能漏检"
+          else
+            echo "::warning::事件里没有可用的 before SHA（workflow_dispatch 或新分支首推）→ 回落 HEAD~1，多提交时早期提交可能漏检"
+          fi
+          echo "ref=HEAD~1" >> "$GITHUB_OUTPUT"
       # -Fast：go test 由各 workflow 自己的 test job 独占（check-depth 内部仍会跑一次带覆盖率的，棘轮需要它）
       # -AllFiles：CI 工作区干净，「本次改动的文件」恒为空 → 只查改动等于不查
       # -Base：改动已提交，只有与 base 差分才能看到「本次新增了哪些行」
