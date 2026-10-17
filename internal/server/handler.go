@@ -635,6 +635,20 @@ func fmtCreditsPrefix(raw string) string {
 	return "[" + s + " credit]"
 }
 
+// nameRateSuffix 从上游 credits 原文提取倍率展示后缀（"x0.05 credits" → " ×0.05"）：
+// 去 "credits" 后缀、剥首尾的 "x"（"0x" → "0"），拼 " ×" 前缀。上游未给倍率（空）→ ""
+// ——不加后缀、不编造（AGENTS.md 四态：没覆盖 = 未知）。
+func nameRateSuffix(raw string) string {
+	s := strings.TrimSpace(raw)
+	s = strings.TrimSuffix(s, "credits")
+	s = strings.TrimSpace(s)
+	s = strings.Trim(s, "x")
+	if s == "" {
+		return ""
+	}
+	return " ×" + s
+}
+
 // applyModelInfoFields 把上游模型对象全字段（ModelInfo）按「空值省略」写出规则
 // 合入 /v1/models 条目：name/description/credits/tags/vendor/能力旗标/
 // max_allowed_size/reasoning_effort/reasoning_summary。CN 动态分支与 global
@@ -643,7 +657,10 @@ func fmtCreditsPrefix(raw string) string {
 // 字段（零值）整体省略——不编造。
 func applyModelInfoFields(entry map[string]any, mi upstream.ModelInfo) map[string]any {
 	if mi.Name != "" {
-		entry["name"] = mi.Name
+		// 积分倍率拼进 name（"GLM-5.2 ×0.05"）：第三方客户端多只渲染 name 字段，
+		// 单独的 credits 字段它们看不到（deepseek harness 实测不显示）；面板自身
+		// 走 /panel/api/models（另有倍率列），不受影响。
+		entry["name"] = mi.Name + nameRateSuffix(mi.Credits)
 	}
 	if mi.Description != "" {
 		// 积分倍率前缀：从 "x0.05 credits" / "x0.29" 等格式提取纯数字，

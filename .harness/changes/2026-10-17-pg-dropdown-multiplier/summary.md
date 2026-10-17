@@ -45,3 +45,22 @@
   线上 `/panel/app.js` 已实测含「倍率未知」与同名区分逻辑。
 - 部署时工作区含并行会话 4 个脏文件（`cmd/server/config.go`、`cmd/server/api_keys_config_test.go` 等）——
   按用户同意用 `-AllowDirty`，该 exe 无法用提交号追溯；并行会话提交后如需可追溯构建可再换版一次。
+
+## 六、追加（2026-10-17）：`/v1/models` 的 name 拼倍率——让第三方客户端显示
+
+- 触发：用户在 deepseek harness 客户端「重新提取模型」仍看不到倍率。
+  实测根因：客户端渲染的是 `/v1/models` 的 **name** 字段，不渲染 `credits` 字段；面板修复
+  （app.js）只影响面板自身 UI，与 `/v1/models` 无关。**数据一直在返回里**（`cn:hy4-preview
+  → credits=x0.29` 等），是客户端不画这个字段。
+- 用户拍板 **方案 A**：接受把倍率拼进 name（代价：所有显示 name 的地方都带倍率；
+  面板自身走 `/panel/api/models` 另有倍率列，不受影响）。
+
+| 文件 | 改动 |
+|---|---|
+| `internal/server/handler.go` | 新增 `nameRateSuffix`：上游 credits 原文（`x0.05 credits`/`x0.29`/`0x`/空）归一为 ` ×N`（去 `credits` 后缀、剥首尾 `x`）；空 = 倍率未知，**不加后缀不编造**（四态纪律）。`applyModelInfoFields` 的 name 由 `mi.Name` 改为 `mi.Name + nameRateSuffix(mi.Credits)`，仅作用于 `/v1/models` |
+| `internal/server/handler_test.go` | `TestModelsEndpoint` 新增 name 断言（`GLM-5.2 ×0.05`）；新增 `TestNameRateSuffix` 表测（7 例，含空值不拼后缀） |
+
+- 验证：定向测试 PASS；`go test ./... -count=1` 全绿（23 包）；`go vet` 0；`gofmt -l` 无输出；
+  `check-boundaries.ps1` / `check-depth.ps1` 通过（app.js 4378 行基线未动）。
+- 换版：`deploy-prod.ps1 -Build -AllowDirty -Feature pg-dropdown-multiplier`（同款脏树约束）。
+- 回滚：`git revert <本提交>`。回滚后 `/v1/models` name 恢复裸名。
