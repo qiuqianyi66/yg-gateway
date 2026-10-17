@@ -958,7 +958,15 @@ func (c *Config) normalizeAPIKeys() error {
 		}
 		seenID[id] = true
 		// 重复密钥检测（阻断项 1）：与单值 api_key 或已见多 Key 重复 → fail fast。
-		if c.APIKey != "" && key == c.APIKey {
+		//
+		// 两边归一化口径必须一致（2026-10-17，B3-c）：k.Key 会被 TrimSpace 后落库
+		// （见下方 `k.Key = key`），而顶层 api_key 从不 trim（运行时摘要直接取原值，
+		// 见 main.go 的 sha256.Sum256([]byte(c.APIKey))）。若这里按原值比，
+		// `api_key: " sk-dup "` 配 `api_keys[].key: "sk-dup"` 会被判成「不同密钥」：
+		// 管理员意图里的同一把密钥静默变成两把，约束是否生效取决于客户端发哪个——
+		// 既违背本检测的初衷，也让排查失去落点。故比较时对 c.APIKey 也 TrimSpace
+		// （**只影响比较**，运行时仍用原值，不改鉴权语义）。
+		if c.APIKey != "" && key == strings.TrimSpace(c.APIKey) {
 			return fmt.Errorf("api_keys[%s]: key 与顶层 api_key 重复；同一密钥不能同时作为单值 Key 与受限多 Key（会绕过 models/realm 约束）", id)
 		}
 		if prevID, dup := seenKey[key]; dup {

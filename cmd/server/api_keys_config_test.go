@@ -208,3 +208,27 @@ func TestAPIKeysDuplicateKeyFailsFast(t *testing.T) {
 		t.Fatal("单 api_key 与多 Key 使用同一密钥值应 fail fast")
 	}
 }
+
+// TestAPIKeysPaddedSingleKeyDuplicateRejected 钉住「顶层 api_key 与多 Key 的归一化口径一致」。
+//
+// 为什么需要它（2026-10-17，独立复审自选变异 B3-c 存活）：`api_keys[].key` 会被 TrimSpace 后
+// 落库，而顶层 `api_key` 从不 trim（运行时摘要取原值）。重复检测若按原值比较，
+// `api_key:" sk-dup "` + `api_keys[].key:"sk-dup"` 会被判成「不同密钥」→ 管理员意图里的
+// 同一把密钥静默变成两把，约束是否生效取决于客户端发哪一个。
+//
+// 入口用 ParseConfig（**单次** normalize）：Load 会 normalize 两遍，第二遍时 k.Key 已被
+// 首遍 trim，正好把这个缺口掩盖掉（独立复审实测：同一个变异在 Load 下「咬住」、在 ParseConfig
+// 下才暴露）。这也是本用例特意不走 loadWith 的原因。
+//
+// 还原什么会让它 FAIL：把比较改回 `key == c.APIKey`（不归一化）→ 两个子例都红。
+func TestAPIKeysPaddedSingleKeyDuplicateRejected(t *testing.T) {
+	bodies := []string{
+		`{"api_key":" sk-dup ", "api_keys":[` + apiKeyEntry("k1", "sk-dup", "", "", `["m1"]`) + `]}`,
+		`{"api_key":"sk-dup", "api_keys":[` + apiKeyEntry("k1", "  sk-dup  ", "", "", `["m1"]`) + `]}`,
+	}
+	for _, body := range bodies {
+		if _, err := ParseConfig([]byte(body)); err == nil {
+			t.Errorf("顶层 api_key 与多 Key 归一化后同值时必须 fail fast，got nil；body=%s", body)
+		}
+	}
+}
