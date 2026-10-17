@@ -1031,9 +1031,11 @@ function mdMatch(m, f) {
     }
   }
   if (f.realm && !String(m.id || '').startsWith(f.realm + ':')) return false;
-  if (f.cap === 'tool' && !m.supports_tool_call) return false;
-  if (f.cap === 'vision' && !m.supports_images) return false;
-  if (f.cap === 'reasoning' && !m.supports_reasoning) return false;
+  // 能力筛选按**三值**处理：只有显式 false 才排除。上游精简目录会省略字段，
+  // 缺失=未知（AGENTS.md 四态纪律），把未知当否会把实际可用的模型藏掉且不报错。
+  if (f.cap === 'tool' && m.supports_tool_call === false) return false;
+  if (f.cap === 'vision' && m.supports_images === false) return false;
+  if (f.cap === 'reasoning' && m.supports_reasoning === false) return false;
   if (f.cap === 'default' && !m.is_default) return false;
   if (f.effort === 'off') {
     if (!m.can_disable_thinking) return false;
@@ -1064,7 +1066,10 @@ function mdRowHtml(m, pr) {
   const eff = (m.supported_efforts || []).slice();
   if (m.can_disable_thinking && eff.length && !eff.includes('off')) eff.push('off（可关）');
   const effs = eff.length ? eff.map(e => '<span class="tag warn">' + esc(e) + '</span>').join(' ')
-    : '<span style="color:var(--ink-3);font-size:12.5px">' + (m.supports_reasoning ? '固定档 · 默认 ' + esc(m.default_effort || '?') : '不支持思考') + '</span>';
+    // 三值：true=固定档｜false=不支持｜缺失=未知（不宣称"不支持"）
+    : '<span style="color:var(--ink-3);font-size:12.5px">' + (m.supports_reasoning
+      ? '固定档 · 默认 ' + esc(m.default_effort || '?')
+      : (m.supports_reasoning === false ? '不支持思考' : '档位未知')) + '</span>';
   // 能力徽标：默认模型 / 工具调用 / 视觉 / 纯推理（上游目录全字段透出，缺失不显示）
   const caps = [];
   if (m.is_default) caps.push('<span class="tag ok">默认</span>');

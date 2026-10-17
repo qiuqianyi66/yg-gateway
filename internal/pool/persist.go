@@ -115,8 +115,13 @@ func (p *Pool) startFlusher() {
 // 调用方必须已持有 p.mu 写锁。仅做内存卫生，不置 dirty（过期条目落盘本就
 // 被 stateOverviewLocked 过滤，删除不改变持久化内容）。
 func (p *Pool) pruneAllLocked(now time.Time) {
-	for _, e := range p.byUID {
-		e.pruneExpiredModelCosts(now)
+	for uid, e := range p.byUID {
+		// 观测过期 = 重新变未知：把已消解的条目重新打开，否则 unknowns_open 会与真实
+		// 未知脱钩（消解是单向闩锁，而成本观测带 modelCostTTL）。
+		// 锁序 p.mu(写) → registry.mu：registry 是零依赖 domain 包，不会回拿 p.mu。
+		for _, m := range e.pruneExpiredModelCosts(now) {
+			p.reopenCostUnknown(uid, m)
+		}
 		e.pruneExpiredModelCooldowns(now)
 	}
 }

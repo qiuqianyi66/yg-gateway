@@ -399,6 +399,59 @@ process.stdout.write(JSON.stringify({
 	}
 }
 
+// TestAppJSModelFilterUnknownCapability 能力字段**缺失**不得被当成"不支持"。
+//
+// 为什么：上游精简目录会省略 supports_images / supports_reasoning（未知），旧实现用
+// `!m.supports_images` 判否——把"未知"塌缩成"否"，用户按视觉筛选时实际支持图片的模型
+// 会消失，而且不报错（AGENTS.md 四态纪律：缺失 = 未知，不是"没有"）。
+//
+// 牙齿：把 mdMatch 里的 `=== false` 改回 `!m.xxx` → 本测试 FAIL（cn:unknown 被筛掉）。
+func TestAppJSModelFilterUnknownCapability(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node not installed; unknown-capability filter test skipped")
+	}
+	script := `const fs = require('fs');
+const vm = require('vm');
+const src = fs.readFileSync(process.argv[2], 'utf8');
+const start = src.indexOf('function mdRateValue');
+const end = src.indexOf('function mdRowHtml');
+if (start < 0 || end < 0) throw new Error('model filter helpers not found');
+const ctx = { Number, String, Array, Object, isFinite, parseFloat };
+vm.createContext(ctx);
+vm.runInContext(src.slice(start, end) + '\nthis.mdMatch=mdMatch;', ctx);
+// 三值覆盖：显式 true / 显式 false / 字段整体缺失（未知）
+const models = [
+  { id: 'cn:yes', supports_images: true, supports_reasoning: true, supports_tool_call: true },
+  { id: 'cn:no', supports_images: false, supports_reasoning: false, supports_tool_call: false },
+  { id: 'cn:unknown' },
+];
+const cap = c => models.filter(m => ctx.mdMatch(m, { cap: c })).map(m => m.id);
+process.stdout.write(JSON.stringify({
+  vision: cap('vision'),
+  reasoning: cap('reasoning'),
+  tool: cap('tool'),
+}));`
+	f, err := os.CreateTemp(t.TempDir(), "model-unknown-cap-*.cjs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString(script); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	out, err := exec.Command(node, f.Name(), "app.js").CombinedOutput()
+	if err != nil {
+		t.Fatalf("unknown-capability filter node test failed: %v\n%s", err, out)
+	}
+	const want = `{"vision":["cn:yes","cn:unknown"],` +
+		`"reasoning":["cn:yes","cn:unknown"],` +
+		`"tool":["cn:yes","cn:unknown"]}`
+	if strings.TrimSpace(string(out)) != want {
+		t.Fatalf("unknown capability filter=%s\nwant %s", out, want)
+	}
+}
+
 // 用量时序图的柱体类名不得叫 bar：账号池的积分条是 .bar{height:3px}，而 SVG2 里
 // height 是 rect 的 CSS 几何属性——同名类会把每根柱子压成 3px 高，图看起来"没数据"。
 // 这个坑只能在浏览器里看出来，所以在这里钉住类名。
