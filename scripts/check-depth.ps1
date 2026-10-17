@@ -202,24 +202,36 @@ $minCoverage = if ($coverages.Count -gt 0) {
 }
 
 # ---------------------------------------------------------------------------
-# 度量 5：前端产物体量（`internal/**/*.js`，即 go:embed 进二进制的那一层）
+# 度量 5：前端产物体量（`internal/**/*.{js,html,css}`，即 go:embed 进二进制的那一层）
 #
-# 为什么单列：`internal/panel/app.js` 是全仓最大的生产文件（约 4.6k 行），但它**不在**
-# 上面的度量 1/2 里——那两项只扫生产 `.go`。于是前端体量此前完全没被门禁看见：可以无上限
-# 增长而不触发任何棘轮（`docs/PLAN-open-items-2026-10-17.md` 的 O1）。
+# 为什么单列：`internal/panel/app.js`（4378 非空行）与 `internal/panel/index.html`（1755 行）
+# 是全仓最大的两个生产前端文件，但它们**不在**上面的度量 1/2 里——那两项只扫生产 `.go`。
+# 于是前端体量此前完全没被门禁看见：可以无上限增长而不触发任何棘轮
+# （`docs/PLAN-open-items-2026-10-17.md` 的 O1）。
 # 本轮只**纳入度量 + 冻结基线**（只许降不许涨），**不拆文件**：拆分属结构性改动，且没有
 # 浏览器级 E2E 兜底，风险大于收益（必要性分析见 `docs/PLAN-necessity-review-2026-10-17.md`）。
 # 口径：非空行（与度量 1/2 一致），排除 node_modules。
+#
+# 2026-10-17 独立复审 🟡-3 修正：初版只扫 `*.js`，于是 1755 行的 `index.html` **被漏掉**，
+# 而 summary 里自设的"任一前端文件超过 1000 行"重评条件在落地当天就已不成立。现在：
+#   - 扫描面扩到 js/html/css；
+#   - 除「最大值」外再加「超限文件数」（阈值 FRONTEND_LIMIT=1000），
+#     这样第二名变胖也会被看见（只盯最大值会遮住第二大的增长）。
 # ---------------------------------------------------------------------------
-$frontendFiles = @(Get-ChildItem internal -Recurse -Filter *.js -ErrorAction SilentlyContinue |
+$FRONTEND_LIMIT = 1000
+$frontendFiles = @(Get-ChildItem internal -Recurse -Include *.js, *.html, *.css -ErrorAction SilentlyContinue |
     Where-Object { $_.FullName -notmatch '[\\/]node_modules[\\/]' })
 $maxFrontendLines = 0
 $maxFrontendPath = ''
+$oversizeFrontend = @()
 foreach ($f in $frontendFiles) {
     $n = @(Get-Content $f.FullName | Where-Object { $_.Trim() -ne '' }).Count
     if ($n -gt $maxFrontendLines) {
         $maxFrontendLines = $n
         $maxFrontendPath = Get-RepoRelPath $f.FullName
+    }
+    if ($n -gt $FRONTEND_LIMIT) {
+        $oversizeFrontend += [pscustomobject]@{ Path = (Get-RepoRelPath $f.FullName); Lines = $n }
     }
 }
 
@@ -227,11 +239,12 @@ foreach ($f in $frontendFiles) {
 # 组装当前指标
 # ---------------------------------------------------------------------------
 $current = [ordered]@{
-    maxFileLines      = [int]$maxFileLines
-    oversizeFiles     = [int]$oversizeFiles.Count
-    oversizeFuncs     = [int]$oversizeFuncs
-    minCoverage       = [double]$minCoverage
-    maxFrontendLines  = [int]$maxFrontendLines
+    maxFileLines          = [int]$maxFileLines
+    oversizeFiles         = [int]$oversizeFiles.Count
+    oversizeFuncs         = [int]$oversizeFuncs
+    minCoverage           = [double]$minCoverage
+    maxFrontendLines      = [int]$maxFrontendLines
+    oversizeFrontendFiles = [int]$oversizeFrontend.Count
 }
 
 Write-Host "=== 工程深度度量 ===" -ForegroundColor Cyan
@@ -240,6 +253,7 @@ Write-Host ("  >{0} 行文件数     : {1}" -f $FILE_LIMIT, $current.oversizeFil
 Write-Host ("  >{0} 行函数数     : {1}" -f $FUNC_LIMIT, $current.oversizeFuncs)
 Write-Host ("  最低包覆盖率      : {0}%" -f $current.minCoverage)
 Write-Host ("  最大前端文件行数  : {0}  ({1})" -f $current.maxFrontendLines, $maxFrontendPath)
+Write-Host ("  >{0} 行前端文件数 : {1}" -f $FRONTEND_LIMIT, $current.oversizeFrontendFiles)
 Write-Host ("  覆盖率来源        : {0}" -f $coverageSource) -ForegroundColor DarkGray
 
 if ($Detail) {
@@ -269,12 +283,16 @@ if (-not (Test-Path $baselinePath)) {
     exit 0
 }
 
-$baseline = (Get-Content $baselinePath -Raw | ConvertFrom-Json).metrics
+# 同时取 _comment：-Update 必须**保留**既有说明文字，否则本轮写的口径注释会被静默抹掉
+# （独立复审 🟢）。注意 $baseline 只取 .metrics，不能从它上面读 _comment。
+$baselineDoc = (Get-Content $baselinePath -Raw | ConvertFrom-Json)
+$baselineComment = if ($baselineDoc._comment) { [string]$baselineDoc._comment } else { '' }
+$baseline = $baselineDoc.metrics
 
 $regressions = @()
 
 # 越大越差的三项
-foreach ($key in @('maxFileLines', 'oversizeFiles', 'oversizeFuncs', 'maxFrontendLines')) {
+foreach ($key in @('maxFileLines', 'oversizeFiles', 'oversizeFuncs', 'maxFrontendLines', 'oversizeFrontendFiles')) {
     $baseVal = [int]$baseline.$key
     $curVal  = [int]$current[$key]
     if ($curVal -gt $baseVal) {
@@ -301,7 +319,7 @@ if ($regressions.Count -gt 0) {
 
 # 变好 → 提示可抬棘轮（但不自动写，避免静默放水）
 $improved = @()
-foreach ($key in @('maxFileLines', 'oversizeFiles', 'oversizeFuncs', 'maxFrontendLines')) {
+foreach ($key in @('maxFileLines', 'oversizeFiles', 'oversizeFuncs', 'maxFrontendLines', 'oversizeFrontendFiles')) {
     if ([int]$current[$key] -lt [int]$baseline.$key) {
         $improved += "{0} {1} → {2}" -f $key, ([int]$baseline.$key), ([int]$current[$key])
     }
@@ -312,7 +330,7 @@ if ($curCov -gt ($baseCov + $COVERAGE_TOLERANCE)) {
 
 if ($Update) {
     $payload = [ordered]@{
-        _comment  = '工程深度基线（scripts/check-depth.ps1 维护）。指标只许变好；-Update 抬高棘轮。'
+        _comment  = if ($baselineComment -ne '') { $baselineComment } else { '工程深度基线（scripts/check-depth.ps1 维护）。指标只许变好；-Update 抬高棘轮。' }
         updatedAt = (Get-Date -Format 'yyyy-MM-dd')
         metrics   = $current
     }
