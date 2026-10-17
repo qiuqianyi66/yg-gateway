@@ -51,16 +51,8 @@ domain/contracts  ←  provider adapters  ←  application  ←  CLI/HTTP adapte
 机器校验：`powershell -File scripts/check-boundaries.ps1`（退出码非 0 即违规）。
 白名单是**实测生成**的，新增方向必须说明理由并更新脚本。
 
-当前实测方向（冻结基线）：
-```
-pool     → auth, logfmt
-upstream → auth, logfmt, session
-server   → alerting, auth, httpauth, livecfg, logfmt, metrics,
-           pool, prompt, reqlog, session, upstream, usage
-session  → redisstore
-panel    → auth, httpauth, livecfg, logfmt, pool, reqlog,
-           scheduler, session, upstream, usage
-```
+当前实测方向（冻结基线）：以 `scripts/check-boundaries.ps1` 的 `allow` 表为**唯一真相**
+（18 个源包条目，由 `-Fix` 实测生成）。本文件**不复制**该表——手抄副本必然会漂移。
 
 **禁止**：`pool → server`、`upstream → panel`、任何 internal 包反向依赖 `server`（`cmd` 除外）。
 
@@ -74,7 +66,7 @@ panel    → auth, httpauth, livecfg, logfmt, pool, reqlog,
 
 ---
 
-## 事实语义纪律（三态分离）— 本项目的核心纪律
+## 事实语义纪律（四态分离）— 本项目的核心纪律
 
 对外暴露的每个事实必须标注它是**观察**、**派生**、**推断**还是**未知**。
 rea 的原则，本项目采纳：
@@ -102,6 +94,11 @@ rea 的原则，本项目采纳：
 | `/v1/models` `supported_efforts` 为空 | **未知**（精简目录未返回），**不是**"不支持" | kind=unknown |
 | `/v1/models` `supports_images` 缺失 | **未知**，不是"不支持"也不是"支持" | kind=unknown |
 | 「该号不可用」 | **混合**（硬观察 / 推断判定） | 必须拆开 |
+
+**实现口径（别把"缺失"读成"否"）**：`/v1/models` 的未知以**字段省略**表达——不额外输出
+provenance 对象，避免改变 wire 形状。因此任何消费方（面板 / 客户端 / 统计）都必须按三值处理：
+`true` / `false` / **字段缺失 = 未知**。**禁止**用 `!field` 判否。面板已按此修正：模型筛选
+只排除显式 `false`，能力档位缺失显示「档位未知」而非「不支持」。
 
 ### 为什么这条是硬要求
 

@@ -328,7 +328,7 @@ type Config struct {
 		IdleWeightPerHour  float64 `json:"idle_weight_per_hour"` // 闲置补偿：每小时未用 +0.5 权重
 		IdleWeightMax      float64 `json:"idle_weight_max"`      // 闲置补偿封顶，默认 5.0
 		// PreferExpiring 快过期积分加权开关，默认 true。开启且 expiring_soon 窗口内
-		// 存在有效批次时，该账号选号权重 ×3（虚拟实例，见 pool 路由加权）；
+		// 存在有效批次时，该账号选号权重 ×2（虚拟实例 slots=2，见 pool 路由加权）；
 		// 不按到期时间排序、与批次金额无关（issue #101 对齐实现口径）。
 		// 关闭后完全不使用到期信息选号。
 		PreferExpiring bool `json:"prefer_expiring"`

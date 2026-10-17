@@ -420,7 +420,9 @@ func main() {
 		Handler:           h,
 		ReadHeaderTimeout: 30 * time.Second,
 		// ReadTimeout 覆盖整个请求读取（含 body 上传）：防慢速 body 拖死连接。
-		// 请求体已无网关侧上限（max_body_mb 移除）。缺省 300s（issue #100：旧固定
+		// 请求体上限见 server.max_body_bytes（默认 64MiB，显式 0 才关闭；见 :384 传入
+		// cfg.MaxBodyBytesEffective），超限在读阶段即被 MaxBytesReader 截断为 413。
+		// ReadTimeout 缺省 300s（issue #100：旧固定
 		// 60s 会掐掉大上下文/文件块经反代链的慢速上传，客户端收到
 		// 400 "read body: ... i/o timeout"）；server.read_timeout="0" 显式关闭。
 		// 改动需重启进程。
