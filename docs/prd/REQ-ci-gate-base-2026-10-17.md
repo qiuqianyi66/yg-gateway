@@ -51,7 +51,7 @@ R10（新增静默忽略必须论证）与「本次改动文件」（gofmt 目�
 | 事件 | 基准 | 说明 |
 |---|---|---|
 | `pull_request` | `origin/<inputs.base_ref>` | 不变（GitHub 保证 `base_ref` 存在） |
-| `push`（tag，`refs/tags/*`） | **上一个 tag**（`git describe --tags --abbrev=0 <tag>^`） | 新 tag 的 `before` 恒为 40 个 0，但基准**是可确定的**；这与 `release.yml` 的 publish job 算 compare 链接同口径。取不到（首个 tag）→ `HEAD~1` + 告警 |
+| `push`（tag，`refs/tags/*`） | **上一个发版 tag**（`git describe --tags --abbrev=0 --match 'v[0-9]*' --exclude '*-ci' <tag>^`） | 新 tag 的 `before` 恒为 40 个 0，但基准**是可确定的**。**必须排除 `-ci` 演练 tag**（`release.yml` 支持「先演练再发版」，演练 tag 就贴在 `HEAD~1`，取到它会让窗口退化成 1 个提交）。取不到（首个 tag）→ `HEAD~1` + 告警 |
 | `push`（branch） | `github.event.before` | **本次推送之前**的 HEAD → 覆盖推送里全部提交 |
 | `push` 且 `before` 全是 0（新分支首推）或不在历史里（强推） | `HEAD~1` + **`::warning::`** | 无法确定基准时保留旧行为，但**必须留下告警**，不许静默 |
 | `workflow_dispatch`（无 `before`） | `HEAD~1` + **`::warning::`** | 同上 |
@@ -96,11 +96,16 @@ R10（新增静默忽略必须论证）与「本次改动文件」（gofmt 目�
 - Given `pull_request` 事件且 `base_ref` 非空
 - Then `ref=origin/<base_ref>`
 
-**F-1-e tag push 用上一个 tag 作基准**
-- Given `push` 事件且 `github.ref` 以 `refs/tags/` 开头，且存在更早的 tag
-- Then `ref` = 上一个 tag（**不告警**）
-- Given 找不到更早的 tag（首个 tag）
+**F-1-e tag push 用上一个发版 tag 作基准**
+- Given `push` 事件且 `github.ref` 以 `refs/tags/` 开头，且存在更早的**发版** tag
+- Then `ref` = 上一个发版 tag（**不告警**）；`-ci` 演练 tag 即使更近也不得被选中
+- Given 找不到更早的发版 tag（首个 tag）
 - Then `ref=HEAD~1` **且** `::warning::`
+
+**F-1-f 基准解析结果不得为空**
+- Given 任何事件形态
+- Then `steps.base.outputs.ref` 非空；若为空则脚本 `::error::` + 退出码 1
+  （因为 `-Base ""` 会让下游变成「检查 0 个文件」的假绿）
 
 ## 五、影响分析
 
@@ -114,4 +119,5 @@ R10（新增静默忽略必须论证）与「本次改动文件」（gofmt 目�
 
 ## 六、实测证据
 
-见 `.harness/changes/2026-10-17-ci-gate-base/summary.md` §三（含负向探针与 bash 四分支验证）。
+见 `.harness/changes/2026-10-17-ci-gate-base/summary.md` §二（8 个分支的 bash 实跑、
+空 ref 护栏的变异验证、负向探针）与 `review.md`（六维自评 + 独立复审二轮）。

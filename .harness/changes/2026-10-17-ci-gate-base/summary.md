@@ -26,9 +26,9 @@
 
 ## 二、怎么验证的
 
-### 2.1 base 解析：把 `run:` 块**原样抽出**用本机 bash 跑五分支
+### 2.1 base 解析：把 `run:` 块**原样抽出**用本机 bash 跑八个分支
 
-不手抄逻辑：从 `gate.yml` 按缩进抽出 24 行脚本（含空行）写到探针克隆里执行。
+不手抄逻辑：从 `gate.yml` 按缩进抽出 48 行脚本（含空行）写到探针克隆里执行。
 > 抽取本身踩了个小坑：字面量块里的**空行**不含 10 个空格，第一版循环在空行处提前结束、只抽到 7 行。
 > 修法是把空行也计入、只在「非空且缩进不足」时停。
 
@@ -39,16 +39,28 @@
 | 3 | `BEFORE_SHA=40 个 0`（新分支首推） | `HEAD~1` + 告警 | ✅ `ref=HEAD~1` + `::warning::` |
 | 4 | 无 `BEFORE_SHA`（dispatch） | `HEAD~1` + 告警 | ✅ `ref=HEAD~1` + `::warning::` |
 | 5 | `BEFORE_SHA=deadbeef×5`（强推，不在历史） | `HEAD~1` + 告警（点名该 sha） | ✅ `ref=HEAD~1` + `::warning::` |
-| 6 | `GIT_REF=refs/tags/v9.9.9`（tag，仓库无更早可达 tag） | `HEAD~1` + 告警 | ✅ `ref=HEAD~1` + `::warning::tag push 且找不到上一个 tag` |
-| 7 | `GIT_REF=refs/tags/v0.0.9`（tag，存在更早 tag） | 上一个 tag，**不告警** | ✅ `ref=v2.0.0`（它取到的是仓库真实存在的更早 tag） |
+| 6 | `GIT_REF=refs/tags/v9.9.9`（tag，无更早发版 tag） | `HEAD~1` + 告警 | ✅ `ref=HEAD~1` + `::warning::tag push 且找不到上一个发版 tag` |
+| 7 | `GIT_REF=refs/tags/v2.1.0`（tag，存在更早发版 tag `v2.0.0`） | `v2.0.0`，**不告警** | ✅ `ref=v2.0.0` |
+| 8 | 同上，但更近的位置贴着 `v2.1.0-ci` **演练 tag** | 跳过演练 tag，仍取 `v2.0.0` | ✅ `ref=v2.0.0`（见 §2.4 🟡 修正） |
 
 ### 2.1.1 为什么给 tag 单独一支（而不是一律告警）
 
 GitHub 对**新建 ref**（含新 tag）给的 `before` 恒为 40 个 0。若把 tag 也归进「before 不可用 → 告警」，
 **每次发版都会刷一条 warning**——warning 刷多了就没人看，等于把「不许静默降级」变成「习惯性忽略」。
-而 tag 的基准**是可确定的**：上一个 tag（`git describe --tags --abbrev=0 <tag>^`），
-这与 `release.yml` 的 publish job 算 compare 链接同口径。所以：能算的就算（不告警），
-真算不出（首个 tag）才告警。
+而 tag 的基准**是可确定的**：上一个**发版** tag。能算的就算（不告警），真算不出（首个 tag）才告警。
+
+### 2.1.2 空 ref 护栏：用变异证明它真的有牙齿
+
+「REF 为空 → 下游 `-Base ""` → 检查 0 个文件 + exit 0」（假绿，L-6 同族）在当前实现里**不可达**
+（所有分支都赋值 REF），所以不能用正常输入测。用变异法：把脚本里 **7 处** `REF="…"` 赋值全部抹成 `:`，
+再喂 `BEFORE_SHA=40 个 0`：
+
+```
+变异版： exit=1  ::warning::…  ::error::base 解析为空（ref 未赋值）——下游 -Base 空串会把门禁变成「检查 0 个文件」的假绿
+         写出的 ref: []
+原版：   exit=0  ref=[ref=HEAD~1]
+```
+
 
 ### 2.2 牙齿：旧口径会让真实违规**整轮绿**
 
@@ -73,8 +85,28 @@ GitHub 对**新建 ref**（含新 tag）给的 `before` 恒为 40 个 0。若把
 
 ### 2.3 本地门禁
 
-`powershell -NoProfile -File scripts/pre-commit.ps1`（全量）→ 见 §四 提交前实测。
-本变更无 `.go` 改动，gofmt/R10 的「改动文件」为空属预期（不是假绿：这两项的输入本来就是 0 个文件）。
+`powershell -NoProfile -File scripts/pre-commit.ps1`（全量，7 项）在提交前跑过两次，均全绿；
+CI 侧另有 `test` / `race` / `gate` 三条独立复核（见 §六）。本变更无 `.go` 改动，
+gofmt/R10 的「改动文件」为空属预期（不是假绿：这两项的输入本来就是 0 个文件）。
+
+### 2.4 独立复审（第二轮）驱动的一处 🟡 + 四处 🟢 修正
+
+复审给出一项 🟡（阻断）与四项 🟢，全部成立，已修：
+
+| 级别 | 问题 | 修法 |
+|---|---|---|
+| **🟡** | `git describe --tags --abbrev=0` 未排除 `-ci` **演练 tag**（`release.yml` 明确支持「先打 `-ci` 演练再发版」）。演练 tag 通常贴在 `HEAD~1` → 基准取到它 → **差分窗口退化成 1 个提交 = 悄悄回到旧的 `HEAD~1` 行为**，而日志仍打印「全部提交都进入差分」——正是本变更要消灭的形态 | 加 `--match 'v[0-9]*' --exclude '*-ci'`；文案改成「自该 tag 起的提交都进入差分（-ci 演练 tag 不计）」。实测（探针里造 `v2.0.0`@HEAD~3 + `v2.1.0-ci`@HEAD~1 + `v2.1.0`@HEAD）：**旧命令取 `v2.1.0-ci`、窗口 1 个提交；新命令取 `v2.0.0`、窗口 3 个提交** |
+| 🟢 | 空 `ref` 的降级是假绿（`-Base ""` → 「0 个改动文件」+ exit 0），当前无可达路径但有形态无护栏 | 重构成**单一写点**（各分支只给 `REF` 赋值）+ 统一的非空断言 `::error::` + `exit 1`；用变异法验证（§2.1.2） |
+| 🟢 | `-Base "${{ steps.base.outputs.ref }}"` 把表达式直拼进 `run:`（GitHub 要求走 `env:`）；本变更把可达取值扩大到 tag 名，而 git 允许 ref 含 `$ ( ) ;`，bash 双引号内 `$()` 会执行 | 改为 `env: BASE_REF_RESOLVED: …` + `run: … -Base "$BASE_REF_RESOLVED"`（注意是 bash 语法而不是 `$env:`） |
+| 🟢 | 口径漂移：`.harness/rules/工程结构.md:45` 仍写「CI（go-binaries / docker-ghcr）」、`docs/adr/ADR-008:88` 仍写「push 用 `HEAD~1`」 | 前者改成「gate.yml + release.yml」；ADR 属历史决策记录，**追加**一段 2026-10-17 更新说明而不是改写原文 |
+| 🟢 | 本文件与 PRD 的证据口径不实/悬空（「五分支」实为 8 行、「24 行」实为 48 行、引用不存在的「§四 提交前实测」、PRD 引「§三 四分支」） | 逐处改正（本节即改后版本；PRD §六 引用已改为「§二 / 8 个分支」） |
+
+复审同时独立复核并确认无问题的项（摘）：YAML 可解析、`set -euo pipefail` × `!` × `pipefail`
+无意外退出（实跑 750 次，非零退出 0 次）、七分支独立复现、**tag 名歧义不成立**
+（同名 branch+tag 时 `rev-parse` 取 tag）、`actions/checkout@v4` 源码确认 `fetch-depth: 0`
+会取全部 tag、牙齿探针独立复现、`release.yml` 只有 push/pr/`workflow_dispatch` 三种触发（无
+`merge_group` / `pull_request_target` 掉错分支的风险）。
+
 
 ## 三、影响分析（含**预期的**风险）
 
