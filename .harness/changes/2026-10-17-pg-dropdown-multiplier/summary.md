@@ -62,5 +62,10 @@
 
 - 验证：定向测试 PASS；`go test ./... -count=1` 全绿（23 包）；`go vet` 0；`gofmt -l` 无输出；
   `check-boundaries.ps1` / `check-depth.ps1` 通过（app.js 4378 行基线未动）。
-- 换版：`deploy-prod.ps1 -Build -AllowDirty -Feature pg-dropdown-multiplier`（同款脏树约束）。
+- 换版（2026-10-17 19:20）：`deploy-prod.ps1 -Build -Feature pg-dropdown-multiplier`，
+  本次**脏文件=0**（并行会话已提交），exe 可追溯 HEAD=72345ef，sha256=FDF92DE1027C2782；
+  备份 `D:\yg-gateway\yg-gateway.exe.pre-pg-dropdown-multiplier-20261017-192048.bak`；
+  健康 4/4、冒烟三条全过。线上实测（Python 干净 UTF-8）：`cn:hy4-preview → "Hy4 preview ×0.29"`、
+  `cn:space-bunny → "Space-Bunny ×0.08"`；无倍率模型保持裸名（`cn:auto → "Auto"`、
+  `cn:hy4-preview-f → "Hy4 preview"`，= 倍率未知，不加后缀不编造）。
 - 回滚：`git revert <本提交>`。回滚后 `/v1/models` name 恢复裸名。
