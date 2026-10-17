@@ -195,3 +195,46 @@ Get-ChildItem internal -Recurse -Filter *.js | ForEach-Object { (Get-Content $_.
 | 文档债 4 条 | ✅ 已就地更正：`dynamicModelsCache` 已不存在、`-count=3` 污染不复现、7864 实例没在跑、Go 包数 23（20 有测试 + 3 无） |
 
 
+
+---
+
+## 10. 当前状态盘点（2026-10-17 晚，实测复核后）
+
+> 本表**取代**上面 §1/§9.2 的"未完成"标记：那两张表是 10-17 白天的判断，今天收口了 8 项。
+> 每条都带**卡点**——`无` 表示随时可开工，`你` 表示等你一句话。
+
+### 10.1 已收口（别再立项）
+
+| 项 | 落点 |
+|---|---|
+| A1 gate 的 push 差分基准 | `878ed9a` + 复审修正 `094768d`（tag 路径排除 `-ci`、空 ref 护栏） |
+| A2 全量测试跑两遍（本地） | `d09dd9f`（A/B −66.4s）；CI 侧重复保留 = 决策 D-2 |
+| A3 面板 unknown（JS 层） | `d09dd9f`：`unkBadge`/`unkNoteText` + `TestAppJSUnknownBadgeAndNote`（3/3 反向变异红）。**有值态观感仍归 B1** |
+| A5 沙箱副本人工同步 | `5717e20`：`TestSandboxFilesInSync`（抽公共包仍被设计拒绝） |
+| A8 session 覆盖率口径 | `d09dd9f`：425/430 与 405/410 均 98.8%，「约 89%」不复现 |
+| A9 401 / stream 吞错 | **判定不做**：`cmd/login` 已带状态码 + 有测试约束；`anthropic.go` 的 note 已修（见 `PLAN-necessity-review`） |
+| O1 前端体量无门禁 | `5717e20` + `3286f07`：`maxFrontendLines 4378` + `oversizeFrontendFiles 2`（含 `index.html` 1755） |
+| B6「check-depth 不报明细」 | 实测不成立（`-Detail` 早就在打）→ L-15 |
+| B7 ERROR-HANDLING「留待定夺」4 行 | `a514e40` 已回填 |
+| 阶段 0 必要性分析 | `5717e20` 入规范 + 检查 8/8；裁定见 `PLAN-necessity-review-2026-10-17.md` |
+
+### 10.2 仍未做（按"现在能不能动"排）
+
+| # | 项 | 工作量 | 卡点 |
+|---|---|---|---|
+| **B2a** | **N6 转述失真仍是活文档**：`docs/superpowers/plans/HANDOFF-2026-10-16-ci-closed.md` 与 `HANDOFF-2026-10-16-depth-next.md` 仍写着「4 条高价值建议一条都没实现」，而那 4 条**全仓 grep 0 命中**（不是 wiki 的内容） | 30min（L0） | **无** |
+| **B4c** | `AGENTS.md` §部署纪律仍写手工步骤（"构建+复制+启动同一条命令"），**没指向** `scripts/deploy-prod.ps1` 与它的退出码表 | 10min（L0） | **无** |
+| **B1** | `cache_miss_unknown` 从未在产线出现过（A3 只验空态）→ 用沙箱 + 假上游造一条 unknown，验「有值态」的面板观感 | 半天 | **无** |
+| **B4b** | 启动失败时 launcher 可能残留 `cmd.exe`（无害但累积）；需写清「命令行含目标 exe 且父进程已死」的清理判据 | 2h | **无** |
+| **B5** | `build-image` 在 PR 上也跑 QEMU 双架构（墙钟瓶颈 ~2-3min/PR） | 1h | **无** |
+| **B3** | `auth`/`session`/`scheduler`/`cmd/server` 四包从未做过独立变异核验 | 1 天（分批） | **无** |
+| **B2 实质** | wiki 真实的 3 条高价值建议（剪枝前回填派生值 / 持久化版本闸门 / 跨文件写前意图），②③ 需先立 ADR | 数小时~1天（L2） | 需立项 |
+| **B4a** | 夜猫子末次 4s 等待（`blackcat.go` 循环末次也 `sleepNightChat()`），改了每次任务省 4s | 1h | **你**（行为变更，PRD 一句话） |
+| **A7 / D3** | 「达标未领」两条路径语义相反 | 2h | **你**（D3 语义） |
+| **D2** | 401 是否走上游错误档 | 3h | **你** |
+| **D1** | upstream 收窄为 interface | — | **你**（建议明确记「不做」） |
+| **D4/D5** | 备份清理 / 7864 实例 | — | **你**（我按必要性分析建议都不做，理由见 `PLAN-necessity-review` §D4/D5） |
+| **A4** | 20 条 `supports_images` 全量实测 | 半天 | **你**（我建议不做全量，转 unknown + 按需） |
+| **A6** | 变异核验穷尽度 | — | 等条件（改到哪条分支补哪条） |
+| **O2/O3/O4/O6/O7** | 超长文件拆分 / 覆盖率抖动 / flake 观察 / 3 个 cmd 包无测试 | — | 不做（棘轮已冻结；见必要性分析） |
+| **生产换版** | 生产二进制落后源码（纯重构，行为等价） | 20s | 等条件（下一个行为变更批次一起上） |
