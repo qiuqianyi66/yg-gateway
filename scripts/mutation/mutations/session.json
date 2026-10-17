@@ -34,4 +34,12 @@
     "old": "\t\tcfg.TTL = 30 * time.Minute",
     "new": "\t\tcfg.TTL = 3 * time.Minute"
   }
+  ,
+  {
+    "id": "B3b",
+    "file": "internal/session/session.go",
+    "desc": "去掉「空闲号优先」双段策略（pool2 := idle → uids；_ = idle 防未使用）",
+    "old": "\tpool2 := idle\n\tif len(pool2) == 0 {",
+    "new": "\tpool2 := uids\n\t_ = idle\n\tif len(pool2) == 0 {"
+  }
 ]
