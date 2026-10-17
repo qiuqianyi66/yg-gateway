@@ -1,0 +1,2 @@
+[{ "id":"H3", "file":"internal/auth/auth.go", "desc":"SaveAtomic 吞掉 rename 错误（凭证落盘失败静默当成功，R10）",
+   "old":"return os.Rename(tmp, a.FilePath)", "new":"_ = os.Rename(tmp, a.FilePath)\n\treturn nil" }]

@@ -1,0 +1,37 @@
+[
+  {
+    "id": "S1",
+    "file": "internal/session/ids.go",
+    "desc": "TurnKeyView 认错角色（user → assistant）→ 聚合键基于错误的轮次",
+    "old": "\t\tif msg.Role != \"user\" {\n\t\t\tcontinue\n\t\t}",
+    "new": "\t\tif msg.Role != \"assistant\" {\n\t\t\tcontinue\n\t\t}"
+  },
+  {
+    "id": "S2",
+    "file": "internal/session/ids.go",
+    "desc": "TurnKeyView 的键丢掉消息位置索引 → 不同轮次可能撞键",
+    "old": "\t\treturn fmt.Sprintf(\"u%d:%s\", i, sig)",
+    "new": "\t\treturn fmt.Sprintf(\"u:%s\", sig)"
+  },
+  {
+    "id": "S3",
+    "file": "internal/session/ids.go",
+    "desc": "空签名时继续往前找（注释明确禁止：键会随 step 漂移）",
+    "old": "\t\tsig := contentSignature(msg.Content)\n\t\tif sig == \"\" {",
+    "new": "\t\tsig := contentSignature(msg.Content)\n\t\tif sig == \"\" && false {"
+  },
+  {
+    "id": "S4",
+    "file": "internal/session/requestview.go",
+    "desc": "Stream() 对缺失字段判成 true（非流式请求被当流式处理）",
+    "old": "\traw := v.Raw(\"stream\")\n\treturn len(raw) > 0 && string(raw) == \"true\"",
+    "new": "\traw := v.Raw(\"stream\")\n\treturn len(raw) >= 0 && string(raw) != \"false\""
+  },
+  {
+    "id": "S5",
+    "file": "internal/session/session.go",
+    "desc": "默认 TTL 30m 縮到 3m（会话粘性大面积失效）",
+    "old": "\t\tcfg.TTL = 30 * time.Minute",
+    "new": "\t\tcfg.TTL = 3 * time.Minute"
+  }
+]

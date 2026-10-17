@@ -1,0 +1,30 @@
+[
+  {
+    "id": "C1",
+    "file": "internal/scheduler/scheduler.go",
+    "desc": "nextFire 边界 !After → Before（恰好整点时立刻又排一次 → 可能忙循环）",
+    "old": "\t\tif !t.After(now) {\n\t\t\tt = t.Add(24 * time.Hour)\n\t\t}",
+    "new": "\t\tif t.Before(now) {\n\t\t\tt = t.Add(24 * time.Hour)\n\t\t}"
+  },
+  {
+    "id": "C2",
+    "file": "internal/scheduler/scheduler.go",
+    "desc": "nextFire 取最晚而非最早的时点（调度整体推迟）",
+    "old": "\t\tif earliest.IsZero() || t.Before(earliest) {\n\t\t\tearliest = t\n\t\t}",
+    "new": "\t\tif earliest.IsZero() || t.After(earliest) {\n\t\t\tearliest = t\n\t\t}"
+  },
+  {
+    "id": "C3",
+    "file": "internal/scheduler/scheduler.go",
+    "desc": "nextFire 对已过去的时点不加一天（返回过去时刻 → 立刻触发）",
+    "old": "\t\tif !t.After(now) {\n\t\t\tt = t.Add(24 * time.Hour)\n\t\t}",
+    "new": "\t\tif !t.After(now) {\n\t\t\tt = t\n\t\t}"
+  },
+  {
+    "id": "C4",
+    "file": "internal/scheduler/scheduler.go",
+    "desc": "includeDisabledInTasks 恒为 true（保号任务覆盖了禁用账号）",
+    "old": "\treturn s.cfg.IncludeDisabledInTasks",
+    "new": "\treturn true"
+  }
+]
