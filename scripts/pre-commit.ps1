@@ -107,7 +107,12 @@ if ($Base) {
 }
 
 if ($LASTEXITCODE -ne 0 -and $changed.Count -eq 0) {
-    Write-Host '错误：无法枚举改动文件（不在 git 仓库内？）' -ForegroundColor Red
+    # 这条消息曾经只写「不在 git 仓库内？」——但 `-Base` 指向一个**没有共同祖先**的分支
+    # （已被 rebase 掉 / 无关分支）时也会走到这里，那个提示会把排查引偏（第 4 轮复审 🔵-1）。
+    Write-Host '错误：无法枚举改动文件' -ForegroundColor Red
+    Write-Host ("      -Base = '" + $Base + "'") -ForegroundColor Gray
+    Write-Host '      可能原因：①不在 git 仓库内；②-Base 指向的分支与当前分支**没有共同祖先**（已被 rebase 掉 / 无关分支）→ git diff 会报 "no merge base"。' -ForegroundColor Gray
+    Write-Host '      自查：git diff --name-only "<base>...HEAD" 会失败时，先 git merge-base "<base>" HEAD 确认。' -ForegroundColor Gray
     exit 2
 }
 

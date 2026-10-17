@@ -55,14 +55,24 @@ function Invoke-Git {
         $errLines = @()
         if (Test-Path -LiteralPath $errFile) { $errLines = @(Get-Content -LiteralPath $errFile -Encoding UTF8) }
     } finally {
+        # 清理放在 finally 里，但**仍在 Continue 语义下**：否则 Remove-Item 一旦抛错
+        # （文件被占用等）会变成未捕获的终止性错误 → 脚本 exit 1，又被 pre-commit 读成「缺段」
+        # （2026-10-17 第 4 轮复审 🔵-2）。先删再还原 EAP。
+        if (Test-Path -LiteralPath $errFile) { Remove-Item -LiteralPath $errFile -Force -ErrorAction SilentlyContinue } # 忽略：临时文件删不掉不影响结论，且下面有唯一权威判据
         $ErrorActionPreference = $prevEap
-        if (Test-Path -LiteralPath $errFile) { Remove-Item -LiteralPath $errFile -Force }
     }
     if ($code -ne 0) {
         Write-Host ("错误：git {0} 失败（exit={1}）：{2}" -f $What, $code, ($GitArgs -join ' ')) -ForegroundColor Red
-        # 去掉 PowerShell 包装错误记录时的框线（`git.exe :` / `At <file>:<line>` / `+ <cmd>`），
-        # 只留 git 自己的 stderr（如 `fatal: …: no merge base`），否则诊断里一半是引擎噪音。
-        $errLines | Where-Object { $_ -ne '' -and $_ -notmatch '^\s*(At .*char:|[+>]\s|git(\.exe)?\s*:)' } |
+        # stderr 的两种形态都要处理（2026-10-17 第 4 轮复审 🟡）：
+        #   PS 7：`2>` 落的是**原始** stderr（`fatal: …`）；
+        #   PS 5.1：`2>` 落的是**格式化错误记录**（UTF-16），首行是 `git.exe : fatal: …`。
+        # 早先的写法直接**丢掉**含 `git.exe :` 的行 —— 在 5.1 上等于把唯一有信息量的那行扔了
+        # （诊断全空，而 commit message 还写着"会打印 fatal"）。正确做法是**剥前缀、不丢行**。
+        $errLines |
+            ForEach-Object {
+                if ($_ -match '^\s*git(?:\.exe)?\s*:\s*(.*)$') { $Matches[1].Trim() } else { $_.Trim() }
+            } |
+            Where-Object { $_ -ne '' -and $_ -notmatch '^(At .*char:|\+ )' } |
             Select-Object -First 10 |
             ForEach-Object { Write-Host ("    " + $_) -ForegroundColor DarkGray }
         Write-Host '  → 这是**脚本自身失败**，不是"没有新增文件"（别把它读成缺必要性段）' -ForegroundColor Gray
