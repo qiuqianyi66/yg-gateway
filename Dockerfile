@@ -1,16 +1,25 @@
 # syntax=docker/dockerfile:1
 # 基础镜像必须 ≥ go.mod 要求的 1.27.2：低版本带 9 个 stdlib CVE（HTTP/2 + TLS），
 # 且 GOTOOLCHAIN=local 时 go mod download 直接报错拒绝继续（见 go.mod 的 go 指令）。
-FROM golang:1.27-alpine AS build
+# 构建阶段跑在**构建机架构**上（$BUILDPLATFORM），再用 GOOS/GOARCH 交叉编译到目标架构。
+# 为什么（2026-10-17，REQ-image-buildplatform / PLAN B5）：原来是 `FROM golang:1.27-alpine`，
+# 构建 linux/arm64 时把 `go mod download` 与**整段 go build 都放进 QEMU 模拟**执行——实测
+# build-image 239s，是 test/gate/race（100–107s）的 2.4 倍，且它单独构成 PR 反馈的关键路径。
+# CGO_ENABLED=0 使交叉编译成立（本地实测两架构合计 34.6s；ELF e_machine 分别 0x3E / 0xB7）。
+# 注意：这里**不**砍掉 arm64 验证——不能用「PR 只造 amd64」省时间（那会把 arm64 的构建问题
+# 推到 merge 之后才暴露），只是去掉了模拟编译的开销。
+FROM --platform=$BUILDPLATFORM golang:1.27-alpine AS build
+ARG TARGETOS
+ARG TARGETARCH
 WORKDIR /src
 COPY go.mod ./
 RUN go mod download
 COPY . .
 # 一次编译全部二进制（工具进镜像，容器内可直接跑脚本）。全部 -trimpath -s -w。
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/yg-gateway ./cmd/server \
- && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/signin_bin ./cmd/signin \
- && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/login ./cmd/login \
- && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/credit ./cmd/credit
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags="-s -w" -o /out/yg-gateway ./cmd/server \
+ && CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags="-s -w" -o /out/signin_bin ./cmd/signin \
+ && CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags="-s -w" -o /out/login ./cmd/login \
+ && CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags="-s -w" -o /out/credit ./cmd/credit
 
 FROM alpine:3.20
 # python3：login.sh 的 JSON 解析 / 签到 / 落盘；bash：shell 脚本体。
