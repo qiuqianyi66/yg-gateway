@@ -227,7 +227,7 @@ Get-ChildItem internal -Recurse -Filter *.js | ForEach-Object { (Get-Content $_.
 | **B1b** | **A3 的剩余部分：造一条 unknown 验「有值态」的面板观感**（B1 已被拆成两半：归档链路 ✅ 见 §9.2 的 B1a；这里只剩面板观感） | 半天 | **无** |
 | **B4b** | 启动失败时 launcher 可能残留 `cmd.exe`（无害但累积）；需写清「命令行含目标 exe 且父进程已死」的清理判据 | 2h | **无** |
 | ~~**B5**~~ ✅ | **`build-image` 的墙钟瓶颈已消**：根因不是双架构，而是构建阶段没走 `BUILDPLATFORM`（arm64 整段 Go 编译在 QEMU 下模拟）。改成构建机架构交叉编译后，**实测 239s → 108s → 96s（−60%）**，两架构验证强度不变 | `bf5a4aa`；CI run `39014207601`；PRD `REQ-image-buildplatform-2026-10-17` | 已完成 | L2 |
-| ~~**B3**~~ ✅ | **四包补了独立变异核验**：`auth` 6/6、`session` 5/5、`scheduler` 4/4、`cmd/server` 5/5 **共 20 个语义变异全部咬住，0 存活 / 0 无效变异**；副本内做（L-2 硬规则）、基线先绿、每轮还原、收尾 status 干净。**边界**：抽样非穷尽、挑点有选择偏差，A6 仍开着 | `.harness/changes/2026-10-17-mutation-auth-session-scheduler-cmdserver/` | 已完成 | L1 |
+| ~~**B3**~~ ✅ | **四包补了独立变异核验**：22 个语义变异全部咬住（auth 6 / session 5 / scheduler 4 / cmd/server 7，0 存活 0 无效变异）；驱动脚本与清单已入库 `scripts/mutation/`。**但复审自选的 3 个更难变异 3/3 存活**：B3-a 已修（`SaveAtomic` rename 失败，新增常驻测试）· **B3-b 仍开**（session 闲置号优先无测试）· **B3-c 仍开**（多 Key 带空格同值绕过检测，且 `Load()` 的双重 normalize 会掩盖） | `.harness/changes/2026-10-17-mutation-auth-session-scheduler-cmdserver/` | 主体完成，B3-b/c 待补 | L1 |
 | **B2 实质** | wiki 真实的 3 条高价值建议（剪枝前回填派生值 / 持久化版本闸门 / 跨文件写前意图），②③ 需先立 ADR | 数小时~1天（L2） | 需立项 |
 | **B4a** | 夜猫子末次 4s 等待（`blackcat.go` 循环末次也 `sleepNightChat()`），改了每次任务省 4s | 1h | **你**（行为变更，PRD 一句话） |
 | **A7 / D3** | 「达标未领」两条路径语义相反 | 2h | **你**（D3 语义） |

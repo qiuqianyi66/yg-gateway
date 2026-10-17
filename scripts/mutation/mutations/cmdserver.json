@@ -1,0 +1,51 @@
+[
+  {
+    "id": "D1",
+    "file": "cmd/server/config.go",
+    "desc": "入站 body 上限的 64MB 安全默认改成 0（DoS 防护静默关闭）",
+    "old": "c.MaxBodyBytesEffective = 64 << 20",
+    "new": "c.MaxBodyBytesEffective = 0"
+  },
+  {
+    "id": "D2a",
+    "file": "cmd/server/config.go",
+    "desc": "Default() 里 read_timeout 300s → 0s（内置默认值层）",
+    "old": "\tc.Server.ReadTimeout = \"300s\"\n\tc.Panel.PackageDetailLimit = 5",
+    "new": "\tc.Server.ReadTimeout = \"0s\"\n\tc.Panel.PackageDetailLimit = 5"
+  },
+  {
+    "id": "D2b",
+    "file": "cmd/server/config.go",
+    "desc": "normalize() 里 read_timeout 缺省回落 300s → 0s（配置缺省层）",
+    "old": "\tif c.Server.ReadTimeout == \"\" {\n\t\tc.Server.ReadTimeout = \"300s\"",
+    "new": "\tif c.Server.ReadTimeout == \"\" {\n\t\tc.Server.ReadTimeout = \"0s\""
+  },
+  {
+    "id": "D3",
+    "file": "cmd/server/config.go",
+    "desc": "去掉「多 Key 与顶层 api_key 同值」的拦截（约束可被另一把 Key 绕过）",
+    "old": "\t\tif c.APIKey != \"\" && key == c.APIKey {",
+    "new": "\t\tif false && key == c.APIKey {"
+  },
+  {
+    "id": "D4a",
+    "file": "cmd/server/config.go",
+    "desc": "Default() 里归档保留 7 → 70 天（内置默认值层）",
+    "old": "\tc.Logging.RequestRetentionDays = 7\n\tc.Logging.RequestArchiveMaxMB = 100",
+    "new": "\tc.Logging.RequestRetentionDays = 70\n\tc.Logging.RequestArchiveMaxMB = 100"
+  },
+  {
+    "id": "D4b",
+    "file": "cmd/server/config.go",
+    "desc": "normalize() 里归档保留缺省回落 7 → 70 天（配置缺省层）",
+    "old": "\tif c.Logging.RequestRetentionDays <= 0 {\n\t\tc.Logging.RequestRetentionDays = 7",
+    "new": "\tif c.Logging.RequestRetentionDays <= 0 {\n\t\tc.Logging.RequestRetentionDays = 70"
+  },
+  {
+    "id": "D5",
+    "file": "cmd/server/config.go",
+    "desc": "去掉保留 id 拦截（单 Key 合成身份可被冒用 → 归因错乱）",
+    "old": "\t\tif id == httpauth.SingleKeyID {",
+    "new": "\t\tif false && id == httpauth.SingleKeyID {"
+  }
+]
