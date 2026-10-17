@@ -34,17 +34,42 @@ $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path -Parent $PSScriptRoot
 Set-Location $repoRoot
 
-# 统一入口：所有 git 调用都过这里（带 quotePath 关闭 + 退出码判据）
+# 统一入口：所有 git 调用都过这里（quotePath 关闭 + 退出码判据 + stdout/stderr 分离）
+#
+# ⚠ PowerShell 5.1 的两个坑（2026-10-17 第 3 轮独立复审实测，必须一起处理）：
+#   1) 脚本级 `$ErrorActionPreference = 'Stop'` 时，**原生程序往 stderr 写一行**就会被包装成
+#      **终止性** NativeCommandError → 配合 `2>&1` 会在判 `$LASTEXITCODE` 之前把脚本打死，
+#      退出码变成 1、头注释承诺的提示一个字都不打。触发面真实：`no merge base`
+#      （-Base 指向已被 rebase 掉/无关分支）、`detected dubious ownership`、`bad object`。
+#      修法：**函数内把 EAP 降为 Continue**，并在 finally 里还原。
+#   2) `2>&1` 会让**成功**时的 stderr（如 `warning: LF will be replaced by CRLF`）混进
+#      "文件列表"。修法：stdout 与 stderr **分开取**（stderr 落临时文件，只在失败时打印）。
 function Invoke-Git {
     param([string[]]$GitArgs, [string]$What)
-    $out = @(& git -c core.quotePath=false @GitArgs 2>&1)
-    if ($LASTEXITCODE -ne 0) {
-        Write-Host ("错误：git {0} 失败（exit={1}）：{2}" -f $What, $LASTEXITCODE, ($GitArgs -join ' ')) -ForegroundColor Red
-        $out | Select-Object -First 10 | ForEach-Object { Write-Host ("    " + $_) -ForegroundColor DarkGray }
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    $errFile = [System.IO.Path]::GetTempFileName()
+    try {
+        $out = @(& git -c core.quotePath=false @GitArgs 2> $errFile)
+        $code = $LASTEXITCODE
+        $errLines = @()
+        if (Test-Path -LiteralPath $errFile) { $errLines = @(Get-Content -LiteralPath $errFile -Encoding UTF8) }
+    } finally {
+        $ErrorActionPreference = $prevEap
+        if (Test-Path -LiteralPath $errFile) { Remove-Item -LiteralPath $errFile -Force }
+    }
+    if ($code -ne 0) {
+        Write-Host ("错误：git {0} 失败（exit={1}）：{2}" -f $What, $code, ($GitArgs -join ' ')) -ForegroundColor Red
+        # 去掉 PowerShell 包装错误记录时的框线（`git.exe :` / `At <file>:<line>` / `+ <cmd>`），
+        # 只留 git 自己的 stderr（如 `fatal: …: no merge base`），否则诊断里一半是引擎噪音。
+        $errLines | Where-Object { $_ -ne '' -and $_ -notmatch '^\s*(At .*char:|[+>]\s|git(\.exe)?\s*:)' } |
+            Select-Object -First 10 |
+            ForEach-Object { Write-Host ("    " + $_) -ForegroundColor DarkGray }
         Write-Host '  → 这是**脚本自身失败**，不是"没有新增文件"（别把它读成缺必要性段）' -ForegroundColor Gray
         exit 2
     }
-    return $out
+    # stdout 字符串化：避免 git 输出被当成对象数组（PS 会把多行拆成多元素，空输出变成 $null）
+    return @($out | ForEach-Object { "$_" })
 }
 
 $added = @()
