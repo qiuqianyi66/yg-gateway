@@ -135,12 +135,20 @@ Get-ChildItem -Recurse -Filter *.go -Path internal,cmd |
   判据④（必然可序列化 / 无错误 / 类型断言零值兜底）。
 - `x, _ := io.ReadAll(resp.Body)`：后续解析失败会被上报，错误不会消失（判据③）。
 
-### 留待产品定夺（未改，避免单方面改口径）
+### 曾经的「留待产品定夺」——**四项已全部实施**（2026-10-17 核对）
 
-| 位置 | 疑点 |
-|---|---|
-| `server/handler.go` 的 `usage.credit / total_tokens` 类型断言 | 零值兜底产物 `credit=0` 会被当真值写进成本台账（`NoteModelCost`），与判据④前提「值已被上游检查过」不符；收紧为 `c, ok := ...` 会改变计量口径 |
-| `server/chatrun.go` / `logging.go` 的 `UsageCacheMissTokens` | miss 未知时记 0，与「全命中」不可区分；**必须两处同改**，只改一处会造成流式/非流式口径分叉 |
-| `server/anthropic.go` 的 `json.Unmarshal(body, &peek)` | body 非法时下一步会报 400（判据③成立），但 `"stream":"true"` 类型错会被吞 → 静默走非流式分支 |
-| `cmd/login/main.go` 的 `runPoll` 状态码分档 | 4xx 全归「登录未完成」，真 401/403 时用户按到天亮也不会成功且看不到上游状态码（`upstream-hint.md` 同族问题） |
+> 这张表原先写着「未改，避免单方面改口径」，但四条都已随
+> `docs/prd/REQ-usage-unknown-admission-2026-10-16.md` 的 **P1–P4** 落地。表格长期不更新会
+> 让下一个会话以为「还没做」而重复立项——所以这里按实测改写，并给每条的落点与验证方式。
+
+| 原疑点 | 现状 | 落点 | 语义变化 | 还缺什么 |
+|---|---|---|---|---|
+| `server/handler.go` 的 `usage.credit / total_tokens` 类型断言 | **P1 已收紧** | `usageCreditTotal`（`handler.go:1021-1035`）返回 `ok` 标志；零值兜底不再被当真值写进 `NoteModelCost` | 计量口径**已改变**（这是当初要求「产品定夺」的点，已定） | — |
+| `server/chatrun.go` / `logging.go` 的 `UsageCacheMissTokens` | **P2 已两处同改** | `chatrun.go:363-370`（流式）与 `:453-460`（非流式）都改成「miss 未知 → 只打 `cache_miss_unknown` 标记，不写 0」；`reqlog.go:84-88` 落字段 | miss 未知 vs 全命中**已可区分** | 产线尚**从未观测到** `cache_miss_unknown`（6916 行 reqlog 里 0 次）→ 见 `PLAN-open-items` 的 B1 |
+| `server/anthropic.go` 的 `json.Unmarshal(body, &peek)` | **P3 已改** | `anthropicStreamIntent`（`anthropic.go:26-40`）用 `json.RawMessage` + 二次解析，类型非法时返回**诊断 note** 而不是静默走非流式 | 「不知道客户端要什么」不再伪装成「知道」 | 只单测覆盖，未真机跑 |
+| `cmd/login/main.go` 的 `runPoll` 状态码分档 | **P4 已改** | `pollFailureMessage`（`main.go:237-253`）四档：0/5xx、401/403、404、其它 4xx；且 4xx 只报状态码、不回显上游原文 | 真 401/403 会明确说「继续等待不会成功」 | 只单测覆盖，未真机跑（D2 问的是「401 是否该走上游错误档」这个更细的语义，与本条不重叠） |
+
+**判断口径不变**：以上四条不构成「可以静默吞错」的先例——它们的共同点是**错误被转换成
+用户/记账可用的信息**（ok 标志、unknown 标记、诊断 note、可执行文案），而不是消失。
+新增的 `_ =` 仍受 R10 与本文判据约束。
 
