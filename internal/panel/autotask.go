@@ -15,8 +15,9 @@
 //   - expert_actual_use（三账号实测）
 //   - Hp_Appearance：appearance/set + appearance_skin_apply 事件（两账号实测）
 //
-// 仍未破解：skill_1（疑似要求真实 Skill 工具调用）。
-// 不做：Expert_lighthouse（需真实连接器授权）、Expert_Philanthropy（真实捐款）。
+// 已补齐（原记为「仍未破解 / 不做」，实现见下表条目）：skill_1（runSkillFresh，人杰2 点亮）、
+// Expert_lighthouse（runExpertLighthouse，两账号点亮）。
+// 仍不做：Expert_Philanthropy（真实捐款）。
 //
 // 所有动作幂等：已 claimed/已达标的任务直接跳过，不重复消耗上游配额。
 package panel

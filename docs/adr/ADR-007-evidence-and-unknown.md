@@ -102,8 +102,9 @@ pick 处于 pool 的锁临界区（ADR-005 特意改成读锁以避免串行化�
 - `/status` 输出变大（每个账号多 provenance + unknowns 段）。
 - 热路径上多一次 `sync.Map.LoadOrStore`（命中路径一次原子读，纳秒级；已在
   handler 选号成功后调用，不在 pick 临界区）。
-- 为下游工具（如 `internal/tools/doccheck`）提供了新的 lint 目标：新暴露的事实
-  若缺 provenance 应被提示。
+- （**未落地**）原设想给下游 lint 工具（`internal/tools/doccheck`）提供新目标，
+  但该工具至今不存在，当前**没有**机器检查会提示"新暴露的事实缺 provenance"。
+  记在这里是为了不让它继续被当成已兑现的收益。
 
 ## 真机验证（2026-10-15，PID 24572）
 
