@@ -24,6 +24,13 @@
 | 最终阶段仍是目标架构 | `FROM alpine:3.20` 未加 `--platform` → buildx 按 `platforms` 逐架构构建，运行时层是目标架构 |
 | 不会静默产出错架构镜像 | buildx 逐平台构建；若 `COPY --from` 取错架构，镜像起不来（运行时报 `exec format error`），而 CI 的 build 失败会让它红 |
 
+> **⚠ 上表最后一行在第二轮复审里被推翻，已修**：交叉编译把「产物架构正确」从**结构性保证**
+> （stage 平台 = 目标平台）变成「依赖 `$TARGETOS/$TARGETARCH` 两个变量」。复审实测：
+> `GOOS="" GOARCH=""` 调 `go build` **exit 0 并静默产出宿主架构**——所以若 `ARG` 被删/改名，
+> arm64 镜像里会装 amd64 二进制、构建依然成功、CI 不红，生产跑起来才 `exec format error`。
+> 已在构建阶段末尾加**架构断言**（`go version -m` 读二进制里的 GOOS/GOARCH，构建阶段自带 go，
+> 不需要 od/readelf），并本地验过正反两向：错架构会被咬住并 exit 1，正架构通过。
+
 ### 2. 性能
 
 `go mod download` 与 4 次 `go build` 从「QEMU 模拟的目标架构」变成「构建机原生 + 交叉编译」。
