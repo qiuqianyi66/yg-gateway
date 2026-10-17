@@ -126,7 +126,7 @@ type Status struct {
 	EwmaSuccess   *float64 `json:"ewma_success,omitempty"`    // 成功率 EWMA（0~1）
 	EwmaLatencyMs *float64 `json:"ewma_latency_ms,omitempty"` // 延迟 EWMA（毫秒，保留 1 位小数）
 	EwmaSamples   int64    `json:"ewma_samples,omitempty"`    // 成功率事件样本数
-	// EwmaProvenance EWMA 表现信号的认识论标注（AGENTS.md「三态语义纪律」）。
+	// EwmaProvenance EWMA 表现信号的认识论标注（AGENTS.md「四态语义纪律」）。
 	//
 	// 语义：
 	//   - 样本数 ≥ ewmaMinSamples → derivation（EWMA 是平滑**派生**值，不是真实成功率）
@@ -152,7 +152,7 @@ type ModelCostStatus struct {
 	LastSeen time.Time `json:"last_seen"`
 	// Samples 累计观测次数（EMA 收敛度参考）。
 	Samples int `json:"samples,omitempty"`
-	// Provenance 该行 tier 判定的认识论标注（AGENTS.md「三态语义纪律」）。
+	// Provenance 该行 tier 判定的认识论标注（AGENTS.md「四态语义纪律」）。
 	//
 	// 为什么需要：tier 0/2 是**推断**——凭有限次 credit 实测外推出来的。1 条样本
 	// 判"收费"和 20 条样本判"收费"，可信度完全不同，但旧结构里两者长得一样，
@@ -270,7 +270,8 @@ type entry struct {
 	// 与 until（全账号级）正交：6004 只写本表、不写 until，因此多个模型同时 6004 时
 	// 各自独立计时，互不覆盖（A 触发后 B 再触发，A 的冷却截止不被 B 覆盖——这是
 	// 单 until 字段做不到的）。仅 6004 触发时记录；空 map = 无模型级限流（不豁免）。
-	// 运行态语义（不持久化）：重启清零，退化为仅账号级 until 冷却的现状。
+	// 持久化（stateAccount.ModelCooldowns）：未过期条目跨重启恢复，否则 healthyForModel
+	// 重启失忆、重新踩同一个 6004 雷区（与下方 stateModelCooldown 同一口径）。
 	modelCooldowns map[string]modelCooldown
 	// sessionDeadFails 连续 12153（ErrSessionDead）计数。12153 在真实环境会被临时性触发
 	// （网络抖动/上游闪断/refresh 竞态），一次失败就永久禁用太粗暴——连续达到阈值才判死。
@@ -501,19 +502,25 @@ const pruneInterval = 10 * time.Second
 //
 // 快路径（任一即返回）：空 map｜距上次清理不足 pruneInterval。
 // 调用方必须已持有 p.mu 写锁。
-func (e *entry) pruneExpiredModelCosts(now time.Time) {
+//
+// 返回**本次真正删掉的模型名**：数据没了但知识也没了——调用方据此把该
+// (账号,模型) 的成本未知重新打开（见 pool.reopenCostUnknown）。
+func (e *entry) pruneExpiredModelCosts(now time.Time) []string {
 	if len(e.modelCost) == 0 {
-		return // 空 map：绝大多数账号的常态，零成本
+		return nil // 空 map：绝大多数账号的常态，零成本
 	}
 	if !e.lastPrune.IsZero() && now.Sub(e.lastPrune) < pruneInterval {
-		return // 时间节流：同一 entry 每 interval 至多真扫一次
+		return nil // 时间节流：同一 entry 每 interval 至多真扫一次
 	}
 	e.lastPrune = now
+	var expired []string
 	for m, mc := range e.modelCost {
 		if mc.LastSeen.IsZero() || now.Sub(mc.LastSeen) > modelCostTTL {
 			delete(e.modelCost, m)
+			expired = append(expired, m)
 		}
 	}
+	return expired
 }
 
 // pruneExpiredModelCooldowns 删除 modelCooldowns 中已过期的条目（惰性清理，时间节流）。

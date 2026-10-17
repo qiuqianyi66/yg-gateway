@@ -142,6 +142,92 @@ func TestRecordSameQuestionDedup(t *testing.T) {
 	}
 }
 
+// TestReopenNeedsReason 重开必须说明理由——否则审计看不到"为什么它又变回未知"。
+//
+// 牙齿：把 reason 校验去掉 → 本测试 FAIL。
+func TestReopenNeedsReason(t *testing.T) {
+	r := NewRegistry()
+	it, _ := r.Record("q", "req")
+	resolved, _ := r.Resolve(it.ID, it.Revision, "ev-1")
+	if _, err := r.Reopen(it.ID, resolved.Revision, ""); !errors.Is(err, ErrReasonRequired) {
+		t.Fatalf("reason 为空必须报错（重开要有可审计的理由），got %v", err)
+	}
+}
+
+// TestReopenStaleRevision 用过期 revision 调 Reopen 必须报错且不改条目状态。
+//
+// 牙齿：把 revision 校验去掉 → 本测试 FAIL。
+func TestReopenStaleRevision(t *testing.T) {
+	r := NewRegistry()
+	it, _ := r.Record("q", "req")
+	resolved, _ := r.Resolve(it.ID, it.Revision, "ev-1")
+
+	if _, err := r.Reopen(it.ID, resolved.Revision+1, "cost_observation_expired"); !errors.Is(err, ErrStaleRevision) {
+		t.Fatalf("err=%v want ErrStaleRevision", err)
+	}
+	got, _ := r.Get(it.ID)
+	if !got.Resolved {
+		t.Error("stale 调用不得改动条目状态（应仍为已消解）")
+	}
+}
+
+// TestReopenBringsBackOpen 已消解 → 重开 → 回到未消解，revision 递增，证据链两段都在。
+//
+// 这是「TTL 类未知」的核心：成本观测 6h 后过期，该组合又变未知；只有 Resolve
+// 没有 Reopen 的话，条目永久停在 Resolved，未消解计数就永远读 0（指标撒谎）。
+//
+// 牙齿：把 Reopen 里的 Resolved=false 去掉 → 本测试 FAIL。
+func TestReopenBringsBackOpen(t *testing.T) {
+	r := NewRegistry()
+	it, _ := r.Record("q", "req")
+	resolved, _ := r.Resolve(it.ID, it.Revision, "ev-1")
+	if got := len(r.List()); got != 0 {
+		t.Fatalf("前置条件：消解后 List 应为空，got %d", got)
+	}
+
+	reopened, err := r.Reopen(it.ID, resolved.Revision, "cost_observation_expired")
+	if err != nil {
+		t.Fatalf("Reopen: %v", err)
+	}
+	if reopened.Resolved {
+		t.Error("重开后应为未消解")
+	}
+	if reopened.Revision != resolved.Revision+1 {
+		t.Errorf("revision=%d want %d（重开也要 +1）", reopened.Revision, resolved.Revision+1)
+	}
+	if got := len(r.List()); got != 1 {
+		t.Errorf("重开后应回到 List（未消解集合），got %d", got)
+	}
+	// 审计：原消解证据 + 重开理由都在
+	if len(reopened.Evidence) != 2 ||
+		reopened.Evidence[0] != "ev-1" || reopened.Evidence[1] != "cost_observation_expired" {
+		t.Errorf("证据链应保留「消解」与「重开」两段: %v", reopened.Evidence)
+	}
+	// 重开后可用新 revision 再次消解（链路闭环）
+	again, err := r.Resolve(it.ID, reopened.Revision, "ev-2")
+	if err != nil || !again.Resolved {
+		t.Fatalf("重开后应能再次消解: err=%v item=%+v", err, again)
+	}
+}
+
+// TestReopenOpenItemIdempotent 本就未消解的条目 Reopen 幂等（不递增 revision、不追加证据）。
+//
+// 牙齿：去掉 `if !it.Resolved { return }` → revision 被无意义递增 → 本测试 FAIL。
+func TestReopenOpenItemIdempotent(t *testing.T) {
+	r := NewRegistry()
+	it, _ := r.Record("q", "req")
+	again, err := r.Reopen(it.ID, it.Revision, "cost_observation_expired")
+	if err != nil {
+		t.Fatalf("Reopen: %v", err)
+	}
+	if again.Revision != it.Revision {
+		t.Errorf("未消解条目应幂等，revision 不应变：%d → %d", it.Revision, again.Revision)
+	}
+	if len(again.Evidence) != 0 {
+		t.Errorf("未消解条目的证据不应被重开污染: %v", again.Evidence)
+	}
+}
+
 // TestResolveIdempotentAfterResolved 已消解的条目再次 Resolve（同 revision）不报错、
 // 幂等返回——避免调用方因为重放而炸。
 func TestResolveIdempotentAfterResolved(t *testing.T) {

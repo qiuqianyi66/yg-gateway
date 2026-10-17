@@ -37,6 +37,8 @@ var (
 	ErrQuestionEmpty = errors.New("unknown: question must not be empty")
 	// ErrEvidenceRequired 消解未提供证据 ID。
 	ErrEvidenceRequired = errors.New("unknown: resolution requires an evidence id")
+	// ErrReasonRequired 重开未说明理由（知识为何又变成未知）。
+	ErrReasonRequired = errors.New("unknown: reopen requires a reason")
 )
 
 // Item 一条被跟踪的未知。
@@ -51,7 +53,7 @@ type Item struct {
 	Requires string `json:"requires"`
 	// Evidence 消解时引用的证据 ID（可多条，供审计追溯）。
 	Evidence []string `json:"evidence,omitempty"`
-	// Revision 乐观并发版本号：登记时为 1，每次成功消解 +1。
+	// Revision 乐观并发版本号：登记时为 1，每次成功消解或重开 +1。
 	// 调用方必须回传拿到的 revision，过期即报错。
 	Revision int `json:"revision"`
 	// Resolved 是否已消解。
@@ -127,6 +129,42 @@ func (r *Registry) Resolve(id string, rev int, evidenceID string) (Item, error) 
 	it.Evidence = append(it.Evidence, evidenceID)
 	it.Revision++
 	it.Resolved = true
+	return *it, nil
+}
+
+// Reopen 把**已消解**的条目标记为未消解——知识过期后重新变未知。
+//
+// 为什么需要：多数消解是单向的（观测一次就永远知道）；但有些未知带 TTL——例如
+// 模型成本的观测 6h 后过期，此后该 (账号,模型) 又回到"不知道"。没有 Reopen，这类
+// 条目会永久停在 Resolved，未消解计数就会撒谎（读 0 而实际未知）。
+//
+// 契约（与 Resolve 对称）：
+//   - reason 为空 → ErrReasonRequired（重开必须有理由，供审计）；
+//   - ID 不存在 → ErrNotFound；
+//   - rev 与当前 Revision 不符 → ErrStaleRevision（调用方须重读后重试，禁止盲重试）；
+//   - 未消解的条目 → 幂等返回（不递增 revision、不追加证据）；
+//   - 已消解且 rev 相符 → Resolved=false、Revision++、evidence 追加 reason；
+//     **原消解证据保留**，审计能看到"曾被什么消解过、又因什么重新变未知"。
+func (r *Registry) Reopen(id string, rev int, reason string) (Item, error) {
+	if reason == "" {
+		return Item{}, ErrReasonRequired
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	it, ok := r.items[id]
+	if !ok {
+		return Item{}, ErrNotFound
+	}
+	if rev != it.Revision {
+		return Item{}, ErrStaleRevision
+	}
+	if !it.Resolved {
+		return *it, nil // 幂等：本来就未消解
+	}
+	it.Evidence = append(it.Evidence, reason)
+	it.Revision++
+	it.Resolved = false
 	return *it, nil
 }
 

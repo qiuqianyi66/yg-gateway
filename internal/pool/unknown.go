@@ -122,6 +122,39 @@ func (p *Pool) costKnown(uid, model string) bool {
 	return time.Since(mc.LastSeen) <= modelCostTTL
 }
 
+// reopenCostUnknown 成本观测过期后，把已消解的条目重新打开。
+//
+// 为什么需要：消解是单向闩锁，而 modelCost 有 6h TTL——过期后选号侧已经按"未知"
+// 处理（credit_floor 不再用本地实测），但 registry 里那条仍 Resolved=true，于是
+// /metrics 的 unknowns_open 读 0，指标与真实未知脱钩。
+//
+// 触发点：只在台账过期清理时调用（落盘路径的 pruneAllLocked），**不在选号热路径**，
+// 所以这里碰 registry 的锁是安全的（ADR-007 取舍二约束的是 pick 临界区）。
+// 调用方必须已持 p.mu 写锁；锁序 p.mu → registry.mu，registry 不会回拿 p.mu。
+func (p *Pool) reopenCostUnknown(uid, model string) {
+	if p.unknownReg == nil || uid == "" || model == "" {
+		return
+	}
+	v, ok := p.unknownSeen.Load(costUnknownKey(uid, model))
+	if !ok {
+		return // 从未登记过（上线前就有观测）：无需重开
+	}
+	id, _ := v.(string)
+	if id == "" {
+		return
+	}
+	for attempt := 0; attempt < 2; attempt++ {
+		it, found := p.unknownReg.Get(id)
+		if !found || !it.Resolved {
+			return // 未消解（或已消失）：不需要重开
+		}
+		if _, err := p.unknownReg.Reopen(id, it.Revision, "cost_observation_expired"); err == nil {
+			return
+		}
+		// err 只可能是 ErrStaleRevision（并发改了 revision）→ 重读一次再试。
+	}
+}
+
 // OpenUnknownCount 未消解成本未知的总数（/metrics gauge / 面板徽章用）。
 //
 // 遍历全部条目：条目数有界（账号 × 实际用过的模型），且只在抓取/渲染时调用，

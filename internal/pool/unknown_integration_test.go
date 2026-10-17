@@ -2,6 +2,7 @@ package pool
 
 import (
 	"testing"
+	"time"
 
 	"yg-gateway/internal/auth"
 	"yg-gateway/internal/unknown"
@@ -103,6 +104,46 @@ func TestUnknownRegistryOptional(t *testing.T) {
 	st := statusOf(t, p, "u1")
 	if st.Unknowns != nil {
 		t.Errorf("未注入 registry 时 /status 不该有 unknowns 段，got %+v", st.Unknowns)
+	}
+}
+
+// TestExpiredCostObservationReopensUnknown 成本观测过期 → 该组合重新变回未知。
+//
+// 为什么：消解是单向闩锁，而 modelCost 有 TTL（modelCostTTL）。观测过期后选号侧
+// 已经按"未知"处理（credit_floor 不再信本地实测），若 registry 里那条一直 Resolved，
+// /metrics 的 unknowns_open 就读 0——指标从"还有多少没摸清"退化成"永远没问题"。
+//
+// 牙齿：把 pruneAllLocked 里的 reopenCostUnknown 调用去掉 → 第 4 步读到 0 → FAIL。
+func TestExpiredCostObservationReopensUnknown(t *testing.T) {
+	p, reg := newPoolWithUnknowns(t)
+	// 注意：modelCost 的 LastSeen 由 NoteModelCost 直接用 time.Now() 写入（未走 p.now()），
+	// 所以这里按**真实时钟**推进，不冻结时间——冻结会让台账永远显示"刚观测过"。
+	p.Add(&auth.Auth{UID: "u1", AccessToken: "at", ExpiresAt: 9999999999})
+	p.SetCredits("u1", 1000, 0)
+
+	// 1) 首次选号 → 登记为未知
+	p.TrackCostUnknown("u1", "hy4-preview")
+	if got := len(reg.List()); got != 1 {
+		t.Fatalf("前置：应有 1 条未消解，got %d", got)
+	}
+	// 2) 实测到 credit → 消解
+	p.NoteModelCost("u1", "hy4-preview", 2.9, 1000)
+	if got := len(reg.List()); got != 0 {
+		t.Fatalf("实测后应消解，仍剩 %d 条", got)
+	}
+	// 3) 时间推进越过 TTL，触发台账过期清理（落盘路径，不在选号热路径）
+	p.mu.Lock()
+	p.pruneAllLocked(time.Now().Add(modelCostTTL + time.Hour))
+	p.mu.Unlock()
+
+	// 4) 观测过期 = 重新变未知（指标恢复说真话）
+	if got := len(reg.List()); got != 1 {
+		t.Fatalf("观测过期后该组合应重新变未知，got %d 条（0 表示指标会撒谎）", got)
+	}
+	// 5) 再次观测 → 再次消解（闭环，且 revision 契约没被破坏）
+	p.NoteModelCost("u1", "hy4-preview", 3.1, 1000)
+	if got := len(reg.List()); got != 0 {
+		t.Fatalf("再次观测后应再次消解，仍剩 %d 条", got)
 	}
 }
 
