@@ -226,6 +226,8 @@ function Invoke-Rollback([string]$configPath, [string]$backupPath) {
         Write-Ok ('已恢复旧版运行并通过健康检查（healthy=' + $rbHealth.Healthy + '/' + $rbHealth.Total + '）')
         return $true
     }
+    # 回滚也没起来：把这个 launcher 收掉，别让它成为下一次换版的孤儿（PLAN B4b）
+    Stop-Launcher $rbStart '回滚实例 launcher'
     $state.rollback_failed = $true
     $state.stage = 'rollback-failed'
     Write-Bad '恢复旧版后健康检查仍未通过——**生产可能不可用**'
@@ -410,12 +412,59 @@ function Test-PeImage([string]$path) {
 function Start-Instance([string]$exePath, [string]$configPath, [string]$outLog, [string]$errLog) {
     $inner = '"' + $exePath + '" -config "' + $configPath + '" > "' + $outLog + '" 2> "' + $errLog + '"'
     try {
-        $null = Start-Process -FilePath $env:ComSpec -ArgumentList @('/c', ('"' + $inner + '"')) `
-            -WorkingDirectory $ProdDir -WindowStyle Hidden
-        return [pscustomobject]@{ Ok = $true; Error = '' }
+        # -PassThru 拿 launcher 的 PID：启动失败时要能**精确**回收它（PLAN B4b），
+        # 不靠"命令行猜"。cmd.exe 会一直等到子进程结束，所以它会活到网关退出。
+        $proc = Start-Process -FilePath $env:ComSpec -ArgumentList @('/c', ('"' + $inner + '"')) `
+            -WorkingDirectory $ProdDir -WindowStyle Hidden -PassThru
+        return [pscustomobject]@{ Ok = $true; Error = ''; Pid = $proc.Id }
     } catch {
-        return [pscustomobject]@{ Ok = $false; Error = $_.Exception.Message }
+        return [pscustomobject]@{ Ok = $false; Error = $_.Exception.Message; Pid = 0 }
     }
+}
+
+# 回收**我们自己**起的 launcher（PLAN B4b）。用精确 PID，不做命令行启发式：
+# 该 PID 来自 Start-Instance 的 -PassThru，只可能是本次起的那个 cmd，误杀面为 0。
+# 为什么必须收：launcher 活着时会一直握着重定向文件的句柄（日志看不全 / 归档失败），
+# 脚本退出后它变成孤儿，下一次换版也认不出来——这就是 B4b 说的"累积"。
+function Stop-Launcher($launcher, [string]$what) {
+    if (-not $launcher -or -not $launcher.Pid) { return }
+    $p = $null
+    try { $p = Get-Process -Id $launcher.Pid -ErrorAction Stop } catch { return }   # 已经自己退了
+    $name = ''
+    try { $name = [string]$p.ProcessName } catch { $name = '' }
+    if ($name -and $name -ne 'cmd') {
+        # PID 已被别的进程复用：宁可留着也不误杀（R10：不静默，说明为什么不杀）
+        Write-Warn2 ($what + '：PID ' + $launcher.Pid + ' 现在不是 cmd（' + $name + '），不杀')
+        return
+    }
+    taskkill /PID $launcher.Pid /T /F 2>&1 | Out-Null
+    Write-Step ($what + '：已回收 launcher PID ' + $launcher.Pid)
+}
+
+# 清理**上一次失败换版**留下的孤儿 launcher（B4b 的"累积"）。
+# 三条判据**同时**成立才杀，避免误杀操作者自己的 shell：
+#   1) 进程名 cmd.exe；
+#   2) 命令行含目标 exe 的完整路径（本次的启动命令就长这样）；
+#   3) 父进程**已不存在**（孤儿）——本次运行自己的 launcher 有活的父进程，因此不会被命中。
+# 一个都不命中是正常情况，所以静默返回；命中则逐个打印 PID 与死掉的父进程号。
+function Remove-OrphanLaunchers([string]$exePath) {
+    $killed = 0
+    $cands = @()
+    try { $cands = @(Get-CimInstance Win32_Process -Filter "Name='cmd.exe'" -ErrorAction Stop) } catch { return 0 }
+    foreach ($c in $cands) {
+        $cl = [string]$c.CommandLine
+        if (-not $cl) { continue }
+        if ($cl.IndexOf($exePath, [System.StringComparison]::OrdinalIgnoreCase) -lt 0) { continue }
+        $ppid = 0
+        try { $ppid = [int]$c.ParentProcessId } catch { $ppid = 0 }
+        $parentAlive = $false
+        if ($ppid -gt 0) { try { $null = Get-Process -Id $ppid -ErrorAction Stop; $parentAlive = $true } catch { $parentAlive = $false } }
+        if ($parentAlive) { continue }
+        taskkill /PID $c.ProcessId /T /F 2>&1 | Out-Null
+        Write-Step ('回收孤儿 launcher：PID ' + $c.ProcessId + '（父进程 ' + $ppid + ' 已不存在）')
+        $killed++
+    }
+    return $killed
 }
 
 function Save-Report() {
@@ -573,6 +622,11 @@ try {
     # -----------------------------------------------------------------------
     Write-Head '2/6 停旧实例 + 轮询端口释放（L-9 规则 1）'
     # -----------------------------------------------------------------------
+    # 顺手清掉**以前的**失败换版留下的孤儿 launcher（PLAN B4b）。放在停旧实例之前：
+    # 它们可能握着上一次的日志句柄，且下一次换版再也认不出它们（判据见函数注释）。
+    # 0 个是常态，所以只有命中才打印。
+    $orphans = Remove-OrphanLaunchers $targetExe
+    if ($orphans -gt 0) { Write-Step ('共回收孤儿 launcher ' + $orphans + ' 个') }
     $pidFile = Join-Path (Join-Path $ProdDir 'data') 'yg-gateway.pid'
     $stopFailed = $false
     if (Test-Path -LiteralPath $pidFile) {
@@ -645,6 +699,9 @@ try {
         # -------------------------------------------------------------------
         Write-Head '5b 自动回滚（用独立日志，不覆盖失败现场）'
         # -------------------------------------------------------------------
+        # 先把这个失败的 launcher 收掉（PLAN B4b）：它会一直握着上面那份 stderr 日志的句柄
+        # （回滚后想读现场会被锁），脚本退出后还会变成孤儿。
+        Stop-Launcher $started '失败的新实例 launcher'
         $restored = Invoke-Rollback $configPath $backupPath
         Write-Step ('失败现场日志：' + $state.log_path)
         if ($state.rollback_log_path) { Write-Step ('回滚日志：' + $state.rollback_log_path) }
