@@ -84,8 +84,12 @@
    （与本次改动无关，`-count=1` 全绿）；`TestEwmaLatencyPenalizesSlowInPick` 时间敏感偶发。
 
    > **更正（2026-10-17 实测）**：前半条**不复现**——`go test ./internal/server/ -count=3`
-   > 得 `ok 24.455s`（exit 0）。根因是包级 `dynamicModelsCache`，现已是 `Handler` 实例字段
-   > （见 `2026-10-16-t5-sandbox` §六.2 的更正）。后半条保留观察（本轮未复现）。
+   > 得 `ok 24.455s`（exit 0）。**根因只到「推断」为止**（本条按四态纪律标注）：
+   > 当时的共享状态是包级 `dynamicModelsCache`，现已改为 `Handler` 实例字段，并由
+   > `TestModelsCacheNotSharedAcrossHandlers`（`internal/server/handler_test.go`）钉住
+   > 「每个 Handler 一份」；但「正是它导致该 flake」**没有变异复现证据**，属 inference 而非
+   > observation（改动见 `2026-10-16-t5-sandbox` §六.2 的更正）。后半条（EWMA 时间敏感）
+   > 保留观察，本轮未复现。
 2. **测试时长**：panel 包单轮 44–60s（autotask 的 mp 上报路径含 0–10s 随机反作弊抖动，非可注入）。
 3. **`runAutoAll` 与队列路径对「达标未领」处理不一致**（前者跳过不领、后者入队去领）——
    由 panel agent 报出，属产品语义，未单方面改。

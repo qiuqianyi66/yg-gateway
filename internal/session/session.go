@@ -452,9 +452,10 @@ const derivedKeyPrefix = "d-"
 //   - 本包覆盖率 **98.8% = 425/430 语句**；其中本函数占 20 条且 100% 覆盖。
 //     剔除它后 **405/410 = 98.8%** —— 也就是说「98.8% 里混着测试专用代码」这句话成立，
 //     但「生产可达约 89%」**复现不出来**，属未验证声明（旧记录已就地更正）。
-//   - 复现：`go test "-coverprofile=sess.out" -count=1 ./internal/session/`
-//     （路径带空格的 PowerShell 里，整串参数必须**双引号**包住，否则 `-coverprofile`
-//     与值会被拆开 → 仓库根出现字面名垃圾文件，见 LESSONS L-3）。
+//   - 复现：`go test "-coverprofile=$env:TEMP\sess.out" -count=1 ./internal/session/`
+//     （两个坑：整串参数必须**双引号**包住，否则 `-coverprofile` 与值会被拆开 → 仓库根出现
+//     字面名垃圾文件，见 LESSONS L-3；路径必须落 `$env:TEMP`，写相对名会在仓库根留下
+//     `sess.out` 且 `pre-commit` 检查 4 的判据不匹配这种后缀 → 拦不住。）
 func deriveKey(obj map[string]any) string {
 	msgs, ok := obj["messages"].([]any)
 	if !ok || len(msgs) == 0 {
