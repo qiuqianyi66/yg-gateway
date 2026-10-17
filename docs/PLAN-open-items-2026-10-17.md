@@ -85,13 +85,13 @@ last_updated: 2026-10-17
 
 ```
 今天 · 零决策（约 4h）
-  A1  CI push 用 HEAD~1 作 base → 改 merge-base        ← 门禁漏洞，最高优先（见 §9.1）
-  B7  ERROR-HANDLING 的「留待产品定夺」4 行已过期       ← 20 分钟
-  §3  文档债批量修正（含 A9 前提已过时、README 包数）
-  B6  check-depth -List：让下面 O3 的 7 个超长函数可排期
+  A1  CI push 用 HEAD~1 作 base → 改 merge-base        ← 门禁漏洞，最高优先（见 §9.1）  ✅ 已完成 878ed9a
+  B7  ERROR-HANDLING 的「留待产品定夺」4 行已过期       ← 20 分钟（并行会话在做，本轮让出）
+  §3  文档债批量修正（含 A9 前提已过时、README 包数）    （同上，并行会话在做）
+  ~~B6~~  check-depth -List                            ← 实测不成立（已有 -Detail），已关闭
 
 本周 · 零决策
-  A2  gate 别再为拿覆盖率重跑一遍全量测试（省 ~2min/push）
+  A2  gate 别再为拿覆盖率重跑一遍全量测试（省 ~2min/push）  ← 并行会话已在改 pre-commit.ps1
   B1  cache_miss_unknown 的产线证据（沙箱 + 假上游）
   A3  面板 unknown 观感（空态已验；与 B1 同一批造有值态）
   A8  session 覆盖率口径标注
@@ -159,7 +159,7 @@ Get-ChildItem internal -Recurse -Filter *.js | ForEach-Object { (Get-Content $_.
 | **B3** | **N7 的真实缺口：`auth` / `session` / `scheduler` / `cmd/server` 四包从未做过独立变异核验**（A6 说的是 panel/autotask 的**深度**不够，不是这个缺口） | `2026-10-16-t3-mutation/summary.md` 只对 `upstream`/`panel` 做了独立复验，其余四个包是**自述**。配方在 T3 里（`%TEMP%` 副本 + `go env GOMOD` 断言 + 改前改后哈希闭环 + 每包 5 条语义变异） | 数小时 | L2 |
 | **B4** | **部署脚本落地后新开的口子**（`scripts/deploy-prod.ps1`，见 9.3） | — | 0.5~1h 除 B4-a | L1 |
 | **B5** | **`build-image` 是 CI 的墙钟瓶颈**：PR 上也跑 QEMU 双架构 | `gh run view 38908276493`：build-image 13:31:19→13:38:26（**7 分钟**）；其余 job（test/race/gate/5×build）并行跑完约 2 分钟，整轮墙钟 8.6 分钟 ≈ gate + build-image 的关键路径 | 0.5h | L1 |
-| **B6** | **`check-depth.ps1` 只报计数、不报明细**：O3 要排期，却排不出「哪 7 个函数超 120 行、哪 5 个文件超 1000 行」 | `$longFuncs` 内部有完整列表（L101/L135）但从不输出 | 0.5h | L0 |
+| ~~**B6**~~ | ~~`check-depth.ps1` 只报计数、不报明细~~ → **实测不成立，已关闭**：脚本早有 `-Detail` 开关，打印 5 个超长文件 + 7 个超长函数（**7/7 全列，不截断**） | `scripts/check-depth.ps1:208-216`；实跑见 §9.4 | — | 已关闭 |
 | **B7** | **`.harness/rules/ERROR-HANDLING.md` 的「留待产品定夺」4 行已过期**：那 4 行正是 REQ 的 P1–P4，而该 PRD 标「P1–P4 全实施」，代码也已核实 | 交叉对照 `docs/prd/REQ-usage-unknown-admission-2026-10-16.md` §实施状态 + §9.1 | 20 分钟 | L0 |
 
 ### 9.3 B4 明细（部署脚本的四个遗留）
@@ -171,10 +171,12 @@ Get-ChildItem internal -Recurse -Filter *.js | ForEach-Object { (Get-Content $_.
 | **B4-c** `AGENTS.md` 部署纪律 | 仍写「构建+复制+启动同一条命令」等手工步骤，**未指向 `deploy-prod.ps1`** | 改成指向脚本（一条命令 + 退出码表：1=已确认旧版在跑 / 2=已回滚 / 3=冒烟失败 / 4=生产可能不可用） |
 | **B4-d** 备份无保留策略 | 42 份 / 421.7MB，脚本每次换版新增一份且永不清理（= D4） | 脚本加 `-KeepBackups N`（默认不删，显式才清），或交给 D4 的人工清理 |
 
-### 9.4 本轮已经「顺手做掉」的，别再立项
+### 9.4 本轮已经「顺手做掉」/ 实测不成立的，别再立项
 
 | 项 | 结论 |
 |---|---|
+| **A1 gate 的 base 只看最后一个提交** | ✅ **已修**（`878ed9a`）：push 用事件 `before`、tag 用上一 tag、不可用时回落 + `::warning::`。PRD `REQ-ci-gate-base-2026-10-17`，牙齿探针证明旧口径会「检查了 0 个生产文件」还整轮绿 |
+| **B6 check-depth 不报明细** | ❌ **实测不成立**：`-Detail` 早就打印 5 个超长文件 + 7 个超长函数（7/7 全列）。这条是**我写了假的否定断言**（只读定义处与计数处，漏了第三个引用点 `:208`），按 Seen 制已升级为 `AGENTS.md` 的「否定性断言必须穷尽证据源」+ LESSONS L-15 |
 | `dynamicModelsCache` 搬进 Handler | ✅ 已做（`ac5e5ea`），§3 第 1 行已确认 |
 | 夜猫子 4s sleep 不可注入 | ✅ 已做（`b761187`）：`internal/upstream` 单轮 11.05s → 2.88s |
 | 两条发布线各跑一次 gate | ✅ 已合并成 `release.yml`（`9c68947`），CI 实证一次 gate |
