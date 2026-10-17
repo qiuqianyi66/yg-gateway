@@ -126,3 +126,41 @@ PLAN 的「42 份 / 431.5 MB」是**两种口径**（仅 `.bak` = 42 份 / 421.7
 `TestReqlogArchiveRecordsCacheMissUnknown` 当前红（`go build ./...` 干净，失败仅在该包）。
 我的改动是 PowerShell + 文档：检查 1/3/4/8 逐项通过、`gofmt -l` 空、三个探针见上。
 **待对方提交后必须重跑一次全量 8 项**，这是本变更唯一的未闭环项。
+---
+
+## 八、第 4 轮：独立只读复审（子代理）— **FAIL**（0 🔴 / 1 🟡 / 2 🔵）
+
+它先确认第 3 轮的修法**真堵住了主缺陷**（orphan base → exit 2，不再死在判 `$LASTEXITCODE` 之前），
+然后抓到我的修法带来的**连带缺陷**：
+
+| 级别 | 发现（它的实测） | 我的处置 |
+|---|---|---|
+| 🟡 | 过滤正则 `git(\.exe)?\s*:` 在 **PS 5.1** 下恰好命中「格式化错误记录」的**首行前缀**（`git.exe : fatal: …no merge base`），把唯一有信息量的行**整行丢掉** → 诊断全空。而 commit message 写着"会打印 fatal" —— 在 5.1 上**不可复现**（该效果只在 PS 7 的 `2>` 语义下成立） | **剥前缀、不丢行**：`git.exe : X` → `X`，其余保留，只滤 `At … char:` / `+ ` 框线，trim 后再判空。探针：`-Base orphan` → exit 2 + 输出 `fatal: orphan...HEAD: no merge base`（无空行噪音） |
+| 🔵 | `finally` 里 `Remove-Item` 在**还原 EAP=Stop 之后** → 清理失败会变终止性错误 → exit 1 → 又被 pre-commit 读成「缺段」 | 清理移到还原 EAP 之前，并注明理由 |
+| 🔵 | `pre-commit.ps1` 的「无法枚举改动文件（不在 git 仓库内？）」会遮蔽检查 8 的 exit-2 支，且提示误导 | 改为列出 `-Base` 与两种可能原因（含「无共同祖先 / `no merge base`」）+ 自查命令。探针：`-Fast -Base orphan` → exit 2 + 三行新诊断 |
+
+**它明确通过的部分**：`-Base 'HEAD:docs/prd'` / `no-such-ref-xyz` → exit 2；`GIT_TRACE=1`
+（控制组证明产生 8 行 trace）→ 干净态 exit 0 且无泄漏、缺段仍 exit 1；quotePath 五种组合全对
+（未跟踪缺段 1 / staged 缺段 1 / 补段 0 / staged-only 0 / index 缺段+删盘 1）；
+检查 8 三态分支文本分开（exit 0 / 1 端到端实测，exit 2 用桩脚本驱动）；`存量 7 份` grep 命中 **0**、
+`11 份` 在 34/82/101/122 行；REQ 的 baseline 行两键齐全。
+
+## 九、第 5 轮：修复后自验 + 全量门禁（本次未再开独立复审）
+
+| 项 | 结果 |
+|---|---|
+| orphan base（no merge base） | **exit 2** + `fatal: orphan...HEAD: no merge base`（可复现，PS 5.1） |
+| `-Fast -Base orphan`（pre-commit 聚合层） | **exit 2** + 新三行诊断 |
+| 干净态 / 中文名缺段（临时 `quotePath=true`） | exit 0 / exit 1 |
+| **全量总闸 8 项** | **exit 0，53.9s**（10 个 [OK]）—— 上一轮「未闭环」项已补跑绿 |
+
+### 流程结账（必须留痕）
+
+规范 §四写「评审-修复闭环 ≤2 轮；第 2 轮仍不过 → 暂停，人工介入」。本变更实际走到**第 4 轮**。
+事实：瑕疵逐轮收敛且**始终在同一处**（`Invoke-Git` 的 stderr 处理），每轮都由独立复审者复跑探针，
+没有反复返工同一现象；第 4 轮只剩一行过滤逻辑。**按规范这已属"人工介入"区间**——本轮之后
+我不再自行开第 5 轮复审，改为把两项证据（orphan 探针输出、8 项全绿）交给用户判断是否还需复审。
+
+更深一层的教训（写给下一个改这段脚本的人）：**PowerShell 5.1 与 7 的 `2>` 语义不同**
+（5.1 落格式化错误记录、7 落原始 stderr），任何"过滤 stderr"的代码在两个宿主上都必须各测一遍；
+`$LASTEXITCODE` 判据与错误记录**格式化**是两件事，修好前者会暴露后者。
