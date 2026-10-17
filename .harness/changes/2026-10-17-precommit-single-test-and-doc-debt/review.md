@@ -72,3 +72,44 @@ exit=0
    `unknowns_open 0` 佐证）。归 B1（沙箱 + 假上游）。
 2. **CI 侧 `test`/`gate` 重复执行的去重未做**：这是 D-2 的**决策**，不是遗漏。
 3. **`-race` 未跑**：本机无 gcc（CI 独占），本次未触及并发路径。
+
+---
+
+# 第 2 轮：独立只读复审（子代理，2026-10-17）
+
+> 方法：把 diff 交给一个**只读**的子代理（禁改文件），按同样六维独立复核，重点自查
+> 「门禁有没有退化」。结论 **PASS**，但抓出 4 条我第 1 轮自评**没看到**的问题。
+
+## 结论
+
+**PASS**（无 🔴 / 🟡；🟢 4 条、🔵 3 条）。它独立复现了我给的全部数字
+（425/430 = 98.84%、`deriveKey` 20/20、剔除后 405/410 = 98.78%、`go list` = 23/20、
+`server -count=3` → `ok 25.194s`、`dynamicModelsCache` 零命中、7864 拒连且只有 PID 40912），
+并单跑了全量 `pre-commit`（exit 0、单轮测试、`-cover` 输出被复用）。
+
+关键自查项：「测试红仍 PASS」路径不存在（全量红 → `$coverFile=''` → check-depth 自跑再红 → 双红）；
+`-Fast`（CI gate 形态，`gate.yml:98`）与改动前逐字等价；空覆盖文件走 `exit 1` **fail-closed**。
+
+## 它发现、我已修的问题（同轮修完，未留到下一轮）
+
+| 级别 | 问题（它的实证） | 处置 |
+|---|---|---|
+| 🟢-1 | **测试红时临时文件泄漏**：`%TEMP%\yg-precommit-cover-23832.txt`（11:44:09，含 4 行 FAIL）残留；绿路径那份已正确删除。根因：清理判据用了 `$coverFile -ne ''`，而红路径把 `$coverFile` 置空 | 引入**独立**变量 `$coverTmpPath`（红绿都删）；文件名 `$PID` → **GUID**（PID 会复用）。验证：红路径跑完 `%TEMP%` 残留 **0**（修复前 1） |
+| 🟢-2 | `Remove-Item -ErrorAction SilentlyContinue` 是本 diff 里**唯一新增的静默吞错**且无注释（正是 -1 没暴露的原因） | 去掉 `SilentlyContinue`，存在性用 `Test-Path` 判；注释写明「删不掉就是真问题，要看得见（R10）」 |
+| 🟢-3 | `session.go` 的复现命令 `"-coverprofile=sess.out"` 会把文件落到**仓库根**，且 `pre-commit` 检查 4 的判据 `^\.?(out\|p\|tmp\|cov\|cover\|profile)$` **不匹配 `sess.out`** → 拦不住；与 depth-tasks 里用 `$env:TEMP` 的写法自相矛盾 | 改成 `"-coverprofile=$env:TEMP\sess.out"`，并把「为什么必须落 TEMP」写进注释 |
+| 🟢-4 | 注释「本机实测多约 40s」与我自己的 A/B 数字（第二遍 63s / 总差 66.4s）矛盾——正是本需求 P-2 批评的那类未验证数字 | 改为「第二遍就是 63s（A/B 总差 66.4s）」并指向 summary §2.1 |
+| 🔵-1 | `check-depth.ps1` 头部「用法 / 退出码」未同步新参数与新语义 | 补 `-CoverageStdout` 用法；退出码 2 的含义写明含「自跑测试红」 |
+| 🔵-2 | 复用模式是「数据来源可能错位」的唯一残缝（概率极低） | 加一行防御：复用内容含 `^(FAIL\|--- FAIL)` → `exit 2`。验证：喂一份含 FAIL 的探针文件 → `exit=2` 且打印失败行 |
+| 🔵-3 | depth-tasks §四.1 的更正段把「根因是包级 `dynamicModelsCache`」写成观察，实为推断 | 按四态改为 **inference**，并补 provenance：`TestModelsCacheNotSharedAcrossHandlers`（`internal/server/handler_test.go`）钉住「每个 Handler 一份」；明确「没有变异复现证据」 |
+
+## 它提出但我判定不改的
+
+| 项 | 我的判据 |
+|---|---|
+| `frontend_ux_test.go` 的源码文本级断言（它归为 🟢 类） | 保留：行为级覆盖由 `TestAppJSUnknownBadgeAndNote` 承担，两者互补；文本级那条便宜且能抓「函数被删/改名」 |
+
+## 它无法验证的两项（我补齐了 1 项，另 1 项仍是未知）
+
+1. **改动前 128.4s 的 A/B 基线**：它禁改文件所以没复核 → 我在第 1 轮已实跑
+   （`git checkout -- scripts/` 后全量 128.4s vs 新脚本 62.0s），命令与输出见 summary §2.1。
+2. **浏览器真机 unknown 有值态观感**：仍未验（同 §四.1），归 B1。

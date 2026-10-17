@@ -23,15 +23,20 @@
 #   powershell -NoProfile -File scripts/check-depth.ps1          # 检查（CI / 提交前）
 #   powershell -NoProfile -File scripts/check-depth.ps1 -Update  # 抬棘轮（仅当指标确实变好）
 #   powershell -NoProfile -File scripts/check-depth.ps1 -Detail  # 打印各项明细
+#   powershell -NoProfile -File scripts/check-depth.ps1 -CoverageStdout <file>
+#       # 复用一份已有的 `go test ./... -cover` 输出（pre-commit 全量模式用），不再自跑测试
 #
 # 退出码：0 = 未回退；1 = 有指标回退；2 = 脚本自身失败
+#   （「自身失败」含两种情况：①-Update/-CoverageStdout 用法错误；②自跑 `go test -cover` 失败，
+#     即测试红 → 覆盖率数字不可信，不再给棘轮结论）
 
 param(
     [switch]$Update,
     [switch]$Detail,
     # 复用的 `go test ./... -cover` 输出文件。`scripts/pre-commit.ps1` 全量模式已经跑过一次
-    # 全量测试时传入，避免同一个门禁里把全量测试跑两遍（本机实测省约 40s，F-902）。
-    # 传了就**不再自己起测试**：此时「测试是否绿」由调用方担保（调用方红了根本不会走到这里）。
+    # 全量测试时传入，避免同一个门禁里把全量测试跑两遍（A/B 实测总差 66.4s，F-902）。
+    # 传了就**不再自己起测试**：此时「测试是否绿」由调用方担保（调用方红了根本不会走到这里，
+    # 且下方仍会防御性地扫一遍 FAIL 行）。
     # CI 的 gate job 不传本参数 → 行为与改动前一致：自己跑一次。
     [string]$CoverageStdout = ''
 )
@@ -161,6 +166,14 @@ if ($CoverageStdout -ne '') {
     }
     $coverOut = @(Get-Content -LiteralPath $CoverageStdout)
     $coverageSource = "复用 $CoverageStdout（未重复跑测试）"
+    # 防御：复用进来的内容若含测试失败行（调用方担保失效 / 传错文件），按失败处理。
+    # 这是「覆盖率数据来源错位」唯一可能的残缝（独立复审 🔵-2），成本一行，值得钉。
+    $failLines = @($coverOut | Where-Object { $_ -match '^(FAIL|--- FAIL)' })
+    if ($failLines.Count -gt 0) {
+        Write-Host ("错误：-CoverageStdout 的内容含测试失败行（$($failLines.Count) 行），覆盖率不可信：" + $CoverageStdout) -ForegroundColor Red
+        $failLines | Select-Object -First 20 | ForEach-Object { Write-Host ("    " + $_) -ForegroundColor DarkGray }
+        exit 2
+    }
 } else {
     $coverOut = @(& $goExe test ./... -cover -count=1 2>&1)
     if ($LASTEXITCODE -ne 0) {

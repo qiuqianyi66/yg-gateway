@@ -341,14 +341,18 @@ if ($LASTEXITCODE -ne 0) {
 Write-Section '检查 6/7：go test ./...（-cover，输出复用给检查 7）'
 # 只跑**一次**全量测试：这份 `-cover` 输出既是「测试是否绿」的判据，也是检查 7 深度棘轮
 # 的覆盖率来源（先落 $env:TEMP，再传给 check-depth.ps1）。
-# 不加 -cover 会让 check-depth 内部又跑一遍全量 —— 同一个门禁里跑两遍，本机实测多约 40s
-# （REQ-precommit-single-test-and-doc-debt-2026-10-17 F-902）。
+# 不加 -cover 会让 check-depth 内部又跑一遍全量 —— 同一个门禁里跑两遍，本机实测第二遍就是
+# 63s（A/B 总差 66.4s，见 .harness/changes/2026-10-17-precommit-single-test-and-doc-debt/
+# summary.md §2.1）。REQ-precommit-single-test-and-doc-debt-2026-10-17 F-902。
+$coverTmpPath = ''   # 临时文件路径：**独立变量**，因为红路径会把 $coverFile 置空（见检查 7 的清理）
 $coverFile = ''
 if ($Fast) {
     Write-Host '  [SKIP] -Fast 已跳过测试（提交前请至少跑一次全量；此时 check-depth 会自跑一次带覆盖率的）' -ForegroundColor Yellow
 } else {
-    # 路径落 $env:TEMP：仓库根不该出现 cov/cover/profile 这类字面名垃圾文件（L-3）
-    $coverFile = Join-Path $env:TEMP ("yg-precommit-cover-{0}.txt" -f $PID)
+    # 路径落 $env:TEMP：仓库根不该出现 cov/cover/profile 这类字面名垃圾文件（L-3）。
+    # 文件名用 GUID 而不是 $PID：PID 会被系统复用，残留文件可能被下一次运行当成自己的。
+    $coverTmpPath = Join-Path $env:TEMP ("yg-precommit-cover-{0}.txt" -f [guid]::NewGuid().ToString('N'))
+    $coverFile = $coverTmpPath
     $testOut = @(& $goExe test ./... -cover -count=1 2>&1)
     $testOk = ($LASTEXITCODE -eq 0)
     $testOut | Set-Content -LiteralPath $coverFile -Encoding UTF8
@@ -390,8 +394,12 @@ if ($LASTEXITCODE -ne 0) {
 } else {
     Write-Pass '深度棘轮未回退'
 }
-if ($coverFile -ne '' -and (Test-Path -LiteralPath $coverFile)) {
-    Remove-Item -LiteralPath $coverFile -Force -ErrorAction SilentlyContinue
+# 清理临时覆盖率文件：判据用 $coverTmpPath（**不管测试红绿都删**）。
+# 早期版本用 `$coverFile -ne ''` 作判据，而红路径会把 $coverFile 置空 → 临时文件泄漏
+# （独立复审 🟢-1 实证：%TEMP% 里残留过一份含 4 行 FAIL 的 cover 文件）。
+# 不加 -ErrorAction SilentlyContinue：删不掉就是真问题，要看得见（R10）；存在性用 Test-Path 判。
+if ($coverTmpPath -ne '' -and (Test-Path -LiteralPath $coverTmpPath)) {
+    Remove-Item -LiteralPath $coverTmpPath -Force
 }
 
 # ---------------------------------------------------------------------------
