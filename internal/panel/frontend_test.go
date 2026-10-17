@@ -452,6 +452,67 @@ process.stdout.write(JSON.stringify({
 	}
 }
 
+// TestAppJSPgModelLabel Playground 模型下拉的选项文案（pgModelLabel + pgModelOptions）：
+// ①未知倍率显式标「倍率未知」而非"—"（AGENTS.md 四态：没覆盖 = 未知，不是没有）；
+// ②同名模型（cn:hy4-preview 与 cn:hy4-preview-f 都叫 "Hy4 preview"）在选项文案里
+// 追加完整 id 区分；独名模型不加后缀。
+//
+// 牙齿：把 pgModelLabel 的 '倍率未知' 改回 '—' → labels 断言 FAIL；
+// 把 pgModelOptions 的同名检测删掉 → hy4-preview-f 选项失去 id 后缀 → dupHy4F FAIL。
+func TestAppJSPgModelLabel(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node not installed; playground model label test skipped")
+	}
+	script := `const fs = require('fs');
+const vm = require('vm');
+const src = fs.readFileSync(process.argv[2], 'utf8');
+const escStart = src.indexOf('function esc(');
+const escEnd = src.indexOf('function ago(');
+const pgStart = src.indexOf('function pgModelOptions');
+const pgEnd = src.indexOf('async function pgLoadModels');
+if ([escStart, escEnd, pgStart, pgEnd].some(v => v < 0)) throw new Error('playground model helpers not found');
+const ctx = { String, Array, Object, RegExp, Map, Number, parseFloat };
+vm.createContext(ctx);
+vm.runInContext(
+  src.slice(escStart, escEnd) + src.slice(pgStart, pgEnd) +
+  '\nthis.pgModelLabel = pgModelLabel; this.pgModelOptions = pgModelOptions;', ctx);
+const models = [
+  { id: 'cn:hy4-preview', name: 'Hy4 preview', credits: 'x0.29' },
+  { id: 'cn:glm-5.3-flash', name: 'GLM-5.3-Flash', credits: 'x0.06' },
+  { id: 'cn:hy4-preview-f', name: 'Hy4 preview', credits: '' },
+  { id: 'cn:auto', name: 'Auto', credits: '' },
+  { id: 'cn:glm-5.3', name: 'GLM-5.3', credits: 'x0.79' },
+];
+ctx.pgModels = models;
+const opts = ctx.pgModelOptions();
+process.stdout.write(JSON.stringify({
+  labels: models.map(m => ctx.pgModelLabel(m)),
+  dupHy4: opts.includes('>Hy4 preview · x0.29 (cn:hy4-preview)</option>'),
+  dupHy4F: opts.includes('>Hy4 preview · 倍率未知 (cn:hy4-preview-f)</option>'),
+  uniqueNoSuffix: opts.includes('>GLM-5.3-Flash · x0.06</option>') && !opts.includes('GLM-5.3-Flash · x0.06 (cn:glm-5.3-flash)'),
+  autoUnknown: opts.includes('>Auto · 倍率未知</option>'),
+  selectedFirst: opts.includes('value="cn:hy4-preview" selected'),
+}));`
+	f, err := os.CreateTemp(t.TempDir(), "pg-model-label-*.cjs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString(script); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	out, err := exec.Command(node, f.Name(), "app.js").CombinedOutput()
+	if err != nil {
+		t.Fatalf("playground model label node test failed: %v\n%s", err, out)
+	}
+	const want = `{"labels":["Hy4 preview · x0.29","GLM-5.3-Flash · x0.06","Hy4 preview · 倍率未知","Auto · 倍率未知","GLM-5.3 · x0.79"],` +
+		`"dupHy4":true,"dupHy4F":true,"uniqueNoSuffix":true,"autoUnknown":true,"selectedFirst":true}`
+	if strings.TrimSpace(string(out)) != want {
+		t.Fatalf("playground model label=%s\nwant %s", out, want)
+	}
+}
+
 // TestAppJSUnknownBadgeAndNote unknown 的两处展示（账号卡片徽章 + 账号池提示行）必须有牙齿。
 //
 // 为什么：这两段拼接此前内联在 ~80 行渲染函数与 overview 渲染里，Go 侧测试对 app.js

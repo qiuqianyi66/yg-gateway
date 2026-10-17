@@ -4471,25 +4471,25 @@ function pgModelOptions() {
   // 110~133 积分/M）。找不到时保持第一个（不破坏上游目录顺序语义）。
   const pref = pgModels.find(m => /deepseek-v4\.1-flash$/i.test(m.id)) || pgModels[0];
   const prefId = pref && pref.id;
+  // 同名区分：跨域/同域变体共用展示名（实测 cn:hy4-preview 与 cn:hy4-preview-f
+  // 都叫 "Hy4 preview"）。同名时给选项追加完整 id，否则下拉出现两条无法分辨的项。
   return pgModels.map(m => {
     const tip = m.promo_note || m.description || '';
+    const dup = pgModels.some(o => o !== m && String(o.name || o.id || '') === String(m.name || m.id || '')) ? m.id : '';
     return '<option value="' + esc(m.id) + '"' + (m.id === prefId ? ' selected' : '') +
       (tip ? ' title="' + esc(tip) + '"' : '') + '>' +
-      esc(pgModelLabel(m)) + '</option>';
+      esc(pgModelLabel(m) + (dup ? ' (' + dup + ')' : '')) + '</option>';
   }).join('');
 }
 
-/* pgModelLabel Playground 模型下拉的选项文案（对齐 WorkBuddy 模型选择器：
-   「模型名 · 倍率 · 免费/优惠标签」）。倍率显示当前生效价（promo_credits，
-   WorkBuddy 客户端显示的正是生效价），无促销时显示牌价 credits；免费
-   （限时免费 factor=0 或牌价为 0）标「免费」，其余促销标签（夜间折扣 /
-   错峰使用等）原样透出；无促销但支持图片的模型标「视觉」，一眼挑出
-   能传图的模型。 */
+/* pgModelLabel Playground 模型下拉选项文案（对齐 WorkBuddy「模型名 · 倍率 · 标签」）：倍率=生效价
+   （promo_credits，无促销取牌价 credits），标签照旧；倍率缺失=未知（AGENTS.md 四态）标「倍率未知」，
+   同名区分后缀（完整 id）由 pgModelOptions 拼在末尾。 */
 function pgModelLabel(m) {
   const parts = [String(m.name || m.id || '')];
   const eff = (m.promo_credits != null && m.promo_credits !== '') ? m.promo_credits : m.credits;
   const rate = String(eff || '').trim();
-  parts.push(rate ? rate : '—');
+  parts.push(rate ? rate : '倍率未知');
   const factor = m.promo_factor == null ? null : Number(m.promo_factor);
   const creditsNum = parseFloat(String(m.credits || '').replace(/[^\d.]/g, ''));
   const isFree = factor === 0 || (Number.isFinite(creditsNum) && creditsNum === 0);
