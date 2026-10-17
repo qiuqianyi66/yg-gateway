@@ -68,4 +68,10 @@
   健康 4/4、冒烟三条全过。线上实测（Python 干净 UTF-8）：`cn:hy4-preview → "Hy4 preview ×0.29"`、
   `cn:space-bunny → "Space-Bunny ×0.08"`；无倍率模型保持裸名（`cn:auto → "Auto"`、
   `cn:hy4-preview-f → "Hy4 preview"`，= 倍率未知，不加后缀不编造）。
+- **客户端仍裸名的根因（已定位，非网关问题）**：deepseek HARNESS（DSH Desktop）的
+  「YG Gateway」provider 是**自定义模型目录**——显示名称是客户端本地存的一份清单
+  （Base URL 正确：`http://127.0.0.1:7863/v1`）。「获取可用模型」只刷新模型 ID 列表，
+  **不覆盖已自定义的显示名称**；旧同步的显示名是换版前的裸名。解法在客户端侧：
+  清空自定义目录条目后重新「获取可用模型」，显示名称会从网关当前 name（带 ×N）重建。
+  网关侧无需再改。
 - 回滚：`git revert <本提交>`。回滚后 `/v1/models` name 恢复裸名。
