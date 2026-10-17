@@ -632,6 +632,29 @@ function accountsSig(list) {
     (s.model_costs || []).map(c => c.model + ':' + c.cost_per_1k).join(','),
   ].join('\u0001')).join('\u0002');
 }
+/* unkBadge 未知成本徽章的纯函数形态（AGENTS.md「Unknown 消解纪律」）。
+ * 空 / 字段缺失 → ''（不占位，也不显示"0 未知"）；有值 → 一枚可悬停的 warn 徽章，
+ * title 里逐条给 question + requires（需要什么才能消解）。
+ * 为什么单独抽出来：这段拼接此前内联在 ~80 行的 renderAccountsUnsafe 里，只能靠人眼看；
+ * 抽成纯函数后由 frontend_test.go TestAppJSUnknownBadgeAndNote 直接断言（含转义）。
+ * 禁止用 `!!unk` 之类的真假判断替代 length —— 未知不是"没有"（四态纪律）。 */
+function unkBadge(unknowns) {
+  const unk = unknowns || [];
+  if (!unk.length) return '';
+  const tip = esc(unk.map(u => u.question + '\n需要：' + u.requires).join('\n\n'));
+  return '<span class="tag warn" title="' + tip + '" style="cursor:help">' + unk.length + ' 未知成本</span> ';
+}
+
+/* unkNoteText 账号池提示行里的未知成本一句话（纯函数）。
+ * 0 条 → ''（不显示）；>0 → 「N 个 (账号,模型) 成本未知，悬停账号卡片查看明细」。
+ * 明细在账号卡片悬停里，这里只给入口，不复述。 */
+function unkNoteText(accounts) {
+  // s 可能是 null（接口数组里混进 null 时 reduce 会读到 undefined.unknowns）。
+  // 这里恒返回字符串，绝不抛错：它是每轮刷新都会跑的旁支路径，抛错会连带整页不刷新。
+  const n = (accounts || []).reduce((a, s) => a + (((s && s.unknowns) || []).length), 0);
+  return n ? n + ' 个 (账号,模型) 成本未知，悬停账号卡片查看明细' : '';
+}
+
 function renderAccounts(list) {
   const tb = $('accBody');
   // 用户正在表内交互（聚焦/选中）时跳过本轮：重建会打断选择与输入。
@@ -682,9 +705,8 @@ function renderAccountsUnsafe(list) {
     // unknown 成本徽章（AGENTS.md「Unknown 消解纪律」）：该账号还有哪些 (账号,模型)
     // 的实际成本没摸清。正常运营下多为 0——有值即提示"这条未知还欠一次真实观测"，
     // 悬停看 question + requires（需要什么才能消解）。数据来自 overview→accounts→unknowns。
-    const unk = s.unknowns || [];
-    const unkTip = unk.length ? esc(unk.map(u => u.question + '\n需要：' + u.requires).join('\n\n')) : '';
-    const unkTag = unk.length ? '<span class="tag warn" title="' + unkTip + '" style="cursor:help">' + unk.length + ' 未知成本</span> ' : '';
+    // 拼接逻辑抽在 unkBadge()（纯函数，可被 JS 级测试直接调用）。
+    const unkTag = unkBadge(s.unknowns);
     return '<div class="acc-card ' + cls + '" title="uid: ' + esc(s.uid) + '">' +
       '<div class="acc-card-head">' +
         '<div class="acc-avatar">' + esc(avatar) + '</div>' +
@@ -818,8 +840,9 @@ async function loadOverview(quiet) {
     // 有 (账号,模型) 成本没摸清时，这里给一句话入口，明细在账号卡片悬停里）。
     const accNotes = [];
     if (d.in_flight_full) accNotes.push(d.in_flight_full + ' 个账号在途占满');
-    const unkTotal = (d.accounts || []).reduce((a, s) => a + ((s.unknowns || []).length), 0);
-    if (unkTotal) accNotes.push(unkTotal + ' 个 (账号,模型) 成本未知，悬停账号卡片查看明细');
+    // 未知成本入口（拼接在 unkNoteText()，纯函数可测：frontend_test.go）
+    const unkNote = unkNoteText(d.accounts);
+    if (unkNote) accNotes.push(unkNote);
     $('accNote').textContent = accNotes.join(' · ');
     const up = Math.floor(d.uptime_sec);
     $('subMeta').textContent = '运行 ' + (up >= 86400 ? Math.floor(up / 86400) + ' 天 ' : '') + Math.floor(up % 86400 / 3600) + ' 时 ' + Math.floor(up % 3600 / 60) + ' 分';

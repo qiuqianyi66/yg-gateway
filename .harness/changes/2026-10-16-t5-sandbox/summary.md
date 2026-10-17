@@ -150,6 +150,12 @@ $ Test-Path .\auths → False               ← 探针残留已被守卫清干�
 2. **`dynamicModelsCache` 仍是包级全局**：本轮只做到「依赖它的用例必须首行重置」，
    新增用例忘了调 `resetDynamicModelsCache()` 仍会复现 A 类污染。**候选**：把缓存搬进
    `Handler` 字段——属生产结构改动，需单独评估（会影响 `cachedModelsSnapshot()` 的调用方）。
+
+   > **更正（2026-10-17 实测）**：本条**已不成立**——`git grep -n 'dynamicModelsCache' -- '*.go'`
+   > 全仓零命中，缓存现在是 **`Handler` 实例字段** `modelsCache modelsCache`
+   > （`internal/server/handler.go`，注释明写「实例字段而非包级全局」）。「候选」已落地；
+   > 同批 `go test ./internal/server/ -count=3` 实测 `ok 24.455s`（clean，见
+   > `2026-10-16-depth-tasks-4-6` §四.1 的更正）。**不要再按本条去搬缓存。**
 3. **`internal/server` 的 TestMain 与沙箱在两处**（`handler_test.go` 调 `main_test.go` 的
    `runTestSandbox`），两份沙箱文件是**手工同步**的副本（生成脚本在 `%TEMP%`，未入库）。
    两份文件一致性目前靠「逐行 diff 恰好 4 行差异」的人工核对。
