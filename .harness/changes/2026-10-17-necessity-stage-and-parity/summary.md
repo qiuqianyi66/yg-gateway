@@ -13,8 +13,8 @@
 | 1 | `.harness/rules/开发流程规范.md` | 新增「零、阶段 0：必要性分析」：四问（真实问题 / 不做会怎样 / 现状是否已变 / 更便宜手段）+ 四结论（做 / 不做 / 等条件 / 降级做）+ 三条硬约束；十阶段表加阶段 0 行；使用方式加 🔴 条目；完成标准加一条 | 本变更自己按它写（`REQ-...2026-10-17.md` 有「必要性」段） |
 | 2 | `scripts/check-req-necessity.ps1` | **新增**：本次新增的 `docs/prd/REQ-*.md` 必须含 `^#{2,6}\s*.*必要性`；本地查 staged 新增 + 未跟踪，CI 查 `-Base` 的新增；**只查新增** | F-1001 |
 | 3 | `scripts/pre-commit.ps1` | 新增「检查 8/8」接入上述脚本（`-Base` 透传）；原 1–7 的「/7」编号改「/8」 | F-1002 |
-| 4 | `scripts/check-depth.ps1` | 新增度量 5「前端体量」：扫 `internal/**/*.js`（排除 node_modules、口径 = 非空行），输出「最大前端文件行数」，加入棘轮对比键（越大越差） | F-1003 |
-| 5 | `.harness/depth-baseline.json` | 新增 `maxFrontendLines: 4378`（其余四项不动） | F-1003 |
+| 4 | `scripts/check-depth.ps1` | 新增度量 5「前端体量」：扫 `internal/**/*.{js,html,css}`（排除 node_modules、口径 = 非空行），输出「最大前端文件行数」+「>1000 行前端文件数」，两个指标都进棘轮（越大越差）；`-Update` 改为**保留既有 `_comment`** | F-1003 |
+| 5 | `.harness/depth-baseline.json` | 新增 `maxFrontendLines: 4378` + `oversizeFrontendFiles: 2`（其余四项不动） | F-1003 |
 | 6 | `internal/pool/sandbox_parity_test.go` | **新增** `TestSandboxFilesInSync`：两份沙箱文件归一化后逐行比对；用 `runtime.Caller` 定位源目录（沙箱已 chdir，不能用相对路径） | F-1004 |
 | 7 | `docs/PLAN-necessity-review-2026-10-17.md` | **新增**：14 项必要性裁定（做 3 / 降级 2 / 不做 6 / 等条件 3），含"这次分析省掉了什么"的复算 | 就是它本身 |
 
@@ -99,7 +99,30 @@ $ 往 internal/pool/main_test.go 加一行 var _ = "teeth"
 
 1. **必要性段只校验"有没有"，不校验"写得好不好"**：内容质量仍靠评审。这是刻意的（D-1）。
 2. **存量 7 份 REQ 没有必要性段**：不追溯（D-2）。它们的历史判断已由 `PLAN-necessity-review` 补裁定。
-3. **`maxFrontendLines` 只覆盖 `internal/**/*.js`**：`index.html` 与 CSS 未纳入（当前都远小于 app.js，
-   且 embed 的 CSS 就在 html 里）。重评条件：任一前端文件超过 1000 行。
+3. ~~**`maxFrontendLines` 只覆盖 `internal/**/*.js`**~~ —— **已被第 2 轮复审推翻并修正**：扫描面现为
+   `*.js/*.html/*.css`，另加 `oversizeFrontendFiles`（>1000 行计数，基线 2）兜住"第二名变胖"。
+   仍不覆盖的：`internal` 之外的静态资源（`cmd` 无前端产物）、`node_modules`（不入库）。
 4. **A6/A7/D2/D3/生产换版仍是"等条件"**：条件已写进 `PLAN-necessity-review-2026-10-17.md` 每项的
    「重评条件」，不要再无条件下重复立项。
+
+## 七、第 2 轮：独立只读复审判 FAIL（3 🟡），已全部修完
+
+> 复审者：只读子代理（禁改文件，场景测试都在 `%TEMP%` 一次性 clone 里做）。
+> 结论 **FAIL（0 🔴 / 3 🟡 / 5 🟢 / 6 🔵）**，与我第 1 轮自评的 PASS 冲突 —— 按规则以复审为准。
+> 教训已升级为 **LESSONS L-16** + `开发流程规范.md` §四「L2 及以上必须独立复审」。
+
+| 级别 | 复审发现 | 我的修法 | 复核证据 |
+|---|---|---|---|
+| 🟡-1 | `check-req-necessity.ps1` 的 4 处 git 调用**从不判 `$LASTEXITCODE`**，stderr 还被 `2>$null` 丢掉 → `-Base` 写错时以 exit 1 退出，pre-commit 归因为「缺必要性段」（误导） | 全部 git 调用收敛到 `Invoke-Git`：带 `2>&1`、判退出码、失败即 `exit 2` 并打印「这是脚本自身失败，不是没有新增文件」 | `-Base 'HEAD:docs/prd'` → **exit 2** + 明确报错（修复前 exit 1 且被误归因） |
+| 🟡-2 | **`core.quotePath` 默认 true**：中文名 REQ 被输出成 `"docs/prd/REQ-\344\270\255...md"`，正则不匹配 → **CI 静默跳过**。本机没暴露只是因为用户级 `.gitconfig` 设了 `false` | 三处 git 调用一律加 `-c core.quotePath=false` | 临时把本仓 `core.quotePath=true`（模拟 CI）+ 造中文名缺段 REQ → **exit 1**（修复前 exit 0）；探针已删、config 已还原 |
+| 🟡-3 | 前端棘轮只扫 `*.js`，`index.html`（**1755 非空行**）不在度量内，而 summary §六.3 自设的「任一前端文件超过 1000 行」重评条件**落地当天就已失效** | 扫描面扩到 `*.js/*.html/*.css`；新增 `oversizeFrontendFiles`（>1000 行计数，基线 **2**）——只盯最大值会遮住"第二名变胖" | `check-depth.ps1` 输出 `最大前端文件行数 4378 (app.js)` / `>1000 行前端文件数 2`，exit 0 |
+| 🟢 | `-Update` 会覆写 baseline 的 `_comment`（本轮写的说明会静默消失） | `-Update` 保留既有 `_comment`（从文件读，不从 `$baseline.metrics` 上取——那是我第一次修错的地方） | 手写带说明的 baseline → 真跑 `-Update` → `_comment` 原文保留 |
+| 🟢 | 规范 §0.2 说「不做」落到 `PLAN-open-items` §4，本轮却落在新文件 | §0.2 改成「`PLAN-open-items`/`PLAN-necessity-review` 两者之一，都要写理由与重评条件」 | — |
+| 🟢 | 正则只认 `##` 及更深，`# 必要性`（h1）反被判缺失；代码围栏内的示例会被判通过 | 正则放宽到 `^#{1,6}`，并跳过 ``` 围栏内的行 | — |
+| 🟢/🔵 | 存量 REQ 写「7 份」实为 **11 份**；备份写「41 份 / 421.7MB」与 PLAN 的「42 份 / 431.5MB」口径打架 | 已更正并**带口径**：42 份 `.bak`（含 `config.json.bak`）= 421.7 MB；把 `yg-gateway.exe.tmp` 也算上 = 43 份 / 431.5 MB | 三条命令分别统计 |
+| 🔵 | 「十阶段」措辞未跟进（现在是阶段 0 + 十个）；`pre-commit.ps1` 头部约束清单缺第 8 项；度量 5 只扫 `internal` 而度量 1 扫 `internal, cmd` | 措辞统一为「阶段 0 + 十阶段」；头部清单补第 6 条；度量 5 保持只扫 `internal`（`cmd` 无前端产物，差异是设计而非疏漏，已在注释写明） | — |
+| 🔵 | PS 5.1 + 遗留 ANSI 代码页机器上，无 BOM UTF-8 会被 `Get-Content` 误解码 → 假红（复审本机 ACP=65001 未复现） | `Get-Content` 一律带 `-Encoding UTF8`；该分支仍属**待确认**（未在 ACP=936 机器上实测） | — |
+
+**复审明确通过、不需改的部分**（记录备查）：棘轮方向（缺字段 → `[int]$null=0` → 一律收紧）、
+`-Update` 会写入新字段、`TestSandboxFilesInSync` 实跑 PASS、`runtime.Caller` 在 Linux 下成立、
+编号改动 8 处全对、add-后-删盘场景从 index 读（exit 1，正确）、bogus base → 2、非 REQ/非 md → 0。

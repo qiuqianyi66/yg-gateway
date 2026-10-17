@@ -1,7 +1,7 @@
 # pre-commit.ps1 — 提交前检查：把 .harness/rules/ 里的规范变成**退出码**
 #
 # 为什么需要：规范写在文档里没人看（编码规范.md 第八节那 26 项自检清单，靠人记得住
-# 才有效）；只有变成退出码才有约束力。本脚本把四类约束机器化：
+# 才有效）；只有变成退出码才有约束力。本脚本把下列约束机器化：
 #
 #   1. 格式零容忍    本次改动涉及的 .go 文件必须 gofmt 干净
 #   2. R10 错误处理  diff 里**新增**的静默忽略点必须带解释注释；`_ = <标识符>` 一律拒绝
@@ -9,6 +9,8 @@
 #   3. 门禁四件套    go build / go vet / go test
 #   4. 治理门禁      check-boundaries.ps1（依赖方向）+ check-depth.ps1（深度棘轮）
 #   5. PS 地形      引号陷阱（L-1）+ 字面名垃圾文件（L-3）
+#   6. 阶段 0       新增的 docs/prd/REQ-*.md 必须含「必要性」段（check-req-necessity.ps1，见
+#                    .harness/rules/开发流程规范.md「零、阶段 0」）
 #
 # 用法：
 #   powershell -NoProfile -File scripts/pre-commit.ps1           # 全量（提交前必跑）

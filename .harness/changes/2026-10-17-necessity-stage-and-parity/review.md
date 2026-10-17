@@ -1,48 +1,85 @@
 # 评审记录 — 阶段 0 必要性入规范 + 前端体量入棘轮 + 沙箱副本机器核对
 
 - 日期：2026-10-17
-- 轮次：第 1 轮（自评审，六维 + 实证）
-- 对象：`.harness/changes/2026-10-17-necessity-stage-and-parity/summary.md` 所列 7 个文件
+- 对象：`.harness/changes/2026-10-17-necessity-stage-and-parity/summary.md` 所列文件
+- **轮次：3 轮**（第 1 轮自评 PASS → 第 2 轮独立复审判 **FAIL** → 第 3 轮修复后复跑）
 
-## 结论
+## 当前结论（以最后一轮为准）
 
-**PASS**（无 🔴 / 🟡；🟢 3 条、🔵 2 条）
+**PASS**（第 3 轮；3 条 🟡 已全部闭环，见 §三）
 
-## 一、六维结论
+> ⚠️ **本文件按轮次分段，不覆盖历史**：第 1 轮我给的 PASS **被第 2 轮独立复议推翻**，
+> 那条记录保留在 §二（它就是教训本体），不许删。
+> 规则来源：`开发流程规范.md` §四「L2 及以上必须有一次独立只读复审；自评审不能作为唯一凭据」，
+> 以及 `.harness/LESSONS.md` **L-16**。
 
-| 维度 | 结论 | 依据 |
+---
+
+## 一、第 1 轮：自评审（六维）— 结论 PASS（**已被推翻**）
+
+| 维度 | 当时的结论 | 依据 |
 |---|---|---|
-| 正确性 | 通过 | ①`check-req-necessity.ps1` 三种输入路径都实测过：本地（含未跟踪的探针 → 红）、CI 形态（`-Base` 走 `--diff-filter=A`）、空输入（→ 绿并提示跳过）；②沙箱比对用 `runtime.Caller` 而不是 `os.Getwd`（第一版用相对路径直接红——沙箱已 chdir，这是隔离生效的证据）；③PowerShell 里 `Get-Content`/`git show :path` 两条读取分支均可用 |
-| 门禁退化风险 | 通过 | 新检查是**加法**：脚本自身 `exit 2` 时 pre-commit 同样当失败（fail-closed）；`-Base` 透传保证 CI 与本地同判据；`maxFrontendLines` 缺字段时 `[int]$null = 0` → 任何 JS 都判回退（收紧，不是放水） |
-| 红线 | 通过 | R10：脚本里没有 `-ErrorAction SilentlyContinue`、没有 `_ =` 形态；只读文件与 git 元数据，不写仓库根、不碰 `auths/`。L-15：必要性文档里每条"不做"都给了可复现命令（`git grep` 穷尽 `.go`、`go test -count=3` 实跑、`Get-PSDrive` 实查、`Compare-Object` 实测行数） |
-| 一致性 | 通过 | 规范的判据（`^#{2,6}\s*.*必要性`）↔ 脚本实现 ↔ REQ 的 F-1001 三处措辞一致；十阶段表新增的阶段 0 与「使用方式」的 🔴 条目互相指向 |
-| 可维护性 | 通过 | 新指标注释写清"为什么不塞进 `maxFileLines`"（那是放宽 `.go` 棘轮）；沙箱测试顶部列出四条白名单差异及"改它们要同步改本测试" |
-| 架构合规 | 通过 | 无新包、无新依赖、无依赖方向变化（`check-boundaries.ps1` 实测通过）；新测试在原包内 |
+| 正确性 | 通过 | 三种输入路径手测；沙箱比对用 `runtime.Caller`（第一版用相对路径直接红，因为 `TestMain` 已 chdir） |
+| 门禁退化 | 通过 | 新检查是加法；`exit 2` 也算失败（fail-closed）；`-Base` 透传 |
+| 红线 | 通过 | 无 `SilentlyContinue`、只读文件、不写仓库根 |
+| 一致性 | 通过 | 正则 ↔ 脚本 ↔ REQ 三处措辞一致 |
+| 可维护性 | 通过 | 注释写清「为什么不塞进 `maxFileLines`」 |
+| 架构合规 | 通过 | 无新包/新依赖/方向变化 |
 
-## 二、问题清单
+**这轮为什么不够**：它检查的是"我有没有按自己的设计做到"，而三条真问题都藏在
+「我的设计在别的环境里还成不成立」——本机的 `.gitconfig`（`quotePath=false`）恰好把缺陷盖住了。
 
-| 级别 | 位置 | 问题 | 处置 |
+## 二、第 2 轮：独立只读复审（子代理）— 结论 **FAIL**（0 🔴 / 3 🟡 / 5 🟢 / 6 🔵）
+
+### 三条 🟡（必须修，全部已修）
+
+| # | 问题 | 复审证据 |
+|---|---|---|
+| 🟡-1 | 脚本 4 处 git 调用从不判 `$LASTEXITCODE`，`2>$null` 丢 stderr → `-Base` 写错时 exit 1，被 pre-commit 误归因为「缺必要性段」 | `-Base 'HEAD:docs/prd'` 实测 |
+| 🟡-2 | `core.quotePath` 默认 true → 中文名 REQ 输出成 `"…\344\270\255…"`，正则不匹配 → **CI 静默跳过**；本机绿来自用户级 gitconfig 巧合 | 临时 `quotePath=true` 复现：修复前 exit 0（静默放过） |
+| 🟡-3 | 前端棘轮只扫 `*.js`，`index.html`（1755 行）漏在门外；且自设的「任一前端文件 >1000 行」重评条件落地当天已失效 | `index.html` 实测 1755 非空行 |
+
+### 复审通过的部分（记录备查）
+
+棘轮方向正确（缺字段 → `[int]$null=0` → 一律收紧）；`-Update` 会写入新字段；
+`TestSandboxFilesInSync` 实跑 PASS（归一化 255 vs 252，丢 TestMain 3 行后逐行相等）；
+`runtime.Caller` 在 Linux `go test ./...` 下成立；8 处编号全对；add-后-删盘 → exit 1（从 index 读，正确）；
+bogus base → 2；非 REQ/非 md → 0；场景 S2–S6 全部符合设计。
+
+### 文档数字复核不一致（已更正）
+
+存量 REQ「7 份」实为 **11** 份（12 份里只有本轮新增那份有该段）；备份「41 份 / 421.7 MB」与
+PLAN 的「42 份 / 431.5 MB」是**两种口径**（仅 `.bak` = 42 份 / 421.7 MB；加 `yg-gateway.exe.tmp`
+= 43 份 / 431.5 MB），已按口径写法更正。
+
+## 三、第 3 轮：修复后复核（本机实跑）
+
+| 修法 | 复核命令与结果 |
+|---|---|
+| git 调用收敛到 `Invoke-Git`（`2>&1` + 判退出码 + 失败 `exit 2`） | `-Base 'HEAD:docs/prd'` → **exit 2**，打印「这是脚本自身失败，不是没有新增文件」 |
+| 三处调用加 `-c core.quotePath=false` | 临时 `core.quotePath=true` + 中文名缺段 REQ → **exit 1**（修复前 0）；探针已删、config 已还原 |
+| 前端扫描面扩到 js/html/css + 新增 `oversizeFrontendFiles`（基线 2） | `check-depth.ps1` → `最大前端文件行数 4378 (app.js)` / `>1000 行前端文件数 2`，`exit 0`；app.js 加一行 → `REGRESSED: 4378 → 4379` |
+| `-Update` 保留 `_comment`（从文件读，不从 `$baseline.metrics` 取） | 手写带说明的 baseline → 真跑 `-Update` → `_comment` 原文保留 |
+| 正则放宽到 `^#{1,6}` + 跳过 ``` 围栏；`Get-Content -Encoding UTF8` | 缺段探针 → exit 1；有段 → exit 0 |
+| 措辞/清单/数字 | 「阶段 0 + 十阶段」统一；pre-commit 头部补第 6 条约束；`_comment` 口径写清 |
+
+**门禁**：`pre-commit.ps1` 全量 8 项 —— gofmt 干净 / R10 无新增静默忽略 / PS 地形无新增反斜杠双引号 /
+仓库根无垃圾文件 / build+vet 通过 / 20 包测试绿（`-cover` 复用）/ 边界通过 / 深度棘轮未回退 / 阶段 0 通过。
+
+## 四、问题清单（当前状态）
+
+| 级别 | 位置 | 问题 | 状态 |
 |---|---|---|---|
-| 🟢 | `internal/pool/sandbox_parity_test.go` | 归一化时**丢掉全部注释行**，所以"两份文件的注释分叉"不会被发现 | 刻意：注释里本来就有互指说明（措辞必须不同），且行为由代码行决定。记录即可 |
-| 🟢 | `scripts/check-depth.ps1` 度量 5 | 只扫 `internal/**/*.js`，`index.html`/CSS 不在内 | 当前二者远小于 app.js；重评条件写进 summary §六.3 |
-| 🟢 | `scripts/check-req-necessity.ps1` | 只校验"有没有这一段"，不管内容 | 这是 D-1 的刻意选择：判断质量靠评审，不靠正则 |
-| 🔵 | `scripts/check-req-necessity.ps1` | `git rev-parse --verify --quiet "$Base" ` 里多一个空格 | 无行为影响（PS 忽略） |
-| 🔵 | `scripts/pre-commit.ps1` | 检查 8/8 排在最后，`-Fast` 时前面已跑完昂贵的边界/深度 | 位置合理：静态合规检查放最后不影响语义，失败仍进 `$failures` |
+| 🟡 | `check-req-necessity.ps1` | git 失败无判据 / quotePath 静默跳过 | **已修**（§三） |
+| 🟡 | `check-depth.ps1` 度量 5 | 漏 `index.html` | **已修**（扫描面 + 计数指标） |
+| 🟢 | `sandbox_parity_test.go` | 归一化丢弃注释行，注释分叉不会被发现 | 刻意（注释含互指说明，行为由代码行决定） |
+| 🟢 | `check-req-necessity.ps1` | 只校验"有没有这一段"，不管内容质量 | 刻意（D-1） |
+| 🔵 | `check-depth.ps1` 度量 5 | 只扫 `internal`（度量 1 扫 `internal, cmd`） | `cmd` 无前端产物；已在注释写明这是设计而非疏漏 |
+| 🔵 | `review` 流程本身 | 自评审曾单独作为凭据 | 已升级 L-16 + 规范 §四 🔴 条款 |
 
-## 三、实证命令（本机实跑）
+## 五、未覆盖（未覆盖 = 未知，不是没有）
 
-```
-$ check-req-necessity.ps1                     → exit=0  [OK] 均含「必要性」段（1 个）
-$ 造 REQ-teeth-probe（缺段）→ 同上            → exit=1  [FAIL] 缺「必要性」段：docs/prd/…
-$ 删探针后复跑                                 → exit=0
-$ app.js 加一行 → check-depth.ps1             → exit=1  REGRESSED: maxFrontendLines 4378 → 4379
-$ 往 pool/main_test.go 加一行 → go test -run TestSandboxFilesInSync
-                                              → FAIL  两份沙箱文件行数不一致（归一化后 253 vs 252）
-$ pre-commit.ps1（全量 8 项）                  → exit=0  66.6s
-```
-
-## 四、未覆盖（未覆盖 = 未知）
-
-1. **CI 上首次真实运行**：`gate` job 里 `-Base origin/main` 的实际行为未在 GitHub Actions 上验证过
-   （本机模拟了同参数，但没有 runner 环境）。首个 push 的 CI 结果即验证。
-2. **浏览器级 E2E** 仍缺（与本变更无关，影响 D-5 的重评条件）。
+1. **CI 上首次真实运行**：本轮只在本机模拟了 `-Base origin/main` 与 `quotePath=true`，未在
+   GitHub Actions runner 上跑过。首个 push 的 CI 结果即验证。
+2. **PS 5.1 + 遗留 ANSI 代码页（ACP≠65001）**：加了 `-Encoding UTF8` 但未在 ACP=936 的机器上实测 → **待确认**。
+3. **浏览器级 E2E** 仍缺（与本变更无关，是 D-5「不拆 app.js」的重评条件）。

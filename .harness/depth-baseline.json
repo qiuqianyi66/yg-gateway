@@ -1,11 +1,12 @@
 {
-    "_comment":  "工程深度基线（scripts/check-depth.ps1 维护）。指标只许变好；-Update 抬高棘轮。maxFrontendLines 自 2026-10-17 起纳入（此前前端体量完全不在门禁内）。",
+    "_comment":  "工程深度基线（scripts/check-depth.ps1 维护）。指标只许变好；-Update 抬高棘轮。maxFrontendLines / oversizeFrontendFiles 自 2026-10-17 起纳入（此前前端体量完全不在门禁内，index.html 1755 行曾无人管）。",
     "updatedAt":  "2026-10-17",
     "metrics":  {
                     "maxFileLines":  2058,
                     "oversizeFiles":  5,
                     "oversizeFuncs":  7,
                     "minCoverage":  72.3,
-                    "maxFrontendLines":  4378
+                    "maxFrontendLines":  4378,
+                    "oversizeFrontendFiles":  2
                 }
 }
