@@ -338,19 +338,30 @@ if ($LASTEXITCODE -ne 0) {
 # ---------------------------------------------------------------------------
 # 检查 6：测试
 # ---------------------------------------------------------------------------
-Write-Section '检查 6/7：go test ./...'
+Write-Section '检查 6/7：go test ./...（-cover，输出复用给检查 7）'
+# 只跑**一次**全量测试：这份 `-cover` 输出既是「测试是否绿」的判据，也是检查 7 深度棘轮
+# 的覆盖率来源（先落 $env:TEMP，再传给 check-depth.ps1）。
+# 不加 -cover 会让 check-depth 内部又跑一遍全量 —— 同一个门禁里跑两遍，本机实测多约 40s
+# （REQ-precommit-single-test-and-doc-debt-2026-10-17 F-902）。
+$coverFile = ''
 if ($Fast) {
-    Write-Host '  [SKIP] -Fast 已跳过测试（提交前请至少跑一次全量）' -ForegroundColor Yellow
+    Write-Host '  [SKIP] -Fast 已跳过测试（提交前请至少跑一次全量；此时 check-depth 会自跑一次带覆盖率的）' -ForegroundColor Yellow
 } else {
-    $testOut = @(& $goExe test ./... -count=1 2>&1)
-    if ($LASTEXITCODE -ne 0) {
+    # 路径落 $env:TEMP：仓库根不该出现 cov/cover/profile 这类字面名垃圾文件（L-3）
+    $coverFile = Join-Path $env:TEMP ("yg-precommit-cover-{0}.txt" -f $PID)
+    $testOut = @(& $goExe test ./... -cover -count=1 2>&1)
+    $testOk = ($LASTEXITCODE -eq 0)
+    $testOut | Set-Content -LiteralPath $coverFile -Encoding UTF8
+    if (-not $testOk) {
         $testOut | Where-Object { $_ -match 'FAIL|panic|--- FAIL' } | Select-Object -First 40 |
             ForEach-Object { Write-Host ("    " + $_) -ForegroundColor DarkGray }
         Write-Bad 'go test ./... 有失败'
         Add-Failure 'go test ./... 有失败'
+        # 测试红：绝不把这份数字喂给深度棘轮（那等于用覆盖率掩盖测试失败）
+        $coverFile = ''
     } else {
         $okCount = @($testOut | Where-Object { $_ -match '^ok\s' }).Count
-        Write-Pass "go test ./... 全绿（$okCount 个包 ok）"
+        Write-Pass "go test ./... 全绿（$okCount 个包 ok；-cover 输出已复用给深度棘轮）"
     }
 }
 
@@ -367,13 +378,20 @@ if ($LASTEXITCODE -ne 0) {
     Write-Pass '依赖方向检查通过'
 }
 
-$dout = @(& $hostExe -NoProfile -File scripts/check-depth.ps1 2>&1)
+$depthArgs = @('-NoProfile', '-File', 'scripts/check-depth.ps1')
+if ($coverFile -ne '' -and (Test-Path -LiteralPath $coverFile)) {
+    $depthArgs += @('-CoverageStdout', $coverFile)
+}
+$dout = @(& $hostExe @depthArgs 2>&1)
 if ($LASTEXITCODE -ne 0) {
     $dout | Select-Object -Last 20 | ForEach-Object { Write-Host ("    " + $_) -ForegroundColor DarkGray }
-    Write-Bad 'check-depth.ps1 失败（深度指标回退）'
+    Write-Bad 'check-depth.ps1 失败（深度指标回退 / 覆盖率不可用）'
     Add-Failure 'check-depth.ps1 失败'
 } else {
     Write-Pass '深度棘轮未回退'
+}
+if ($coverFile -ne '' -and (Test-Path -LiteralPath $coverFile)) {
+    Remove-Item -LiteralPath $coverFile -Force -ErrorAction SilentlyContinue
 }
 
 # ---------------------------------------------------------------------------

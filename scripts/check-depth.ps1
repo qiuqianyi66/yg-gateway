@@ -28,7 +28,12 @@
 
 param(
     [switch]$Update,
-    [switch]$Detail
+    [switch]$Detail,
+    # 复用的 `go test ./... -cover` 输出文件。`scripts/pre-commit.ps1` 全量模式已经跑过一次
+    # 全量测试时传入，避免同一个门禁里把全量测试跑两遍（本机实测省约 40s，F-902）。
+    # 传了就**不再自己起测试**：此时「测试是否绿」由调用方担保（调用方红了根本不会走到这里）。
+    # CI 的 gate job 不传本参数 → 行为与改动前一致：自己跑一次。
+    [string]$CoverageStdout = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -147,11 +152,26 @@ if (-not (Test-Path $goExe)) { $goExe = 'go' }
 $env:GOPROXY = 'https://goproxy.cn,direct'
 $env:CGO_ENABLED = '0'
 
-$coverOut = & $goExe test ./... -cover -count=1 2>&1
-if ($LASTEXITCODE -ne 0 -and -not ($coverOut | Select-String 'coverage:')) {
-    Write-Host "错误：go test -cover 执行失败：" -ForegroundColor Red
-    Write-Host ($coverOut -join "`n")
-    exit 2
+$coverOut = @()
+$coverageSource = ''
+if ($CoverageStdout -ne '') {
+    if (-not (Test-Path -LiteralPath $CoverageStdout)) {
+        Write-Host ("错误：-CoverageStdout 指定的文件不存在：" + $CoverageStdout) -ForegroundColor Red
+        exit 2
+    }
+    $coverOut = @(Get-Content -LiteralPath $CoverageStdout)
+    $coverageSource = "复用 $CoverageStdout（未重复跑测试）"
+} else {
+    $coverOut = @(& $goExe test ./... -cover -count=1 2>&1)
+    if ($LASTEXITCODE -ne 0) {
+        # 失败即红（D-1）：棘轮的数字全部来自这份被测代码，测试红时这些数字不可信。
+        # 旧实现在「输出里有 coverage: 行」时继续算并给出 PASS——那等于用覆盖率掩盖测试失败。
+        Write-Host "错误：go test -cover 失败（测试红 → 棘轮数字不可信）：" -ForegroundColor Red
+        $coverOut | Where-Object { $_ -match 'FAIL|panic|--- FAIL' } | Select-Object -First 30 |
+            ForEach-Object { Write-Host ("    " + $_) -ForegroundColor DarkGray }
+        exit 2
+    }
+    $coverageSource = '本次自跑 go test ./... -cover'
 }
 
 $coverages = @()
@@ -183,6 +203,7 @@ Write-Host ("  最大文件行数      : {0}  (阈值 {1})" -f $current.maxFileL
 Write-Host ("  >{0} 行文件数     : {1}" -f $FILE_LIMIT, $current.oversizeFiles)
 Write-Host ("  >{0} 行函数数     : {1}" -f $FUNC_LIMIT, $current.oversizeFuncs)
 Write-Host ("  最低包覆盖率      : {0}%" -f $current.minCoverage)
+Write-Host ("  覆盖率来源        : {0}" -f $coverageSource) -ForegroundColor DarkGray
 
 if ($Detail) {
     Write-Host ""

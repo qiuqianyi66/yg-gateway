@@ -444,6 +444,17 @@ const derivedKeyPrefix = "d-"
 //   - 同一会话多轮请求 → 同一键 → 稳定粘住同一账号（上游 prompt 缓存命中）。
 //
 // 取不到用户文本（纯图片等）时返回空串：不粘性，退回普通轮换（安全降级）。
+//
+// ⚠ 覆盖率口径（2026-10-17 实测，引用本包覆盖率时**必须**带这一段）：
+//   - 本函数**生产零调用**：全仓非测试引用只有 `deriveKeyView` 的等价性对照
+//     （`git grep -n 'deriveKey' -- '*.go' | grep -v _test.go` 可复现）。保留它是为了给
+//     `deriveKeyView`（热路径视图版）留一条逐位互校的安全网（coverage_test.go 1191 行起）。
+//   - 本包覆盖率 **98.8% = 425/430 语句**；其中本函数占 20 条且 100% 覆盖。
+//     剔除它后 **405/410 = 98.8%** —— 也就是说「98.8% 里混着测试专用代码」这句话成立，
+//     但「生产可达约 89%」**复现不出来**，属未验证声明（旧记录已就地更正）。
+//   - 复现：`go test "-coverprofile=sess.out" -count=1 ./internal/session/`
+//     （路径带空格的 PowerShell 里，整串参数必须**双引号**包住，否则 `-coverprofile`
+//     与值会被拆开 → 仓库根出现字面名垃圾文件，见 LESSONS L-3）。
 func deriveKey(obj map[string]any) string {
 	msgs, ok := obj["messages"].([]any)
 	if !ok || len(msgs) == 0 {

@@ -610,15 +610,20 @@ func TestAppJSResponsiveAccGrid(t *testing.T) {
 //     question + requires（需要什么才能消解）；
 //   - 账号池提示行：汇总「N 个 (账号,模型) 成本未知」，给一句话入口。
 //
-// 牙齿：删掉 renderAccountsUnsafe 里的 unkTag 或 loadOverview 的 accNote 汇总 → FAIL。
+// 牙齿：删掉 renderAccountsUnsafe 里的 unkBadge() 调用或 loadOverview 的 unkNoteText() 调用 → FAIL。
+//
+// 2026-10-17（F-906）起拼接逻辑抽成纯函数 unkBadge() / unkNoteText()，本测试跟着换断言点，
+// 但它仍是**源码文本**级断言；行为级断言见 frontend_test.go 的 TestAppJSUnknownBadgeAndNote
+// （真跑 node 调用这两个函数，覆盖空态 / 计数 / question+requires / HTML 转义）。
 func TestAppJSUnknownsBadge(t *testing.T) {
 	src := readAppJS(t)
 	for _, want := range []string{
-		"const unk = s.unknowns || [];",
-		"const unkTip = unk.length ? esc(unk.map(u => u.question + '\\n需要：' + u.requires).join('\\n\\n')) : '';",
+		"function unkBadge(unknowns) {",
 		"未知成本</span>",
-		"const unkTotal = (d.accounts || []).reduce((a, s) => a + ((s.unknowns || []).length), 0);",
+		"function unkNoteText(accounts) {",
 		"悬停账号卡片查看明细",
+		"const unkTag = unkBadge(s.unknowns);",
+		"const unkNote = unkNoteText(d.accounts);",
 	} {
 		if !strings.Contains(src, want) {
 			t.Errorf("unknowns 展示缺失：未找到 %q", want)

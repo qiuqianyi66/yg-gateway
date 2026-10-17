@@ -148,10 +148,15 @@ if ($start.HasExited) { "进程退出 码=" + $start.ExitCode } else { "PID: " +
 - `pool.breaker_probe_gap` 空 = 默认 30s
 - `session_sticky.derive = false`（关掉内容派生，修「只用一个号」）
 
-**已应用的运行配置**（D:\yg-gateway-eval\config.json，**当前活实例**，7864 端口）：
+**已应用的运行配置**（D:\yg-gateway-eval\config.json，7864 端口，**实例当前未运行**，见下）：
 - `session_sticky.derive` **未设置**（= 默认开；上一轮对「本实例」设的 false 落在
   D:\yg-gateway\config.json，两边配置并未同步，若需关闭派生记得同步到这里）
 - `pool.ewma = {enabled:true, alpha:0.1, min_samples:5}`（ADR-005 真机验证，保守参数）
+
+> **状态更正（2026-10-17 实测）**：7864 的 eval 实例**没在跑** —— `Get-Process yg-gateway`
+> 只有 7863 的 PID（`D:\yg-gateway\yg-gateway.exe`），`http://127.0.0.1:7864/healthz` 连接被拒；
+> 但 `D:\yg-gateway-eval\config.json` 仍在。所以这两条配置是**历史记录**，不是"当前活实例"。
+> 要复活前先按 ADR-005 的验证脚本走一遍；要退役则删配置并删本节（`docs/PLAN-open-items-2026-10-17.md` D5 待拍板）。
 
 **下一轮候选**：
 1. 粘性路径的成本分层（ADR-004 §五 方案 D 被弃：与缓存复用冲突，需重新设计）

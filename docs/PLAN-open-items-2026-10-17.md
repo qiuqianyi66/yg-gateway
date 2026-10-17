@@ -184,3 +184,14 @@ Get-ChildItem internal -Recurse -Filter *.js | ForEach-Object { (Get-Content $_.
 | 「部署的二进制能追到哪个提交」 | ✅ 已修（`cb971b4`）：报告记 `git_head`/`git_dirty`，`-Build` 遇脏工作区在构建前拒绝 |
 | `HANDOFF-2026-10-16-ci-closed.md` 本身 | ⚠️ **部分过时**：N1–N4/N8 已完成，N5 拆成 A3+B1，N6 转述失真（见 B2），N7 见 B3。建议下一轮交接直接指向本文件 + 各 `.harness/changes/*/summary.md`，不要再从那份读任务 |
 
+**同日另一条工作线的收尾（2026-10-17，见 `.harness/changes/2026-10-17-precommit-single-test-and-doc-debt/`）**：
+
+| 项 | 结论 |
+|---|---|
+| **A2 全量测试跑两遍（本地）** | ✅ **已去重**：检查 6 的 `go test ./... -cover` 输出直接喂给检查 7。A/B 实测 `pre-commit.ps1` 全量 **128.4s → 62.0s（−66.4s，−52%）**。CI 侧 `test`/`gate` 的并行重复**保留**（决策 D-2：串行化后 wall clock ~2.2→~2.8min，只省 runner 分钟数） |
+| **check-depth 对测试失败宽容** | ✅ **已收紧**：自跑模式测试红即 `exit 2`（旧实现「输出里有 coverage: 就继续」会让棘轮 PASS）。牙齿探针：临时塞必失败测试 → 全量 `exit=1` 且 check-depth 不给棘轮结论 |
+| **A8 session 覆盖率口径** | ✅ **已实测更正**：425/430 = 98.8%；剔除测试专用 `deriveKey`（20 语句）后 405/410 = 98.8%。**「生产可达约 89%」复现不出来**，代码注释与两份变更记录均已更正 |
+| **A3 面板 unknown 展示** | 🟡 **部分**：徽章/提示行抽成纯函数 `unkBadge()`/`unkNoteText()` 并新增 JS 级测试（3/3 反向变异变红）。**有值态的真机观感仍归 B1**（需真实未消解 unknown），空态由 `/metrics` 的 `unknowns_open 0` 佐证 |
+| 文档债 4 条 | ✅ 已就地更正：`dynamicModelsCache` 已不存在、`-count=3` 污染不复现、7864 实例没在跑、Go 包数 23（20 有测试 + 3 无） |
+
+

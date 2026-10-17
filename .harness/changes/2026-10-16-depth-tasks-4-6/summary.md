@@ -82,11 +82,23 @@
 
 1. **flake**：`go test ./internal/server/ -count=3` 的 `TestModelsEndpoint` 测试间全局状态污染
    （与本次改动无关，`-count=1` 全绿）；`TestEwmaLatencyPenalizesSlowInPick` 时间敏感偶发。
+
+   > **更正（2026-10-17 实测）**：前半条**不复现**——`go test ./internal/server/ -count=3`
+   > 得 `ok 24.455s`（exit 0）。根因是包级 `dynamicModelsCache`，现已是 `Handler` 实例字段
+   > （见 `2026-10-16-t5-sandbox` §六.2 的更正）。后半条保留观察（本轮未复现）。
 2. **测试时长**：panel 包单轮 44–60s（autotask 的 mp 上报路径含 0–10s 随机反作弊抖动，非可注入）。
 3. **`runAutoAll` 与队列路径对「达标未领」处理不一致**（前者跳过不领、后者入队去领）——
    由 panel agent 报出，属产品语义，未单方面改。
 4. **`internal/session` 的 legacy 派生分支**已不在热路径上，其覆盖率计入 98.8% 但生产可达语句
    约 89%（agent 主动声明，勿对外把 98.8% 说成热路径覆盖率）。
+
+   > **更正（2026-10-17 实测）**：「约 89%」**复现不出来**，已按实测改写口径：
+   > 包覆盖 **98.8% = 425/430 语句**；其中测试专用的 `deriveKey` 占 20 条且 100% 覆盖，
+   > 剔除后 **405/410 = 98.8%**。所以正确的表述是「98.8% 里混着 20 条生产不可达语句」，
+   > **不是**「生产可达只有 89%」。复现（注意 PowerShell 里整串要双引号，否则产生字面名
+   > 垃圾文件，本机实测又踩一次）：
+   > `go test "-coverprofile=$env:TEMP\sess.out" -count=1 ./internal/session/`
+   > 代码侧口径注释见 `internal/session/session.go` 的 `deriveKey`。
 5. **`cmd/login` 的 4xx 全归「登录未完成」**、`server/anthropic.go` 的 `stream` 类型错被吞——
    均属「改口径」而非「补可观测性」，已写入 ERROR-HANDLING.md 的「留待产品定夺」表。
 6. **上游协议相关的真问题**（均只记录、未改）：`RunNightChats` 硬编码 4s sleep 不可注入；

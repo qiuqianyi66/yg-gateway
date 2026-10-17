@@ -452,6 +452,70 @@ process.stdout.write(JSON.stringify({
 	}
 }
 
+// TestAppJSUnknownBadgeAndNote unknown 的两处展示（账号卡片徽章 + 账号池提示行）必须有牙齿。
+//
+// 为什么：这两段拼接此前内联在 ~80 行渲染函数与 overview 渲染里，Go 侧测试对 app.js
+// 只做语法/顶层冒烟，改坏了只有人眼能发现——上一轮「未知能力被塌缩成不支持」就是这个形态
+// （AGENTS.md 四态纪律：缺失 = 未知，不是"没有"）。
+//
+// 牙齿：把 unkBadge 里的 esc() 去掉 → injectEscaped 变 false，本测试 FAIL；
+// 把 `if (!unk.length) return ”` 改成永远返回徽章 → empty/emptyArr 非空，FAIL。
+func TestAppJSUnknownBadgeAndNote(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node not installed; unknown badge test skipped")
+	}
+	script := `const fs = require('fs');
+const vm = require('vm');
+const src = fs.readFileSync(process.argv[2], 'utf8');
+const escStart = src.indexOf('function esc(');
+const escEnd = src.indexOf('function ago(');
+const badStart = src.indexOf('function unkBadge(');
+const badEnd = src.indexOf('function renderAccounts(');
+if ([escStart, escEnd, badStart, badEnd].some(v => v < 0)) throw new Error('unknown badge helpers not found');
+const ctx = { String, Array, Object, RegExp };
+vm.createContext(ctx);
+vm.runInContext(
+  src.slice(escStart, escEnd) + src.slice(badStart, badEnd) +
+  '\nthis.unkBadge = unkBadge; this.unkNoteText = unkNoteText;', ctx);
+const two = ctx.unkBadge([{ question: 'q1 的成本？', requires: '一次带 credit 的调用' },
+                          { question: 'q2 的成本？', requires: '一次带 credit 的调用' }]);
+const inject = ctx.unkBadge([{ question: '<script>alert(1)</script>', requires: '"onmouseover="x' }]);
+process.stdout.write(JSON.stringify({
+  empty: ctx.unkBadge(undefined),
+  emptyArr: ctx.unkBadge([]),
+  count: two.includes('2 未知成本'),
+  hasQuestions: two.includes('q1 的成本？') && two.includes('q2 的成本？'),
+  hasRequiresLabel: two.includes('需要：'),
+  hasRequires: two.includes('一次带 credit 的调用'),
+  escAngle: inject.includes('&lt;script&gt;'),
+  escQuote: inject.includes('&quot;onmouseover=&quot;x'),
+  noRawHtml: !inject.includes('<script>') && !inject.includes('"onmouseover='),
+  noteEmpty: ctx.unkNoteText([{}, { unknowns: [] }]),
+  noteMissingField: ctx.unkNoteText([{}, undefined]),
+  note3: ctx.unkNoteText([{ unknowns: [1, 2] }, { unknowns: [3] }, {}]),
+}));`
+	f, err := os.CreateTemp(t.TempDir(), "unknown-badge-*.cjs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString(script); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	out, err := exec.Command(node, f.Name(), "app.js").CombinedOutput()
+	if err != nil {
+		t.Fatalf("unknown badge node test failed: %v\n%s", err, out)
+	}
+	const want = `{"empty":"","emptyArr":"","count":true,"hasQuestions":true,` +
+		`"hasRequiresLabel":true,"hasRequires":true,"escAngle":true,"escQuote":true,` +
+		`"noRawHtml":true,"noteEmpty":"","noteMissingField":"",` +
+		`"note3":"3 个 (账号,模型) 成本未知，悬停账号卡片查看明细"}`
+	if strings.TrimSpace(string(out)) != want {
+		t.Fatalf("unknown badge/note=%s\nwant %s", out, want)
+	}
+}
+
 // 用量时序图的柱体类名不得叫 bar：账号池的积分条是 .bar{height:3px}，而 SVG2 里
 // height 是 rect 的 CSS 几何属性——同名类会把每根柱子压成 3px 高，图看起来"没数据"。
 // 这个坑只能在浏览器里看出来，所以在这里钉住类名。
