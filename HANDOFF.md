@@ -118,6 +118,17 @@ if ($start.HasExited) { "进程退出 码=" + $start.ExitCode } else { "PID: " +
       `ewma_success/ewma_latency_ms/ewma_samples` 透出。
     - 全量 20 包绿 + vet/gofmt 干净；D: 实例（7864）已部署并真机验证（4 号健康、
       EWMA 字段随真实流量透出）。
+20. **Playground 模型下拉 WorkBuddy 化**：模型下拉选项显示「模型名 · x生效倍率 · 免费/优惠标签」
+    （对齐 WorkBuddy 模型选择器展示；倍率取上游 modelPromotions 生效价 promo_credits，无促销时牌价
+    credits，免费=factor 0 或牌价 0 标「免费」，其余促销标签原样透出，无促销但支持图片的模型标
+    「视觉」）；option 带 promo_note/description 悬停提示，value 仍为完整模型 id 不变。仅前端
+    app.js 改动，已重编译并部署 D: 生产实例（7863，2026-10-15 19:27 替换，新 PID
+    验证 /panel/app.js 含 pgModelLabel；替换前备份 yg-gateway.exe.pre-workbuddy.bak），
+    node --check + 20 包测试全绿。另实测确认：上游目录所有模型 supports_images=True
+    （含 deepseek-v4.1-flash，为多模态），WorkBuddy 客户端「不支持图片」提示属客户端侧限制。
+21. **成本控制规范**：新增 `.harness/rules/COST-CONTROL.md`（基于生产 72h 实测：99% 积分
+    烧在 hy4-preview 系列，成本率 ~120 积分/M token、缓存命中仅 7-17%；deepseek-v4.1-flash
+    成本率 ~1.1、缓存命中 98.7%；step-5-preview 免费；主力默认模型禁指 hy4 系列）。
 
 ## 五、当前待办（新对话从这里接）
 
@@ -581,5 +592,81 @@ deepseek-v4.1-flash=7 / step-5-preview=3）与 `upstream_errors_total` 族——
 1. Prometheus 指标补在途/租约时序（当前只有瞬时 gauge）
 2. 长流场景显式开启 `sse_keepalive_seconds` / `stream_total_timeout_seconds` 的实测调参
 3. pick 侧 scratch 切片的 sync.Pool 复用（收益待 bench 量化）
+
+### 六之十一之三、模型成本率列 + pool unknown/evidence WIP 确认（2026-10-15）
+
+**改了什么（本轮）**：
+
+1. **模型与档位视图「实测成本率列」**：面板 models handler 末尾把
+   `usage.SnapshotWindow(72h).CreditByModel` 的 `credits_per_1m_tokens` 按裸模型名
+   合并进模型条目（`cost_ppm` / `cost_samples`；**无样本不输出**——AGENTS.md 四态：
+   没样本 = unknown，不伪造成本）；前端 `rateCell` 在倍率列下方加小字
+   「实测 X 积分/M · N 样本」（`costLine` / `fmtCostPpm`）。
+2. **Playground 模型下拉 WorkBuddy 化**（上轮已记录）：`pgModelLabel` /
+   `pgModelOptions`——「模型名 · x生效倍率 · 免费/优惠标签」。
+
+**确认他人 WIP（unknown/evidence 四态接线，pool 层，已由另会话完成）**：
+- `internal/unknown/`（带 revision 的 registry）、`internal/evidence/`（四态 Fact）、
+  `internal/pool/unknown.go`（SetUnknownRegistry / TrackCostUnknown /
+  resolveCostUnknown / openCostUnknownsLocked）、`entry.go`（Status.Unknowns /
+  EwmaProvenance、ModelCostStatus.Provenance）、`state.go`（EWMA/cost provenance
+  标注）、`cmd/server/main.go:299-300`（装配 registry）。
+- **实现 + 测试完整，21 包全绿，无需本 agent 修复**（中途 build 失败是另一会话
+  写入中途的快照问题，写完后即绿）。
+
+**门禁**：21 包全绿（18 ok + 3 no test files）+ vet 干净 + 边界脚本通过；
+gofmt 仅 3 个历史文件漂移（config.go / httpauth/index.go / panel.go，pre-existing）。
+
+**真机验证（PID 36224，生产 7863）**：备份 `yg-gateway.exe.pre-costrate.bak` →
+替换重启 →
+- `/healthz` healthy=3 → `/v1/models` 20 模型
+- `/panel/api/models` 20 模型、**7 个带实测成本率**：hy4-preview 132.64 积分/M·65 样本、
+  hy4-preview-f 110.56·291、deepseek-v4.1-flash 0.59·1、glm-5.3-flash 0·5、
+  glm-5.2 140.85·1（72h 滚动窗口口径，与积分诊断吻合）
+- `/panel/app.js` 193KB 含 `costLine` / `fmtCostPpm`
+- 非流式 OK（finish=stop，234 tokens）+ 流式 OK（21 chunks → `[DONE]`）
+
+**注意**：桌面与 D 侧 exe 均已替换（含成本率列 + unknown 接线，两侧哈希一致）；
+`yg-gateway.exe.new` 中间产物已删。
+
+**下一轮候选**：
+1. 模型与档位视图改 WorkBuddy 紧凑样式（下拉已做，列表待做）
+2. 主力/默认模型切 deepseek-v4.1-flash + 精简 defaultprompt.md 重新部署（积分优化落地）
+3. unknown 面板徽章/列表（registry 已接线，前端展示待做）
+
+### 六之十一之四、unknown 面板展示 + Playground 默认模型（2026-10-16）
+
+**改了什么（本轮）**：
+
+1. **unknown 面板展示（AGENTS.md「Unknown 消解纪律」收尾）**：数据链路本就通
+   （overview→accounts→Pool.List()→Status.Unknowns），前端此前不展示。本轮：
+   - 账号卡片状态区：有 unknowns 时输出「N 未知成本」warn 徽章，title 悬停
+     带 question + requires（需要什么才能消解）；
+   - 账号池提示行（accNote）：汇总「N 个 (账号,模型) 成本未知，悬停账号卡片
+     查看明细」。
+   - 生产实测 4 账号 unknowns=0（正常：用过的组合都被 NoteModelCost 消解了）。
+2. **Playground 默认模型推荐（积分优化落地，对应 COST-CONTROL.md）**：
+   `pgModelOptions` 默认选中 deepseek-v4.1-flash（实测 ~1 积分/M），此前默认
+   目录第一个模型（hy4 系实测 110~133 积分/M）——试玩一发自选就烧高成本。
+   找不到 deepseek 时保持第一个（不破坏上游目录顺序语义）。
+3. **积分优化评估结论**：网关**无默认模型机制**（模型由客户端传参），生产
+   persona.md 已精简（16 行 811B，纯行为约束非积分主因）、defaultprompt.md
+   （39 行）未启用。代码层面可做的已做（成本率列 / COST-CONTROL / Playground
+   默认推荐），剩余是客户端选模型行为，靠规范引导。
+
+**测试**：新增 `TestAppJSUnknownsBadge`（徽章 + accNote 汇总）、
+`TestAppJSPgDefaultCheapModel`（默认 deepseek 推荐）——源码级"牙齿"断言。
+
+**门禁**：21 包全绿 + node --check 通过（本轮全量测试有一次偶发 FAIL，重跑即
+绿，疑似 scheduler/竞争类 flaky，未复现）。
+
+**真机验证（PID 35536，生产 7863）**：备份 `yg-gateway.exe.pre-pgdefault.bak` →
+替换重启 → healthz 3/4 → app.js 含「未知成本」徽章代码 + pg 默认 deepseek
+逻辑 → overview 4 账号正常。
+
+**下一轮候选**：
+1. 模型与档位视图改 WorkBuddy 紧凑样式（列表待做）
+2. defaultprompt.md 微调 + 生产 persona 是否启用内置默认的权衡（当前 custom 已精简）
+3. 偶发 FAIL 定位（scheduler 竞争类测试，若再出现需排查）
 
 ## 读完本文件后，直接回用户："上下文已接上。多 API Key 派发 + 面板 Key 管理页均已完成。可选下一步路线图见上文，等你拍板。"
