@@ -407,20 +407,29 @@ if ($coverTmpPath -ne '' -and (Test-Path -LiteralPath $coverTmpPath)) {
 # ---------------------------------------------------------------------------
 # 检查 8/8：新增需求文档必须有「必要性」段（阶段 0）
 #
-# 由来：2026-10-17 的待办清单里 9 项有 4 项经实测不需要做。规则见
+# 由来：2026-10-17 盘点 14 项待办有 6 项经实测不需要做。规则见
 # .harness/rules/开发流程规范.md「零、阶段 0：必要性分析」；只对**本次新增**的
-# docs/prd/REQ-*.md 生效（存量不追溯），实现在 scripts/check-req-necessity.ps1。
+# docs/prd/REQ-*.md 生效（存量 11 份不追溯），实现在 scripts/check-req-necessity.ps1。
+#
+# 退出码三态必须**分开报**（2026-10-17 第 3 轮独立复审 🟢）：脚本自身失败（2）与
+# 缺段（1）是两件事，混成一句「缺必要性段」会把排查引到错的地方。
 # ---------------------------------------------------------------------------
 Write-Section '检查 8/8：新增需求文档的必要性段（阶段 0）'
 $reqArgs = @('-NoProfile', '-File', 'scripts/check-req-necessity.ps1')
 if ($Base -ne '') { $reqArgs += @('-Base', $Base) }
 $rout = @(& $hostExe @reqArgs 2>&1)
-if ($LASTEXITCODE -ne 0) {
-    $rout | Select-Object -Last 12 | ForEach-Object { Write-Host ("    " + $_) -ForegroundColor DarkGray }
-    Write-Bad '新增需求文档缺「必要性」段（阶段 0）'
-    Add-Failure '阶段 0 必要性段缺失'
-} else {
-    Write-Pass '需求文档阶段 0 校验通过'
+switch ($LASTEXITCODE) {
+    0 { Write-Pass '需求文档阶段 0 校验通过' }
+    1 {
+        $rout | Select-Object -Last 12 | ForEach-Object { Write-Host ("    " + $_) -ForegroundColor DarkGray }
+        Write-Bad '新增需求文档缺「必要性」段（阶段 0）'
+        Add-Failure '阶段 0 必要性段缺失'
+    }
+    default {
+        $rout | Select-Object -Last 12 | ForEach-Object { Write-Host ("    " + $_) -ForegroundColor DarkGray }
+        Write-Bad ("check-req-necessity.ps1 自身失败（exit={0}，不是缺段）" -f $LASTEXITCODE)
+        Add-Failure '阶段 0 校验脚本自身失败（非缺段）'
+    }
 }
 
 # ---------------------------------------------------------------------------

@@ -99,6 +99,6 @@ REQ 文件生效（存量不追溯，否则第一次接入就会红一片、规�
 | `scripts/check-req-necessity.ps1` | **新增**：只对本次新增的 REQ 校验 `^#{2,6}\s*.*必要性` |
 | `scripts/pre-commit.ps1` | 新增检查 8/8；原 1-7 的「/7」编号同步改「/8」 |
 | `scripts/check-depth.ps1` | 新增度量 5（前端体量）+ 输出 + 棘轮对比键 |
-| `.harness/depth-baseline.json` | 新增 `maxFrontendLines: 4378`（其余值不变） |
+| `.harness/depth-baseline.json` | 新增 `maxFrontendLines: 4378` + `oversizeFrontendFiles: 2`（其余四项不变） |
 | `internal/pool/sandbox_parity_test.go` | **新增**测试 |
 | `docs/PLAN-necessity-review-2026-10-17.md` | **新增**：本轮 14 项的必要性裁定 |
