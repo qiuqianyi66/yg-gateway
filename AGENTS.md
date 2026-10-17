@@ -165,3 +165,34 @@ Unknown 是**一等公民实体**，不是面板上的一个展示区：
 - **替换二进制前必须备份**（R15）
 - 构建 + 复制 + 启动放同一条命令（跨命令空档是实时防护下手时机）
 - 部署后必须冒烟：`/healthz`、`/v1/models`、流式与非流式各一发
+
+**上面四条现在由脚本固化，换版不要手工分步做**：
+
+```powershell
+powershell -NoProfile -File scripts/deploy-prod.ps1 -Exe <新exe> [-Feature <标签>]
+powershell -NoProfile -File scripts/deploy-prod.ps1 -Build -Feature <标签>   # 先 go build 再换版
+powershell -NoProfile -File scripts/deploy-prod.ps1 -DryRun                  # 只打印计划
+```
+
+它把「备份 → 等端口释放 → PE 预检 → 改名替换 → 启动（cmd 重定向落 stderr）→ 健康轮询 →
+冒烟 → 失败自动回滚」做成一条命令，并在 `finally` 落 JSON 报告（`stage`、`exe_hash_before/after`、
+`backup_path`、`log_path`、`smoke[]`、`git_head`/`git_dirty`）。上面**第一条**（同一条命令）就是它存在的理由；
+第二条（先备份）由脚本内建。
+
+**退出码就是「生产现在能不能用」，`1` 与 `4` 不要混读**：
+
+| 码 | 含义 |
+|---|---|
+| `0` | 成功（含冒烟通过） |
+| `1` | 本次换版未生效，**且已确认旧版在跑**（前置检查失败 = 未触碰；停服/替换失败 = 已把旧版拉起） |
+| `2` | 新实例健康检查失败 → **已自动回滚**（服务回到旧版） |
+| `3` | 健康过了但**冒烟失败**（不回滚：可能只是上游账号问题） |
+| `4` | **旧版没能回到运行状态，生产可能不可用**（看 stderr 日志） |
+
+两条附加纪律：
+
+- **`-Build` 遇脏工作区在构建前拒绝**（`1` / `stage=rejected-dirty-tree`）：脏工作区构建出的二进制
+  无法用提交号追溯（2026-10-17 生产实弹踩过：部署的 exe 既不等于当时 HEAD 的干净构建，
+  也不等于事后工作区的构建）。确实要就显式 `-AllowDirty`，并在报告里看 `git_dirty_files`。
+- **改脚本先跑排练**：`powershell -NoProfile -File scripts/deploy-prod.rehearsal.ps1`
+  在 `%TEMP%` 沙箱（端口 7864）跑 6 场景 / 53 断言，**不碰生产**。
