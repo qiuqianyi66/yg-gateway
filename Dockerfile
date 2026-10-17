@@ -20,6 +20,17 @@ RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags=
  && CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags="-s -w" -o /out/signin_bin ./cmd/signin \
  && CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags="-s -w" -o /out/login ./cmd/login \
  && CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags="-s -w" -o /out/credit ./cmd/credit
+# 架构断言（独立复审 🟡，2026-10-17）：交叉编译把「产物架构正确」从**结构性保证**变成了
+# 「依赖 $TARGETOS/$TARGETARCH 两个变量」——变量为空时 `go build` **静默产出宿主架构**，
+# 构建依然成功，于是 arm64 镜像里装 amd64 二进制，生产跑起来才 `exec format error`。
+# 改动前这种错误不可能发生（stage 平台 = 目标平台），所以这条断言是必要成本。
+# 用 `go version -m`：构建阶段自带 go，不需要 od/readelf/hexdump（实测输出含 `GOARCH=arm64`）。
+RUN set -eu; \
+    for f in /out/*; do \
+      info=$(go version -m "$f"); \
+      echo "$info" | grep -q "GOOS=$TARGETOS"   || { echo "架构断言失败(OS)：$f 不是 $TARGETOS"; echo "$info"; exit 1; }; \
+      echo "$info" | grep -q "GOARCH=$TARGETARCH" || { echo "架构断言失败(ARCH)：$f 不是 $TARGETARCH"; echo "$info"; exit 1; }; \
+    done
 
 FROM alpine:3.20
 # python3：login.sh 的 JSON 解析 / 签到 / 落盘；bash：shell 脚本体。
