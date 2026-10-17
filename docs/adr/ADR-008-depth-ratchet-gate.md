@@ -89,6 +89,12 @@
 R10 与改动清单都按 `git diff <ref>...HEAD` 算；gofmt 用 `-AllFiles` 查全仓。
 **同一个脚本、两套作用域参数**，而不是维护两份实现（避免口径分叉）。
 
+> **2026-10-17 更新（A1）**：上面的「push 用 `HEAD~1`」已不成立。push 改用**事件里的
+> `github.event.before`**（本次推送之前的 HEAD），tag push 用**上一个发版 tag**
+> （`--match 'v[0-9]*' --exclude '*-ci'`），两者都不可用时才回落 `HEAD~1` 并打 `::warning::`。
+> 原因：固定 `HEAD~1` 让一次推 N>1 个提交时只有最后一个进入差分（R10 与改动文件都是盲区）。
+> 见 `docs/prd/REQ-ci-gate-base-2026-10-17.md` 与 `.harness/changes/2026-10-17-ci-gate-base/`。
+
 ### 取舍四：`-race` 由 CI 独占
 
 本机（Windows）无 gcc，`go test -race` 跑不了。CI 用独立 `race` job（`CGO_ENABLED=1`），
