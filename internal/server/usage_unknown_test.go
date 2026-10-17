@@ -205,14 +205,16 @@ func TestReqlogCacheMissUnknownIsAdditive(t *testing.T) {
 //   - `TestReqlogCacheMissUnknownIsAdditive` 只到 `reqlog.Event → JSON`（序列化器）。
 //
 // 中间「chatrun 把状态填进 Event、Recorder 异步写入 *.jsonl」这一段没有任何测试，
-// 而产线的 `cache_miss_unknown` 至今**一次都没观测到**（`requests-*.jsonl` 6916 行里 0 次）。
+// 而产线的 `cache_miss_unknown` 至今**一次都没观测到**（`requests-*.jsonl` 6916 行里 0 次；
+// 口径：6 个文件只读到 5 个，当日文件被网关进程占用 → 当日是 **unknown**，不是「没有」）。
 // 没有这两端连起来的证据，「产线会打这个标记」就只是推断。
 //
 // 覆盖两个方向（双向牙齿，只测一个方向会被「永远写 true」的假实现骗过）：
 //
 //	非流式 · 上游只给 hit（无 miss、无 prompt_tokens） → 落盘必须带 cache_miss_unknown:true，且**不得**出现 cache_miss_tokens
 //	流式   · 同上（末帧 usage 同形态）                → 同上
-//	非流式 · 上游显式给 miss                          → 落盘必须带 cache_miss_tokens 数字，且**不得**出现 cache_miss_unknown
+//	非流式 · 上游显式给 miss（无 prompt_tokens）        → 落盘必须带 cache_miss_tokens 数字，且**不得**出现 cache_miss_unknown
+//	流式   · 同上                                      → 同上
 //
 // 还原什么会让它 FAIL：把 `chatrun.go` 里 `st.cacheHit, st.cacheMissUnknown = hit, true` 改回
 // 旧实现（miss 未知时写 0 并当成观察）→ 前两条红；把标记改成无条件 true → 第三条红。
@@ -225,7 +227,7 @@ func TestReqlogArchiveRecordsCacheMissUnknown(t *testing.T) {
 			"data: {\"id\":\"x\",\"object\":\"chat.completion.chunk\",\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_cache_hit_tokens\":800}}\n\n" +
 			"data: [DONE]\n\n"
 		sseKnown = "data: {\"id\":\"x\",\"object\":\"chat.completion.chunk\",\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hi\"}}]}\n\n" +
-			"data: {\"id\":\"x\",\"object\":\"chat.completion.chunk\",\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_cache_hit_tokens\":100,\"prompt_cache_miss_tokens\":900,\"prompt_tokens\":1000}}\n\n" +
+			"data: {\"id\":\"x\",\"object\":\"chat.completion.chunk\",\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_cache_hit_tokens\":100,\"prompt_cache_miss_tokens\":900}}\n\n" +
 			"data: [DONE]\n\n"
 	)
 

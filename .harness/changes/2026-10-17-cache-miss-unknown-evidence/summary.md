@@ -28,7 +28,7 @@
 口径：6 个文件只读到 5 个（当日文件被网关进程占用）→ 当日是 unknown，不是「没有」
 ```
 
-所以「产线会打这个标记」此前只是**推断**。本变更把它变成**有测试兜住的观察**。
+所以「产线会打这个标记」此前只是**推断**。本变更把它变成**受控实验下的观察**——注意仍**不是**产线观测（产线仍是 unknown，见 §四）。
 
 ## 二、改了什么
 
@@ -56,7 +56,7 @@
 
 **变异 A（还原旧实现）**：`chatrun.go` 里把
 `st.cacheHit, st.cacheMissUnknown = hit, true` 改回 `st.cacheHit, st.cacheMiss, st.hasCache = hit, 0, true`
-（流式与非流式各一处，共 4 处替换）→ **两个「未知」用例 FAIL**，归档行变成：
+（流式与非流式各一处，共 2 处替换）→ **两个「未知」用例 FAIL**，归档行变成：
 
 ```
 {"...","credit_known":false,"cache_hit_tokens":800}      ← cache_miss_unknown 与 cache_miss_tokens 都不见了
@@ -85,3 +85,19 @@
 ## 五、回滚
 
 `git revert <本提交>`（删掉测试）。无生产行为可回滚。
+
+## 六、第二轮独立复审（1 🟡 直指本轮最大的操作失误）
+
+| 级别 | 问题 | 处置 |
+|---|---|---|
+| **🟡** | **工作区 `internal/server/chatrun.go` 停留在「变异 A」状态**（`SHA256=B3CB56DA…`，HEAD 是 `44BADD08…`）：两处 `st.cacheHit, st.cacheMissUnknown = …` 被改成 `st.cacheHit, st.cacheMiss, st.hasCache = …, 0, true`。若被原样提交，等于**静默回退这个修复** | 已 `git checkout -- internal/server/chatrun.go` 还原；`git diff` 为 0 行；`go test -run TestReqlogArchiveRecordsCacheMissUnknown -count=2` 恢复绿。**根因是我在真实工作区里做变异**（不是副本），而同一时刻另一会话也在改同一工作树——我还一度把这份脏状态误判成「别人的在途改动」 |
+| 🟢 | 文里「产线从未出现（6916 行 0 次）」丢了「6 个文件只读到 5 个」的口径 | 已补（测试注释与 PLAN 两处）——否定断言必须带覆盖口径，这正是 L-15 |
+| 🟢 | 「本变更把它变成有测试兜住的**观察**」会被独立引用成产线观测 | 改为「**受控实验下的观察**；产线仍是 unknown（§四）」 |
+| 🔵 | `sseKnown` 夹具 hit=100/miss=900/prompt=1000，使「显式 miss」与「prompt−hit 推导」结果相同 → 「已观测」方向无法证明走的是显式字段分支 | 已删掉该用例末帧的 `prompt_tokens`：推导不可用，`cache_miss_tokens:900` 只可能来自显式字段 |
+| 🔵 | 文里写「共 4 处替换」，代码里其实只有 **2 处** | 已改 2 |
+| 🔵 | 测试注释的覆盖清单只列 3 条，漏「流式 · miss 已观测」 | 已补齐第 4 条 |
+
+复审独立复现的部分（它自己的话）：`-count=3` → 12/12 PASS 无 flake；在 `%TEMP%` 副本里**自己重做两次变异**都红，并 `go env GOMOD` 断言指向副本；归档原文逐字打印核对；CI 的 `test` 与 `race` job 在 Linux 上也已跑过该测试。
+
+**由此触发的纪律升级**：LESSONS **L-2 升到 Seen 2** —— 变异一律在 `%TEMP%` 副本里做并断言
+`go env GOMOD`，不再是「建议」而是硬规则（本次事故就是「在原地做变异」的直接后果）。

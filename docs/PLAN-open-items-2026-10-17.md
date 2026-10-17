@@ -154,7 +154,7 @@ Get-ChildItem internal -Recurse -Filter *.js | ForEach-Object { (Get-Content $_.
 
 | # | 项 | 实测证据 | 规模 | 级别 |
 |---|---|---|---|---|
-| **B1a** ✅ | **`cache_miss_unknown` 的归档链路端到端证据**——已补：真实 handler 请求 → 真实 Recorder → 真实 `*.jsonl`，4 个子用例双向断言；按 L-2 做两次变异（还原旧实现→「未知」用例红；无条件标记→「已观测」用例红，哈希闭环无残留） | `.harness/changes/2026-10-17-cache-miss-unknown-evidence/summary.md`。**仍然未知**：产线从未实际出现该标记（6916 行 0 次）——消解需要一次真实上游返回「只有 hit、无 miss、无 prompt」，不受我们控制 | 已完成 | L1 |
+| **B1a** ✅ | **`cache_miss_unknown` 的归档链路端到端证据**——已补：真实 handler 请求 → 真实 Recorder → 真实 `*.jsonl`，4 个子用例双向断言；按 L-2 做两次变异（还原旧实现→「未知」用例红；无条件标记→「已观测」用例红，哈希闭环无残留） | `.harness/changes/2026-10-17-cache-miss-unknown-evidence/summary.md`。**仍然未知**：产线从未实际出现该标记（6916 行 0 次；口径：6 个文件只读到 5 个，当日文件被占用 → 当日为 unknown）——消解需要一次真实上游返回「只有 hit、无 miss、无 prompt」，不受我们控制 | 已完成 | L1 |
 | **B2** | **N6 在交接文档里被转述失真**：`HANDOFF-2026-10-16-ci-closed.md` §3 N6 列的 4 条（退避与额度解耦 / 快过期积分纯函数 / 流式 error 门禁 / 写回前回读）**全仓搜不到**，也不是它引用那份 wiki 的内容 | 全仓 grep 四条短语 → 0 命中。wiki 自己「top 3 照做」= **①剪枝前先回填派生值**（`model_costs` tier 是 inference，而 reqlog 归档 7 天到期后永久失去纠成本机会）**②持久化版本闸门 + 迁移前备份 + 版本过新拒启动**（`usage.json` 有 `Version` 但 `load()` 从不校验；`state.json` 连版本字段都没有）**③跨文件写前意图 + 启动前滚**（`auths/*.json` 与 `state.json` 无对账）。第 4 条「该改（小）」= 明细清理挪到启动期+周期 | 数小时~1天 | L2（②③ 需先立 ADR） |
 | **B3** | **N7 的真实缺口：`auth` / `session` / `scheduler` / `cmd/server` 四包从未做过独立变异核验**（A6 说的是 panel/autotask 的**深度**不够，不是这个缺口） | `2026-10-16-t3-mutation/summary.md` 只对 `upstream`/`panel` 做了独立复验，其余四个包是**自述**。配方在 T3 里（`%TEMP%` 副本 + `go env GOMOD` 断言 + 改前改后哈希闭环 + 每包 5 条语义变异） | 数小时 | L2 |
 | **B4** | **部署脚本落地后新开的口子**（`scripts/deploy-prod.ps1`，见 9.3） | — | 0.5~1h 除 B4-a | L1 |
