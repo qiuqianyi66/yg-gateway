@@ -932,6 +932,9 @@ func TestModelsEndpoint(t *testing.T) {
 	if glm["credits"] != "x0.05 credits" {
 		t.Errorf("credits 应原样透出: %v", glm["credits"])
 	}
+	if glm["name"] != "GLM-5.2 ×0.05" {
+		t.Errorf("name 应带积分倍率后缀（客户端只渲染 name）: got %v", glm["name"])
+	}
 	if got, want := glm["description"], "[x0.05 credit] 智谱旗舰"; got != want {
 		t.Errorf("description 应带积分倍率前缀: got %v want %v", got, want)
 	}
@@ -985,6 +988,26 @@ func TestModelsEndpoint(t *testing.T) {
 		}
 		if _, has := mm["credits"]; has {
 			t.Errorf("上游未下发倍率时不得透出 credits: %v", mm["credits"])
+		}
+	}
+}
+
+// TestNameRateSuffix nameRateSuffix 的归一规则：上游 credits 原文不统一
+// （"x0.05 credits" / "x0.29" / "0x" / 空），统一为 " ×N"；空 = 倍率未知，
+// 不加后缀、不编造（与「空值省略」契约一致）。
+func TestNameRateSuffix(t *testing.T) {
+	cases := []struct{ raw, want string }{
+		{"x0.05 credits", " ×0.05"},
+		{"x0.29", " ×0.29"},
+		{"0x", " ×0"},
+		{"x0.00", " ×0.00"},
+		{"", ""},
+		{"   ", ""},
+		{"x", ""},
+	}
+	for _, c := range cases {
+		if got := nameRateSuffix(c.raw); got != c.want {
+			t.Errorf("nameRateSuffix(%q)=%q want %q", c.raw, got, c.want)
 		}
 	}
 }
