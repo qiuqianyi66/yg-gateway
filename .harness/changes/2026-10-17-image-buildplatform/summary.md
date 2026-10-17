@@ -107,3 +107,21 @@ git revert <本提交>
 **保留的未知（复审点明）**：arm64 镜像里的二进制到底是不是 arm64，仍未 pull 镜像查 ELF（本机无 daemon）。
 现在多了一层保障——构建阶段自己断言了产物架构，所以「镜像里装错架构」这条路已从「静默」变成「构建即失败」。
 
+## 八、加上架构断言后的 CI 复核（run `39014873155`，提交 `435dae8`）
+
+**`completed / success`**，`build-image` **96s**（比加断言前的 108s 还略快，属噪声；相对基线 239s −60%）。
+
+**断言确实在容器里、且对两个架构都执行了**（日志原文，注意 `linux/amd64->arm64` 这个标记正是
+「构建阶段跑在 amd64、产出 arm64」的直接证据）：
+
+```
+#24 [linux/amd64->arm64 build 7/7] RUN set -eu; for f in /out/*; do info=$(go version -m "$f"); …
+      echo "$info" | grep -q "GOARCH=arm64" || { echo "架构断言失败(ARCH)：$f 不是 arm64"; … }
+#35 [linux/amd64         build 7/7] RUN … grep -q "GOARCH=amd64" …
+```
+
+两层都 success ⇒ 断言对 `yg-gateway` / `signin_bin` / `login` / `credit` 四个产物都通过了。
+
+> 读日志的一个坑（记下来防误读）：`grep '架构断言失败'` 会命中**命令文本本身**（RUN 行里就写着这句话），
+> 但那只说明断言存在，不说明它触发了。判断是否触发要看该层是否 `success`——两层都 success。
+
