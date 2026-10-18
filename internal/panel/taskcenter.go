@@ -35,24 +35,55 @@ type scanAccountItem struct {
 	GrowthErr string          `json:"growth_error,omitempty"`
 }
 
-// growthPending 任务是否"未完成且可自动化"。
-func growthPending(t upstream.Task) bool {
+// taskDisposition 「任务该被怎么处置」的单一口径。
+//
+// 为什么要有这个枚举（A7 / D3）：扫描入队（growthPending）与「一键完成」（runAutoAll）
+// 是两条独立入口，早先各自写判定，于是「达标未领」在入队侧入队去领、在一键完成侧被
+// 直接 skipped 不领——同一个账号状态换个入口点，奖励领没领到不一样，而且两条路径都不报错。
+// 现在两条入口只调 disposeTask；口径一旦分叉，表格测试（dispose_task_test.go）立刻红。
+type taskDisposition int
+
+const (
+	taskSkip  taskDisposition = iota // 不处置：已领 / 锁定 / 无自动化动作
+	taskRun                          // 未达标：跑自动化动作（动作里回读并自动领奖）
+	taskClaim                        // 达标未领：不跑动作，直接领奖
+)
+
+// disposeTask 判定单个任务的处置方式（两条路径共用，禁止各自另写判定）。
+func disposeTask(t upstream.Task) taskDisposition {
 	if t.Claimed {
-		return false
+		return taskSkip
 	}
 	// 上游锁定的任务不出待办：Sequential 族每日零点解锁一环，刚做完上一环时
 	// 下一环以下发但 locked 形态出现在列表里——扫进队列只会 accept 不落账报
 	// 失败（每日锁定窗口），零点解锁后自然回到待办。其余 locked（上游未开放）
 	// 同语义：不该被自动化尝试。
 	if t.Locked {
-		return false
+		return taskSkip
+	}
+	// 无自动化动作的任务不该被自动化尝试：入队后 autoActionFor 为 nil 会直接报错。
+	if autoActionFor(t.TaskCode) == nil {
+		return taskSkip
 	}
 	if t.Target > 0 && t.Current >= t.Target {
-		// 达标未领：也入队（队列执行后会自动领）——但仅限有自动化动作的任务，
-		// 否则队列执行时会因 autoActionFor 为 nil 直接报错。
-		return autoActionFor(t.TaskCode) != nil
+		return taskClaim
 	}
-	return autoActionFor(t.TaskCode) != nil
+	return taskRun
+}
+
+// growthPending 任务是否"未完成且可自动化"（入队口径 = 处置方式不是「不处置」）。
+func growthPending(t upstream.Task) bool {
+	return disposeTask(t) != taskSkip
+}
+
+// claimRewardFor 领奖的唯一出口（mp 专属码走 chat 域 mp 口径，其余走 Web 端接口）。
+// 三个调用点（单任务动作 / 一键完成 / 队列执行）以前各写一遍 if isMP，口令一旦分叉
+// 就会出现「某条入口用了错的头」。错误一律回传给调用方决定文案（R10，不静默吞）。
+func (p *Panel) claimRewardFor(a *auth.Auth, code string) (int64, int64, error) {
+	if isMPTaskCode(code) {
+		return p.cfg.Upstream.ClaimRewardMP(a, code)
+	}
+	return p.cfg.Upstream.ClaimReward(a, code)
 }
 
 // tasksScanAll 扫描全部账号：成长任务（未完成+可自动化，含 mp 口径合并）。
@@ -430,8 +461,26 @@ func (p *Panel) runGrowthQueued(a *auth.Auth, code string) (string, error) {
 		return "该账号无此任务", nil
 	}
 	isMP := isMPTaskCode(code)
-	if before.Claimed {
-		return "已完成（已领取）", nil
+	switch disposeTask(*before) {
+	case taskSkip:
+		if before.Claimed {
+			return "已完成（已领取）", nil
+		}
+		return "已跳过（任务锁定或无自动动作）", nil
+	case taskClaim:
+		// 达标未领：与「一键完成」同一口径——不跑动作，直接领奖（A7 / D3）。
+		// 以前这里会先白跑一次动作（上游回「无需上报」）再领奖，于是同一个任务
+		// 经队列和一键完成两条入口的动作次数不同，奖励却只有一条路径拿得到。
+		credit, energy, cerr := p.claimRewardFor(a, code)
+		progress := taskProgressText(before)
+		switch {
+		case cerr != nil:
+			return fmt.Sprintf("已达标但领奖失败（可在列表手动重试）: %v（进度 %s）", cerr, progress), nil
+		case credit > 0 || energy > 0:
+			return fmt.Sprintf("已达标未领：自动领奖 +%d 分 +%d 能（进度 %s）", credit, energy, progress), nil
+		default:
+			return fmt.Sprintf("已达标未领：奖励为 0 或此前已领取（进度 %s）", progress), nil
+		}
 	}
 	msg, err := act.run(p, a)
 	if err != nil {
@@ -452,14 +501,7 @@ func (p *Panel) runGrowthQueued(a *auth.Auth, code string) (string, error) {
 			logfmt.Label(a.UID, a.Nickname), code, aerr)
 	}
 	if after != nil && after.Claimable {
-		var credit, energy int64
-		var cerr error
-		if isMP {
-			credit, energy, cerr = p.cfg.Upstream.ClaimRewardMP(a, code)
-		} else {
-			credit, energy, cerr = p.cfg.Upstream.ClaimReward(a, code)
-		}
-		if cerr == nil && (credit > 0 || energy > 0) {
+		if credit, energy, cerr := p.claimRewardFor(a, code); cerr == nil && (credit > 0 || energy > 0) {
 			msg += fmt.Sprintf("；自动领奖 +%d 分 +%d 能", credit, energy)
 		}
 	}

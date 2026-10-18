@@ -690,13 +690,7 @@ func (p *Panel) accountTaskAuto(w http.ResponseWriter, r *http.Request) {
 	}
 	// 达标即自动领奖（Web 端 claim）：把"完成→领奖"收敛成一步，无需用户再点一次。
 	if claimable {
-		var credit, energy int64
-		var cerr error
-		if isMP {
-			credit, energy, cerr = p.cfg.Upstream.ClaimRewardMP(a, act.TaskCode)
-		} else {
-			credit, energy, cerr = p.cfg.Upstream.ClaimReward(a, act.TaskCode)
-		}
+		credit, energy, cerr := p.claimRewardFor(a, act.TaskCode)
 		if cerr == nil {
 			resp["claimed"] = true
 			resp["credit"] = credit
@@ -1188,10 +1182,19 @@ func (p *Panel) runAutoAll(a *auth.Auth) []map[string]any {
 			out = append(out, item)
 			continue
 		}
-		if before.Claimed || before.Current >= before.Target && before.Target > 0 {
+		switch disposeTask(*before) {
+		case taskSkip:
 			item["status"] = "skipped"
 			item["message"] = "已完成（" + taskProgressText(before) + "）"
 			out = append(out, item)
+			continue
+		case taskClaim:
+			// 达标未领：与队列路径同一口径——不跑动作，直接领奖（A7 / D3）。
+			// 以前这里是 skipped（不领），于是同一个任务走队列能领到奖、走「一键完成」
+			// 领不到，而两条路径都不报错。判定统一后由 disposeTask 决定，本处只执行。
+			p.autoAllClaimOnly(a, act.TaskCode, item)
+			out = append(out, item)
+			time.Sleep(reportGap) // 项间节流
 			continue
 		}
 		msg, err := act.run(p, a)
@@ -1222,13 +1225,7 @@ func (p *Panel) runAutoAll(a *auth.Auth) []map[string]any {
 		// 领奖失败不掩盖主流程结果：status 仍为 done，附加 claim_error 供前端提示。
 		if after != nil && after.Claimable {
 			item["claimable"] = true
-			var credit, energy int64
-			var cerr error
-			if isMPTaskCode(act.TaskCode) {
-				credit, energy, cerr = p.cfg.Upstream.ClaimRewardMP(a, act.TaskCode)
-			} else {
-				credit, energy, cerr = p.cfg.Upstream.ClaimReward(a, act.TaskCode)
-			}
+			credit, energy, cerr := p.claimRewardFor(a, act.TaskCode)
 			if cerr == nil {
 				item["claimed"] = true
 				item["credit"] = credit
@@ -1247,6 +1244,28 @@ func (p *Panel) runAutoAll(a *auth.Auth) []map[string]any {
 		time.Sleep(reportGap) // 项间节流
 	}
 	return out
+}
+
+// autoAllClaimOnly 达标未领项的领奖分支（A7 / D3）：只领奖、不跑动作，
+// 结果按既有 item 契约写回（claimable/claimed/credit/energy/claim_error + message）。
+// 单独成函数是为了让 runAutoAll 别越过「>120 行」的深度棘轮，同时本分歧口径只有一处。
+func (p *Panel) autoAllClaimOnly(a *auth.Auth, code string, item map[string]any) {
+	item["claimable"] = true
+	credit, energy, cerr := p.claimRewardFor(a, code)
+	item["status"] = "done"
+	if cerr != nil {
+		item["claim_error"] = cerr.Error()
+		item["message"] = "已达标未领；领奖失败（可在列表手动重试）: " + cerr.Error()
+		return
+	}
+	item["claimed"] = true
+	item["credit"] = credit
+	item["energy"] = energy
+	if credit > 0 || energy > 0 {
+		item["message"] = fmt.Sprintf("已达标未领：已领奖 +%d 分 +%d 能", credit, energy)
+		return
+	}
+	item["message"] = "已达标未领：奖励为 0 或此前已领取"
 }
 
 // accountTaskAutoAll 一键完成该账号全部可自动任务。

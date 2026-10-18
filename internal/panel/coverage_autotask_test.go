@@ -2843,22 +2843,24 @@ func TestPanelAutoTaskRunAutoAllBatchAcceptErrorDoesNotBlock(t *testing.T) {
 	caEqStr(t, caStr(t, caFindItem(t, out, "chat_5"), "status"), "skipped", "已领取项")
 }
 
-// 逐项状态：已领取 / 已达标 / 无此任务 → skipped（且都写清原因）。
+// 逐项状态：已领取 / 无此任务 → skipped；达标未领 → 只领奖（A7/D3 统一口径）。
 func TestPanelAutoTaskRunAutoAllSkipsTerminalAndAbsent(t *testing.T) {
 	caFastGaps(t)
 	f := caNewFake()
-	f.caSetTask(caTask("chat_5", 5, 5, "accepted"))       // 达标未领 → skipped（不作动作）
+	f.caSetTask(caTask("chat_5", 5, 5, "accepted"))       // 达标未领 → 只领奖，不跑动作
 	f.caSetTask(caTask("RichMeow_Chat", 1, 1, "claimed")) // 已领 → skipped
 	// 其余动作（first_buddy / Model_chat_* 等）账号下都没有 → skipped "该账号无此任务"
 	p := caNewPanel(t, f, caAccount("u1"))
 
 	out := p.runAutoAll(caAccount("u1"))
 
-	caEqStr(t, caStr(t, caFindItem(t, out, "chat_5"), "message"), "已完成（5/5）", "达标项 message")
+	chatItem := caFindItem(t, out, "chat_5")
+	caEqStr(t, caStr(t, chatItem, "status"), "done", "达标未领项 status")
+	caEqStr(t, caStr(t, chatItem, "message"), "已达标未领：奖励为 0 或此前已领取", "达标未领项 message")
 	caEqStr(t, caStr(t, caFindItem(t, out, "RichMeow_Chat"), "message"), "已完成（1/1）", "已领项 message")
 	caEqStr(t, caStr(t, caFindItem(t, out, "first_buddy"), "message"), "该账号无此任务", "缺失项 message")
 	if n := f.caCallCount("POST", "/v2/report"); n != 0 {
-		t.Fatalf("skipped 项不该有任何动作上报，次数 %d", n)
+		t.Fatalf("skipped / 只领奖项不该有任何动作上报，次数 %d", n)
 	}
 }
 
@@ -3712,7 +3714,9 @@ func TestPanelAutoTaskRunGrowthQueuedBranches(t *testing.T) {
 		if err != nil {
 			t.Fatalf("不该报错: %v", err)
 		}
-		caEqStr(t, msg, "已领取奖励（+100c +5e）（进度 1/1）", "结果文本")
+		// A7/D3：达标未领不再白跑一次动作，直接领奖（与「一键完成」同一口径）；
+		// 牙齿仍是「恰领 1 次 + 走 chat 域 + 带 mp 头」——口径错就领不到。
+		caEqStr(t, msg, "已达标未领：自动领奖 +100 分 +5 能（进度 1/1）", "结果文本")
 		claims := f.caCalls("POST", "/activity/growth/tasks/Sequential_Tasks_1/claim")
 		if len(claims) != 1 {
 			t.Fatalf("领奖次数 = %d, want 1", len(claims))
@@ -4189,17 +4193,23 @@ func TestPanelAutoTaskRunGrowthQueuedClaimAndQueryErrors(t *testing.T) {
 		}
 	})
 
-	t.Run("mp 领奖成功追加奖励文案", func(t *testing.T) {
+	t.Run("动作达标后追加奖励文案", func(t *testing.T) {
+		// A7/D3 后「达标未领」不再跑动作（直接领奖），所以「动作 → 回读 claimable →
+		// 追加奖励文案」这条分支改用「未达标、动作自己把进度做满」的形态覆盖。
 		f := caNewFake()
-		f.caSetMPTask(caTask("Sequential_Tasks_1", 1, 1, "accepted"))
+		f.caSetTask(caTask("chat_5", 4, 5, "accepted"))
 		f.claimCredit, f.claimEnergy = 100, 5
-		f.claimKeepsState = true // 领奖后回读仍 claimable → 走 runGrowthQueued 的 mp 领奖分支
+		f.onReport = func(call caCall) {
+			if call.Host == "billing.test" {
+				f.caAdvance("chat_5", false, 5, "completed")
+			}
+		}
 		p := caNewPanel(t, f, caAccount("u1"))
-		msg, err := p.runGrowthQueued(caAccount("u1"), "Sequential_Tasks_1")
+		msg, err := p.runGrowthQueued(caAccount("u1"), "chat_5")
 		if err != nil {
 			t.Fatalf("不该报错: %v", err)
 		}
-		caEqStr(t, msg, "已领取奖励（+100c +5e）；自动领奖 +100 分 +5 能（进度 1/1）", "结果文本")
+		caEqStr(t, msg, "已补报 1 条对话事件；自动领奖 +100 分 +5 能（进度 5/5）", "结果文本")
 	})
 
 	t.Run("领奖失败不追加奖励文案", func(t *testing.T) {
@@ -4260,7 +4270,7 @@ func TestPanelAutoTaskStartGrowthQueueGatesAndDedupes(t *testing.T) {
 func TestPanelAutoTaskRunQueueItemsTwoAccounts(t *testing.T) {
 	caFastGaps(t)
 	f := caNewFake()
-	f.caSetTask(caTask("chat_5", 5, 5, "accepted")) // 达标 → 动作阶段 skipped（不影响计数）
+	f.caSetTask(caTask("chat_5", 5, 5, "accepted")) // 达标未领 → 只领奖（A7/D3），不跑动作
 	f.caSetTask(caTask("Model_chat_GLM5.2", 0, 1, "accepted"))
 	f.raw["POST /v2/chat/completions"] = caRaw{Status: 500, Body: `{"code":10000,"msg":"chat down"}`}
 	a1, a2 := caAccount("u1"), caAccount("u2")
@@ -4278,8 +4288,8 @@ func TestPanelAutoTaskRunQueueItemsTwoAccounts(t *testing.T) {
 
 	items := caQueueItems(p)
 	caEqStr(t, items[0].Status, "done", "u1 项状态")
-	// 达标未领的项仍会跑动作，动作自身报「无需上报」；奖励为 0 时不追加奖励文案。
-	caEqStr(t, items[0].Message, "进度已达标，无需上报（进度 5/5）", "u1 项消息")
+	// 达标未领的项只领奖、不再白跑动作；奖励为 0 时文案说清「为 0 或此前已领取」。
+	caEqStr(t, items[0].Message, "已达标未领：奖励为 0 或此前已领取（进度 5/5）", "u1 项消息")
 	caEqStr(t, items[1].Status, "error", "u2 项状态")
 	if !strings.Contains(items[1].Message, "http 500") {
 		t.Fatalf("u2 项消息 = %q, want 含上游状态码", items[1].Message)
