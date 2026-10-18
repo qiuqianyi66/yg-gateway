@@ -84,3 +84,18 @@
 | S1/S4 断言 | 需 `log.SetOutput` 捕获日志行；价值低于上面两条 |
 | B4b 残留 `cmd.exe` 清理 | 属 `deploy-prod.ps1` 变更，**必须配排练场景**（该脚本的全部前提就是「排练过」），单开一轮 |
 | B1b 面板 unknown 有值态 | 需真实例 + 造一条 unknown 登记（触发条件是成本不明，要真实上游调用）；且已有 JS 级测试（3/3 反向变异红），边际价值低 |
+## 九、S6 已补（第三轮，2026-10-18）
+
+**结论：S6 不是「缺观测出口」，而是「缺断言」**——`pool.Status(uid)` 早已暴露 `SuccessCount`
+（state.go:323 / 601），此前没人用它对成功路径做断言。
+
+改法：`TestStreamOutcomeClassification` 加 `wantSuccessNote`，成功后断言 `Status("u1").SuccessCount > 0`，
+失败路径断言 `== 0`（空流/超大帧/错误帧都不该记成功）。
+
+副本复跑结果：**server 6 条 → 4 咬住 / 2 存活**
+（S1 空流 st.status、S4 超大帧 st.status 仍存活，且已判定为「只影响 stderr 日志行」的变异）。
+
+| 结果 | 条目 |
+|---|---|
+| 咬住（4） | S2 错误帧判据、S3 断连、S5 错误策略、**S6 成功计数** |
+| 存活（2） | S1/S4：只改 `st.status`，仅 stderr 日志行可见（reqlog 的 Status 恒 200） |

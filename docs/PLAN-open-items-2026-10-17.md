@@ -228,13 +228,13 @@ Get-ChildItem internal -Recurse -Filter *.js | ForEach-Object { (Get-Content $_.
 | ~~**B4b**~~ ✅ | **残留 launcher 已可自动清理**：`Clear-OrphanLaunchers`（三条判据：cmd.exe / 命令行含目标 exe 路径 / 父进程已死），在「停旧实例前」与「回滚启动前」各调一次。双向实测（真孤儿被杀、在用不误伤）+ 排练 53/53 无回归 | `.harness/changes/2026-10-18-deploy-orphan-launcher/` | 已完成 | L2 |
 | ~~**B5**~~ ✅ | **`build-image` 的墙钟瓶颈已消**：根因不是双架构，而是构建阶段没走 `BUILDPLATFORM`（arm64 整段 Go 编译在 QEMU 下模拟）。改成构建机架构交叉编译后，**实测 239s → 108s → 96s（−60%）**，两架构验证强度不变 | `bf5a4aa`；CI run `39014207601`；PRD `REQ-image-buildplatform-2026-10-17` | 已完成 | L2 |
 | ~~**B3**~~ ✅ | **四包变异核验 + 复审三条缺口全部闭环**：入库清单 23 条变异 23 咬住（auth 6 / session 6 / scheduler 4 / cmd/server 7）；驱动与清单在 `scripts/mutation/`。复审自选的 3 个更难变异原本 3/3 存活 → B3-a `SaveAtomic` rename（`6b1a886`）· B3-b session 空闲号优先（本轮）· B3-c 多 Key 归一化口径（`9823ebd`）**各补了带牙齿的常驻测试**。⚠️ 注意：另一个会话用同名 B3-a/b/c 指 scheduler 的三件事，**同名不同物**，见 summary §10.1 | `.harness/changes/2026-10-17-mutation-auth-session-scheduler-cmdserver/` | 已完成 | L1 |
-| **B2 实质**（② 完成，①③ 待做） | wiki 三条：①剪枝前回填 ②持久化版本闸门 ③跨文件写前意图。**②的 `usage.json` 已落地**（ADR-009：新版本→拒绝启动、旧版本→加载+`.pre-upgrade-vN.bak`、损坏→拒绝；5 个子用例）；**`state.json` 也已落地**（同 ADR-009 口径：损坏→拒绝启动、版本更新→拒绝启动、缺失/相等→加载；未改 `pool.New` 签名，5 个子用例）；①③ 未动 | `.harness/changes/2026-10-18-ledger-version-gate/` + `docs/adr/ADR-009-*` | ② 完成（usage + state 双文件）；①/③ 待做 | L3 |
+| **B2 实质**（② 完成，①不适用，③待做） | wiki 三条：①剪枝前回填 ②持久化版本闸门 ③跨文件写前意图。**②的 `usage.json` 已落地**（ADR-009：新版本→拒绝启动、旧版本→加载+`.pre-upgrade-vN.bak`、损坏→拒绝；5 个子用例）；**`state.json` 也已落地**（同 ADR-009 口径：损坏→拒绝启动、版本更新→拒绝启动、缺失/相等→加载；未改 `pool.New` 签名，5 个子用例）；①**判定不适用**（推导值在摄入时即落台账，归档只是副本——见 `.harness/changes/2026-10-18-b2-item1-not-applicable/`，附 grep 与调用点证据）；③ 未动 | `.harness/changes/2026-10-18-ledger-version-gate/` + `docs/adr/ADR-009-*` | ② 完成（usage + state 双文件）；① 不适用（有证据）；③ 待做 | L3 |
 | **B4a** | 夜猫子末次 4s 等待（`blackcat.go` 循环末次也 `sleepNightChat()`），改了每次任务省 4s | 1h | **你**（行为变更，PRD 一句话） |
 | **A7 / D3** | 「达标未领」两条路径语义相反 | 2h | **你**（D3 语义） |
 | **D2** | 401 是否走上游错误档 | 3h | **你** |
 | **D1** | upstream 收窄为 interface | — | **你**（建议明确记「不做」） |
 | **D4/D5** | 备份清理 / 7864 实例 | — | **你**（我按必要性分析建议都不做，理由见 `PLAN-necessity-review` §D4/D5） |
 | **A4** | 20 条 `supports_images` 全量实测 | 半天 | **你**（我建议不做全量，转 unknown + 按需） |
-| **A6** | 变异核验穷尽度（增量回合） | **2026-10-18 两轮**：`pool` 6/6 咬住（保底/收费/轮换/在途/健康）；`server` 流式结果分类 6 条 → **3 咬住 / 3 存活**（S5 错误策略、S3 断连均已补测试；S1/S4 只影响 stderr 日志行；S6 因池侧无访问器而无法断言）。同轮修掉驱动两个方法学缺陷（编译失败曾被记成「咬住」、`go test` stderr 曾被当异常中断） | 剩余：S3（需写失败 writer）/ S6（需断言池侧健康度）/ 日志行口径；另有观测事实待拍板——**`st.status` 的 502 不进 reqlog/面板，只进 stderr** |
+| **A6** | 变异核验穷尽度（增量回合） | **2026-10-18 两轮**：`pool` 6/6 咬住（保底/收费/轮换/在途/健康）；`server` 流式结果分类 6 条 → **4 咬住 / 2 存活**（S5 错误策略、S3 断连、S6 成功计数均已补断言；S1/S4 只影响 stderr 日志行）。同轮修掉驱动两个方法学缺陷（编译失败曾被记成「咬住」、`go test` stderr 曾被当异常中断） | 剩余：S3（需写失败 writer）/ S6（需断言池侧健康度）/ 日志行口径；另有观测事实待拍板——**`st.status` 的 502 不进 reqlog/面板，只进 stderr** |
 | **O2/O3/O4/O6/O7** | 超长文件拆分 / 覆盖率抖动 / flake 观察 / 3 个 cmd 包无测试 | — | 不做（棘轮已冻结；见必要性分析） |
 | **生产换版** | 生产二进制落后源码（纯重构，行为等价） | 20s | 等条件（下一个行为变更批次一起上） |

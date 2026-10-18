@@ -35,6 +35,9 @@ func TestStreamOutcomeClassification(t *testing.T) {
 		wantStatus  int
 		wantOutcome string
 		wantCooling bool
+		// wantSuccessNote 只有「真成功」分支才应把这一跳记为账号成功（NoteSuccess）。
+		// 断连分支按设计也记成功（人已走但上游无恙），故它不在这里断言。
+		wantSuccessNote bool
 	}{
 		{
 			name:        "空流（200 + 0 有效帧）→ 502 / stream_error",
@@ -61,6 +64,9 @@ func TestStreamOutcomeClassification(t *testing.T) {
 			upstream:    sseOK,
 			wantStatus:  http.StatusOK,
 			wantOutcome: reqlog.OutcomeSuccess,
+			// 变异 S6（去掉成功分支的 NoteSuccess）此前无人咬住：它不让结果分类变化，
+			// 只让账号的成功计数/健康信号不再更新 —— 必须直接断言池侧计数才看得见。
+			wantSuccessNote: true,
 		},
 	}
 
@@ -102,6 +108,17 @@ func TestStreamOutcomeClassification(t *testing.T) {
 			}
 			if !tc.wantCooling && cooling != 0 {
 				t.Errorf("不该触发账号冷却，cooling=%d", cooling)
+			}
+
+			st, ok := p.Status("u1")
+			if !ok {
+				t.Fatalf("池里应有账号 u1")
+			}
+			if tc.wantSuccessNote && st.SuccessCount == 0 {
+				t.Errorf("真成功必须记一次账号成功（NoteSuccess）；SuccessCount=0 说明成功信号没更新，健康度与成功率都会失真")
+			}
+			if !tc.wantSuccessNote && st.SuccessCount != 0 {
+				t.Errorf("失败路径不该记成功，SuccessCount=%d", st.SuccessCount)
 			}
 		})
 	}
