@@ -384,10 +384,15 @@ func LoadDir(dir string) ([]*Auth, error) {
 	for _, f := range files {
 		raw, err := os.ReadFile(f)
 		if err != nil {
+			// 不因为一个坏文件挡住启动（历史行为），但**不许静默**（R10/ADR-010）：
+			// 调用方（cmd/server → pool.SyncToDir）会按这份短列表做破坏性对齐，
+			// 一个静默跳过的文件就等于「这个账号被删了」——见过它的日志才能查。
+			log.Printf("WARN: [auth] 跳过无法读取的账号文件 %s: %v", f, err)
 			continue
 		}
 		a, err := Parse(raw)
 		if err != nil {
+			log.Printf("WARN: [auth] 跳过无法解析的账号文件 %s: %v", f, err)
 			continue
 		}
 		a.FilePath = f

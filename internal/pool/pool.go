@@ -505,9 +505,20 @@ func (p *Pool) Add(a *auth.Auth) {
 
 // SyncToDir 用最新扫描结果对齐池：新账号加入、消失的账号剔除（状态保留）。
 // 剔除结果持久化回 state.json，避免已删账号在下次启动时被 load() 复活。
+//
+// **空集下限（ADR-010）**：`len(auths) == 0` 且池里还有账号时**拒绝剔除**。
+// 这条对齐是**破坏性**的（删状态 + 落盘，不可逆），而「扫描结果为空」通常不是
+// 「用户把所有账号都删了」，而是：audits 目录挂错/权限不足/容器未挂卷/文件全被改名。
+// 此时照单剔除 = 一次性永久丢掉全部健康度观测（冷却、熔断、成功率、成本台账）。
+// 需要真的清空全部账号时，请用面板逐个删除（走 Remove）或在停服后手工清 state.json。
 func (p *Pool) SyncToDir(auths []*auth.Auth) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if len(auths) == 0 && len(p.byUID) > 0 {
+		log.Printf("WARN: [pool] 扫描结果为空但池内有 %d 个账号 —— 拒绝按空集对齐（可能是目录/权限问题）；"+
+			"状态保持不变。确需清空请用面板删除或停服后手工处理 state.json", len(p.byUID))
+		return
+	}
 	seen := make(map[string]bool, len(auths))
 	for _, a := range auths {
 		seen[a.UID] = true
