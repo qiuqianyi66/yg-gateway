@@ -316,6 +316,12 @@ func (run *chatRun) serveStream(w http.ResponseWriter, acct *auth.Auth, rc io.Re
 		// 同语义（此前 `_ =` 吞错把失败流记成 200，运维看到假成功）。
 		// 只认 IsEmptyStreamError：客户端断连的写失败不误标（人已走，
 		// 502 观测没有意义）。
+		//
+		// 口径澄清（2026-10-18 实测，勿再误读）：下面的 st.status 只进
+		// **stderr 日志行**（logging.go 的 logChatRowEx）；reqlog 归档与面板的
+		// Status 取的是 handler 层的 HTTP 码，流式响应头早已发出 → 恒 200。
+		// 也就是说「502 观测」当前只对看 stderr 的人成立，对看面板/归档的人不成立。
+		// 要不要把 st.status 也带进 Event 会改归档与面板统计口径，另议。
 		st.status = http.StatusBadGateway
 		st.outcome = reqlog.OutcomeStreamError
 		log.Printf("WARN: [server] stream acct=%s model=%s: empty upstream stream (200+0 frames)", logfmt.Label(acct.UID, acct.Nickname), bareModel)

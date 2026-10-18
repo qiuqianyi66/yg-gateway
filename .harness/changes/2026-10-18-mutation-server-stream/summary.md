@@ -54,3 +54,33 @@
 ## 六、回滚
 
 无生产代码改动；`git revert` 即可。
+## 七、第二轮补齐（2026-10-18 续）
+
+1. **S3 已补测试**：`TestStreamClientDisconnectRecordsInterrupted` 用自定义 `failAfterWriter`
+   （前 N 次写正常、之后返回 error，不实现 `http.Flusher` —— chatrun 不依赖它）模拟客户端断连。
+   副本复跑：`[S3] 咬住 | --- FAIL: TestStreamClientDisconnectRecordsInterrupted`。
+   → server 这批从「2 咬住 / 4 存活」变成 **3 咬住 / 3 存活**。
+2. **`st.status` 注释已改如实**（`chatrun.go` 空流分支）：原文写「状态收敛到 502 观测」，
+   实测该 502 只进 stderr 日志行，reqlog/面板恒 200。已在代码里写清，并注明「是否带进 Event 另议」。
+3. **S6（去掉 NoteSuccess）仍存活，且判定为「当前无观测出口」**：
+   `NoteSuccess` 改的是 `successCount` / `lastSuccess` / EWMA / fails / retryCount / breaker 等，
+   而 `Pool` **没有任何导出访问器**暴露它们（只有 `CountsDetailed` 的 healthy/cooling 计数，
+   在干净池上不变化）。要咬住 S6 必须先加访问器（生产代码 + 口径），属另一件事，本轮不做。
+4. **S1/S4 仍为「只影响日志行」的变异**（见 §三），要咬住需捕获 log 输出。
+
+### 7.1 server 本轮的最终账
+
+| 结果 | 条目 |
+|---|---|
+| 咬住（3） | S2 错误帧判据（旧测试）、S5 错误策略（**新测试**）、S3 断连（**新测试**） |
+| 存活·非缺口（2） | S1/S4：只改 `st.status`，仅 stderr 日志行可见 |
+| 存活·真缺口但受阻（1） | S6：池侧无访问器，无法从外部断言 |
+
+## 八、剩余（明确交接）
+
+| 项 | 阻塞点 |
+|---|---|
+| S6 断言 | 需要 `Pool` 暴露成功计数/EWMA 的只读视图（生产代码改动，需立项） |
+| S1/S4 断言 | 需 `log.SetOutput` 捕获日志行；价值低于上面两条 |
+| B4b 残留 `cmd.exe` 清理 | 属 `deploy-prod.ps1` 变更，**必须配排练场景**（该脚本的全部前提就是「排练过」），单开一轮 |
+| B1b 面板 unknown 有值态 | 需真实例 + 造一条 unknown 登记（触发条件是成本不明，要真实上游调用）；且已有 JS 级测试（3/3 反向变异红），边际价值低 |

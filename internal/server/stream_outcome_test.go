@@ -1,6 +1,7 @@
 package server
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -103,5 +104,70 @@ func TestStreamOutcomeClassification(t *testing.T) {
 				t.Errorf("不该触发账号冷却，cooling=%d", cooling)
 			}
 		})
+	}
+}
+
+// failAfterWriter 前 N 次 Write 正常，之后返回错误——模拟客户端断连（TCP RST / 用户关页面）。
+// 刻意不实现 http.Flusher：chatrun 不依赖它（已确认无 Flush 调用），少了更贴近「写就失败」。
+type failAfterWriter struct {
+	hdr       http.Header
+	code      int
+	failAfter int
+	n         int
+}
+
+func (w *failAfterWriter) Header() http.Header {
+	if w.hdr == nil {
+		w.hdr = http.Header{}
+	}
+	return w.hdr
+}
+
+func (w *failAfterWriter) WriteHeader(c int) {
+	if w.code == 0 {
+		w.code = c
+	}
+}
+
+func (w *failAfterWriter) Write(b []byte) (int, error) {
+	w.n++
+	if w.n > w.failAfter {
+		return 0, errors.New("client gone: write failed")
+	}
+	return len(b), nil
+}
+
+// TestStreamClientDisconnectRecordsInterrupted 钉住「客户端断连 ≠ 网关失败」的分类（A6 S3）。
+//
+// 为什么需要它（变异核验实测）：把 chatrun 断连分支的 `OutcomeInterrupted` 改成
+// `OutcomeSuccess` 后，包内测试全绿。危害是**成功率被断连污染**——人关了页面，
+// 网关却记成一次成功；该分支还会照常 NoteSuccess，与「真成功」混为一谈。
+//
+// 还原什么会让它 FAIL：`st.outcome = reqlog.OutcomeInterrupted` → `OutcomeSuccess` → 本用例红。
+func TestStreamClientDisconnectRecordsInterrupted(t *testing.T) {
+	p := testPoolWith(&auth.Auth{UID: "u1", AccessToken: "at1", ExpiresAt: 9999999999})
+	reqLog := reqlog.New(reqlog.Config{})
+	h := NewHandler(Config{
+		Pool:       p,
+		Upstream:   newFakeUpstream(t, func(string) (int, string, bool) { return 200, sseOK, true }),
+		RequestLog: reqLog,
+	})
+
+	// failAfter=0：第一次写就失败，模拟首帧即断连。
+	w := &failAfterWriter{failAfter: 0}
+	req := httptest.NewRequest("POST", "/v1/chat/completions",
+		strings.NewReader(`{"model":"glm-5.2","stream":true,"messages":[]}`))
+	h.ServeHTTP(w, req)
+
+	s := reqLog.Snapshot()
+	if len(s.Recent) != 1 {
+		t.Fatalf("应恰好 1 条事件，got %d（metrics=%+v）", len(s.Recent), s)
+	}
+	e := s.Recent[0]
+	if e.Outcome != reqlog.OutcomeInterrupted {
+		t.Errorf("outcome=%q，want %q（断连记成成功会污染成功率）", e.Outcome, reqlog.OutcomeInterrupted)
+	}
+	if e.OK {
+		t.Errorf("断连不得记为 OK")
 	}
 }
