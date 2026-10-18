@@ -284,6 +284,12 @@ func main() {
 	// datapath 由 state 文件路径推出，避免再加一个配置项。
 	usagePath := usagePathFor(cfg.StateFile)
 	rec := usage.New(usagePath)
+	// ADR-009：用量台账是选号与成本控制的输入，加载失败不能「从零开始」继续跑
+	// （历史上只打日志，等于静默丢掉全部台账）。版本比程序新（典型是回滚到旧版）
+	// 与文件损坏都在这里变成**拒绝启动**，让人看见而不是让数据被无声污染。
+	if err := rec.LoadErr(); err != nil {
+		log.Fatalf("usage ledger: %v", err)
+	}
 	rec.Start()
 	defer rec.Stop()
 	log.Printf("[usage] 逐请求用量记录已启用: %s (%s)", usagePath, rec.Describe())

@@ -130,6 +130,9 @@ type Recorder struct {
 	dirty   bool
 	started time.Time
 
+	// loadErr 加载期错误（见 LoadErr/ADR-009）。只在构造期写、之后只读。
+	loadErr error
+
 	stopOnce sync.Once
 	stop     chan struct{}
 	done     chan struct{}
@@ -155,10 +158,24 @@ func New(path string) *Recorder {
 	if path != "" {
 		if err := r.load(); err != nil {
 			log.Printf("[usage] 读取 %s 失败（从零开始）: %v", path, err)
+			r.loadErr = err
 		}
 	}
 	return r
 }
+
+// LoadErr 返回加载期错误（目前只有两类：**文件版本比程序新**、文件损坏/不可读）。
+//
+// 为什么需要它（ADR-009）：`New` 历史上对加载失败只打日志并「从零开始」——对 7×24 常驻 +
+// 滚动换版的服务，这等于**静默丢掉全部用量台账**（用量直接喂选号与成本控制）。
+// 启动方（cmd/server）必须能把这类错误变成「拒绝启动」，而不是带着空台账继续跑。
+//
+// 语义分档：
+//   - 文件版本 > 程序支持版本（典型场景：换版后又回滚到旧二进制）→ **硬错误**，拒绝启动。
+//     旧程序读新文件会按零值丢字段，静默污染是不可逆的；宁可启动失败让人看见。
+//   - 文件损坏/不可读 → 也返回错误（调用方决定是否致命；当前实现按致命处理）。
+//   - 文件版本 <= 程序版本（含缺失 = 0，老文件）→ 不算错误；降级文件在首次落盘时补写当前版本。
+func (r *Recorder) LoadErr() error { return r.loadErr }
 
 // Start 启动后台防抖落盘与折叠。Stop 前一直运行。
 func (r *Recorder) Start() {
@@ -394,6 +411,25 @@ func (r *Recorder) load() error {
 	var f file
 	if err := json.Unmarshal(raw, &f); err != nil {
 		return err
+	}
+	// 版本闸门（ADR-009）：文件比程序新 → **拒绝启动**。
+	// 典型场景：换版后回滚到旧二进制，而旧程序读新文件会按零值丢字段（静默、不可逆）。
+	// 版本更旧或缺失（0）→ 正常加载；首次落盘时由 save 补写当前版本，
+	// 并在补写前留一份 `<path>.pre-upgrade-v<N>.bak`（迁移前备份）。
+	if f.Version > fileVersion {
+		return fmt.Errorf("usage.json 版本 %d 比本程序支持的 %d 更新（典型是回滚到旧版）；"+
+			"旧程序读新文件会静默丢字段，因此拒绝启动。请用新版本程序，或把 %s 换成升级前的备份",
+			f.Version, fileVersion, r.path)
+	}
+	if f.Version > 0 && f.Version < fileVersion {
+		bak := fmt.Sprintf("%s.pre-upgrade-v%d.bak", r.path, f.Version)
+		if _, statErr := os.Stat(bak); os.IsNotExist(statErr) {
+			if cpErr := os.WriteFile(bak, raw, 0o600); cpErr != nil {
+				log.Printf("[usage] 升级前备份失败（继续，但请注意）: %v", cpErr)
+			} else {
+				log.Printf("[usage] 检测到旧版本 %d < %d，已备份为 %s", f.Version, fileVersion, bak)
+			}
+		}
 	}
 	for i := range f.Buckets {
 		b := f.Buckets[i]
