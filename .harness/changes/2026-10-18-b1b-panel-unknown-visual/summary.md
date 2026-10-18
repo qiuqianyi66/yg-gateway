@@ -38,3 +38,51 @@ start http://127.0.0.1:7863/panel
 
 回一句「可以调一次 <模型名>」我就执行 2)，并把 `unknowns_open` 前后值、面板徽章文本、
 以及消解后的状态一起记录进本文件。
+---
+
+## 五、A-7 执行结果（2026-10-18 21:5x）：不调生产，改「通路 + 渲染」双层验证
+
+用户裁定：**不做**生产上的真机调用（不花真钱），所以本轮把「有值态」拆成两层分别验证，
+上游调用 0 次、生产未触碰（PID 40588 全程未动）。
+
+### 5.1 新发现（这条待办真正缺的东西）
+
+前端 `unkBadge()` / `unkNoteText()` 早有 JS 级测试，但**后端字段没有任何测试钉住**：
+`/panel/api/overview` 的 `accounts[].unknowns` 来自 `pool.AccountState.Unknowns`
+（`internal/pool/entry.go:141`，`json:"unknowns,omitempty"`）。一旦它被改成 `nil` 或忘填，
+面板徽章永远停在空态，而**「空态」与「没有未知」在屏幕上完全一样**——正是 AGENTS.md
+「没覆盖 = 未知，不是没有」要防的静默失真。
+
+### 5.2 补的牙齿
+
+| 项 | 内容 |
+|---|---|
+| 新增测试 | `internal/panel/overview_unknowns_test.go`：注入 registry + `TrackCostUnknown` → overview 的 `accounts[0].unknowns` 必须带 `question`/`requires`/`revision`；**消解后必须消失** |
+| 变异 | `internal/pool/state.go` 的 `Unknowns: p.openCostUnknownsLocked(...)` → `nil` → **红**：`accounts[0].unknowns=0 want 1` |
+
+### 5.3 渲染实跑（用真实 app.js，不是重写一份逻辑）
+
+`node` 直接 eval `app.js` 里的 `esc` / `unkBadge` / `unkNoteText`，喂一份**生产 overview 快照**
+（`/panel/api/overview` 实测 6072 字节，4 个账号）并给第 1 个账号注入 2 条 unknown：
+
+```
+<span class="tag warn" title="账号 A 在模型 glm-5.2 上的实际成本未知（仅目录声明）
+需要：一次上游返回 credit 的真实调用
+
+账号 A 在模型 hy4-preview 上的成本分层未知（样本 2 条）
+需要：再 N 条带 credit 的样本把推断升级为观测" style="cursor:help">2 未知成本</span>
+
+2 个 (账号,模型) 成本未知，悬停账号卡片查看明细
+
+空态对照：badge "" / note ""（不占位、不显示「0 未知」——四态纪律）
+```
+
+脚本与数据留在 `%TEMP%\b1b-unknown\`（`render_unknowns.js`、`overview-live.json`、`overview-stub.json`、`stub_panel.py`）。
+
+### 5.4 仍然没做到的（诚实边界）
+
+- **像素级肉眼观感没做**：本会话浏览器桥接不可用（`browser_open_tab` → `no browser extension is connected to the bridge`）。
+- 曾起过 7878 端口的 stub 面板（真实 `index.html` + `app.js` + stub overview）准备截图，无浏览器可看，**已停服**（PID 18028），
+  生产实例全程未动。
+- 要补这一步只需：有浏览器的会话打开该 stub 或生产面板，确认徽章外观（颜色/换行/悬停宽度）。
+  徽章的 HTML 与文案已在 5.3 固定，剩下的只影响观感，不影响正确性。
