@@ -55,4 +55,24 @@ func TestSyncToDirRefusesEmptyScan(t *testing.T) {
 			t.Error("扫描结果里的 u2 应被加入")
 		}
 	})
+
+	// ADR-010 §2.2：扫描不完整（有文件被跳过）时对齐退化为「只增不删」。
+	// 场景：10 个账号文件坏了 2 个 → LoadDir 返回 8 个 + nil error；
+	// 若照单剔除，那 2 个账号的冷却/熔断/成功率/成本台账被永久删掉，原因只是一次读失败。
+	t.Run("扫描不完整时只增不删", func(t *testing.T) {
+		p := New("")
+		defer p.Close()
+		p.Add(mk("u1"))
+		p.Add(mk("u2"))
+
+		// 只读到 u2（u1 所在文件这次读失败），并告知跳过了 1 个文件
+		p.SyncToDirIncomplete([]*auth.Auth{mk("u2"), mk("u3")}, 1)
+
+		if _, ok := p.Status("u1"); !ok {
+			t.Fatal("扫描不完整时删掉了 u1——读不到不等于被删除，健康度观测会被误删")
+		}
+		if _, ok := p.Status("u3"); !ok {
+			t.Error("新增账号仍应加入（只增不删的「增」要生效）")
+		}
+	})
 }

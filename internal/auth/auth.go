@@ -368,14 +368,27 @@ func (a *Auth) SaveAtomic() error {
 	return os.Rename(tmp, a.FilePath)
 }
 
-// LoadDir 扫描并解析 dir 下 workbuddy*.json；解析失败的文件静默跳过（启动日志由调用方统计）。
+// LoadDir 扫描并解析 dir 下 workbuddy*.json；解析失败的文件跳过（见 LoadDirReport）。
 // 顺带做 realm 标识存量迁移：对空 realm 的 auth 自动 backfill（原始 domain 推断）并 SaveAtomic
 // 落盘，一次性把旧文件补上 realm 键。单个文件写失败不阻断启动（log WARN 继续），
 // 避免历史 auth 目录个别文件不可写时整个服务起不来。
+//
+// 需要知道「有几个文件被跳过」的调用方请用 LoadDirReport —— 空集下限只能挡住「全丢」，
+// 部分丢失（10 个坏 2 个 → 那 2 个账号的状态被剔）必须靠跳过数才能挡住（ADR-010）。
 func LoadDir(dir string) ([]*Auth, error) {
+	auths, _, err := LoadDirReport(dir)
+	return auths, err
+}
+
+// LoadDirReport 同 LoadDir，但**额外返回被跳过的文件路径**，供调用方判断这次扫描是否完整。
+//
+// 为什么单列（ADR-010）：`pool.SyncToDir` 的对齐是破坏性的（删状态 + 落盘），而它的输入就是
+// 这份列表。只要有一个文件读不出/解析失败，这份列表就比真实账号少一个——照单剔除等于
+// 把那个账号的健康度观测永久删掉。有了 skipped，调用方可以退化成「只增不删」。
+func LoadDirReport(dir string) (auths []*Auth, skipped []string, err error) {
 	files, err := filepath.Glob(filepath.Join(dir, "workbuddy*.json"))
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	// seenUID 重复 UID 检测：同 UID 出现在多个文件时（双 realm 同名 UID 概率近零）
 	// 打 WARN 告警含两文件路径，由「后载入者胜出」保持现状行为（不改变加载结果）。
@@ -388,11 +401,13 @@ func LoadDir(dir string) ([]*Auth, error) {
 			// 调用方（cmd/server → pool.SyncToDir）会按这份短列表做破坏性对齐，
 			// 一个静默跳过的文件就等于「这个账号被删了」——见过它的日志才能查。
 			log.Printf("WARN: [auth] 跳过无法读取的账号文件 %s: %v", f, err)
+			skipped = append(skipped, f)
 			continue
 		}
 		a, err := Parse(raw)
 		if err != nil {
 			log.Printf("WARN: [auth] 跳过无法解析的账号文件 %s: %v", f, err)
+			skipped = append(skipped, f)
 			continue
 		}
 		a.FilePath = f
@@ -412,5 +427,5 @@ func LoadDir(dir string) ([]*Auth, error) {
 		}
 		out = append(out, a)
 	}
-	return out, nil
+	return out, skipped, nil
 }

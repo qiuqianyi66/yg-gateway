@@ -519,10 +519,34 @@ func (p *Pool) SyncToDir(auths []*auth.Auth) {
 			"状态保持不变。确需清空请用面板删除或停服后手工处理 state.json", len(p.byUID))
 		return
 	}
+	p.syncLocked(auths, true)
+}
+
+// SyncToDirIncomplete 扫描**不完整**时的对齐：只新增/更新，**绝不剔除**。
+//
+// 为什么需要它（ADR-010 §2.2，2026-10-18 补）：空集下限只挡住「全丢」。
+// 若 10 个账号文件里坏了 2 个，LoadDir 返回 8 个 + nil error，`SyncToDir` 会照单剔除
+// 那 2 个账号——它们的健康度观测（冷却/熔断/成功率/成本台账）被永久删掉，而原因只是
+// 一次读失败。调用方拿到 `auth.LoadDirReport` 的 skipped 后应走这里。
+//
+// skipped 只用于日志（把「少了几个」说清楚），行为固定为「不删」。
+func (p *Pool) SyncToDirIncomplete(auths []*auth.Auth, skipped int) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	log.Printf("WARN: [pool] 账号扫描不完整（%d 个文件被跳过，本次读到 %d 个）—— 对齐退化为「只增不删」，"+
+		"避免把读不到的账号的状态误删", skipped, len(auths))
+	p.syncLocked(auths, false)
+}
+
+// syncLocked 对齐的单一实现：allowDelete=false 时只做 upsert。调用方必须已持 p.mu。
+func (p *Pool) syncLocked(auths []*auth.Auth, allowDelete bool) {
 	seen := make(map[string]bool, len(auths))
 	for _, a := range auths {
 		seen[a.UID] = true
 		p.upsertLocked(a)
+	}
+	if !allowDelete {
+		return
 	}
 	changed := false
 	for uid := range p.byUID {

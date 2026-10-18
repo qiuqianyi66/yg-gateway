@@ -47,3 +47,35 @@ func TestLoadDirReportsSkippedFiles(t *testing.T) {
 		t.Errorf("WARN 必须点名文件路径（否则没法查是哪个文件坏了）；输出=%q", out)
 	}
 }
+
+// TestLoadDirReportReturnsSkipped 钉住「跳过数必须能传给对齐逻辑」（ADR-010 §2.2）。
+//
+// 为什么需要它：空集下限只挡得住「全丢」。部分丢失（10 个坏 2 个）要让调用方**知道**这次
+// 扫描不完整，才能退化成「只增不删」；不知道就照单剔除 = 那 2 个账号的健康度观测被永久删。
+//
+// 还原什么会让它 FAIL：让 LoadDirReport 不 append skipped（或恒返回 nil）→ 本用例红。
+func TestLoadDirReportReturnsSkipped(t *testing.T) {
+	dir := t.TempDir()
+	bad1 := filepath.Join(dir, "workbuddy-x.json")
+	bad2 := filepath.Join(dir, "workbuddy-y.json")
+	for _, f := range []string{bad1, bad2} {
+		if err := os.WriteFile(f, []byte("{broken"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	auths, skipped, err := LoadDirReport(dir)
+	if err != nil {
+		t.Fatalf("坏文件不该返回 error（跳过语义），got %v", err)
+	}
+	if len(auths) != 0 {
+		t.Errorf("应读出 0 个账号，got %d", len(auths))
+	}
+	if len(skipped) != 2 {
+		t.Fatalf("应报告 2 个被跳过的文件，got %d: %v", len(skipped), skipped)
+	}
+	got := strings.Join(skipped, "|")
+	if !strings.Contains(got, "workbuddy-x.json") || !strings.Contains(got, "workbuddy-y.json") {
+		t.Errorf("skipped 必须含两个文件路径，got %v", skipped)
+	}
+}

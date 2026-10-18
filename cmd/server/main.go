@@ -101,11 +101,16 @@ func main() {
 		}
 	}
 
-	auths, err := auth.LoadDir(cfg.AuthDir)
+	// LoadDirReport：额外拿到「被跳过的文件」。扫描不完整时不能按这份短列表做破坏性对齐
+	// （ADR-010 §2.2）——否则读不到的账号会被当成已删除，状态被永久剔除。
+	auths, skippedAuths, err := auth.LoadDirReport(cfg.AuthDir)
 	if err != nil {
 		log.Fatalf("load auths: %v", err)
 	}
 	log.Printf("loaded %d account(s) from %s", len(auths), cfg.AuthDir)
+	if len(skippedAuths) > 0 {
+		log.Printf("WARN: %d 个账号文件被跳过（见上方 WARN）—— 本次对齐只增不删", len(skippedAuths))
+	}
 
 	// redisstore：未配置/连接失败 → Noop（纯内存模式，一切功能照常）。
 	store := redisstore.New(cfg.Upstash.URL, cfg.Upstash.Token)
@@ -129,7 +134,13 @@ func main() {
 	}()
 	p.SetStore(store)
 	p.RestoreFromSnapshot() // 择新恢复：Redis 快照比本地新才采用，否则本地优先
-	p.SyncToDir(auths)      // 与 auths 目录对齐：新账号加入、已删除文件账号剔除（状态保留）
+	// 与 auths 目录对齐：新账号加入、已删除文件账号剔除（状态保留）。
+	// 扫描不完整（有坏文件）时退化为「只增不删」——读不到的账号不是「被删的账号」。
+	if len(skippedAuths) > 0 {
+		p.SyncToDirIncomplete(auths, len(skippedAuths))
+	} else {
+		p.SyncToDir(auths)
+	}
 
 	// 熔断器 + 在途上限（含 global 分档）+ 连败降权 + 闲置补偿调优（从 config 注入，
 	// 非正值回退默认）。
