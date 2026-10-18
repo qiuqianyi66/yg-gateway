@@ -21,6 +21,9 @@ type Pool struct {
 	// store 池状态快照镜像（redisstore.Store）；nil = 无需镜像（未配置 Redis / Noop 之外也可能 nil）。
 	// SaveState/LoadState 经它接线，与本地 state.json 并存作启动恢复备份。
 	store StoreSnapshotter
+	// loadErr 加载 state.json 的错误（ADR-009 同族；见 LoadErr）。
+	// 构造期（New → load）写，之后只读；不在热路径上，故不加锁。
+	loadErr error
 	// 熔断器调优（SetBreaker 注入；默认值见 defaultBreaker*）。
 	breakerThreshold   int
 	breakerCooldown    time.Duration

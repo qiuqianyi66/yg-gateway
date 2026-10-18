@@ -650,8 +650,14 @@ type stateModelCost struct {
 	Samples   int       `json:"samples,omitempty"`
 }
 
+// stateFileVersion 是 state.json 的当前格式版本（ADR-009 同族闸门）。
+// 缺 version 字段的老文件按 0 读入 → 视为旧版、正常加载（零迁移成本）。
+// 版本 > 本值 → 拒绝启动（旧程序读新文件会按零值丢账号状态，静默且不可逆）。
+const stateFileVersion = 1
+
 // stateFile 持久化格式。
 type stateFile struct {
+	Version  int                     `json:"version"`
 	Accounts map[string]stateAccount `json:"accounts"`
 }
 

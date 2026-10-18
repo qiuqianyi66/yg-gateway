@@ -111,6 +111,12 @@ func main() {
 	store := redisstore.New(cfg.Upstash.URL, cfg.Upstash.Token)
 
 	p := pool.New(cfg.StateFile)
+	// ADR-009 同族：账号健康度台账（state.json）加载失败不得静默「当成没有状态」——
+	// 历史上损坏文件被直接 return 忽略，限流/熔断/成功率的观测全丢，选号依据被无声重置。
+	// 版本比程序新（典型是回滚到旧版）同样走这条：宁可启动失败让人看见。
+	if err := p.LoadErr(); err != nil {
+		log.Fatalf("pool state: %v", err)
+	}
 	// 停机序：先 pool.Close()（最后一次 Flush → SaveState 已提交到 store），
 	// 再 store.Close() 排空在途异步写（最后一笔 Redis 镜像必须写完才关连接）。
 	defer func() {

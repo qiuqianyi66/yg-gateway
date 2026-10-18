@@ -4,6 +4,7 @@ package pool
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
@@ -139,14 +140,29 @@ func (p *Pool) Flush() {
 func (p *Pool) load() {
 	raw, err := os.ReadFile(p.stateFp)
 	if err != nil {
+		// 文件不存在 = 首次启动，不是错误；其它读错误（权限等）也保持旧行为不致命
+		// （账号状态可由 auths/ 重建，丢失的只是健康度观测）。
 		return
 	}
 	var sf stateFile
 	if json.Unmarshal(raw, &sf) != nil {
+		// 历史实现这里直接 return —— 损坏文件被静默当成「没有状态」，账号健康度全丢。
+		// 至少要让启动方看见（ADR-009 同族：加载失败不得静默）。
+		p.loadErr = fmt.Errorf("state.json 解析失败（%s）：文件损坏，账号健康度无法恢复", p.stateFp)
+		return
+	}
+	if sf.Version > stateFileVersion {
+		p.loadErr = fmt.Errorf("state.json 版本 %d 比本程序支持的 %d 更新（典型是回滚到旧版）；"+
+			"旧程序读新文件会静默丢字段，因此拒绝启动。请用新版本程序，或把 %s 换成升级前的备份",
+			sf.Version, stateFileVersion, p.stateFp)
 		return
 	}
 	p.applyAccountsLocked(sf.Accounts)
 }
+
+// LoadErr 返回加载期错误（ADR-009 同族）。构造期写、之后只读；启动方据此决定是否拒绝启动。
+// 只在「文件存在但损坏」或「版本比程序新」时非空——文件不存在（首次启动）不算错误。
+func (p *Pool) LoadErr() error { return p.loadErr }
 
 // applyAccountsLocked 用持久化账号状态覆盖/插入 byUID（placeholder 凭证，Add 时换全）。
 // 本地 load() 与 Redis 快照恢复共用；调用方必须已持有 p.mu。
@@ -308,7 +324,7 @@ func (p *Pool) notePersistFail(err error) {
 // stateOverviewLocked 收集当前内存状态为 stateFile（供落盘 + 快照镜像复用）。调用方必须已持 p.mu。
 func (p *Pool) stateOverviewLocked() stateFile {
 	now := time.Now()
-	sf := stateFile{Accounts: map[string]stateAccount{}}
+	sf := stateFile{Version: stateFileVersion, Accounts: map[string]stateAccount{}}
 	for uid, e := range p.byUID {
 		s := stateAccount{
 			Credits:                  e.credits,

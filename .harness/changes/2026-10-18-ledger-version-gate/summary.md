@@ -68,3 +68,36 @@
 
 **风险**：`p.load()` 目前在 `New` 里调用且无返回值，改动只是**记录**错误，不改变控制流；
 唯一的调用面新增是 `cmd/server` 的一处 `LoadErr` 检查。
+## 七、state.json 半边已落地（2026-10-18 续）
+
+按 §六 的施工图**逐条实现**，未改 `pool.New` 签名（因此零调用点改动）：
+
+| 文件 | 改动 |
+|---|---|
+| `internal/pool/entry.go` | `const stateFileVersion = 1`；`stateFile` 加 `Version int `json:"version"`` |
+| `internal/pool/persist.go` | `load()`：损坏 → `loadErr`；版本更新 → 硬错误；缺失/相等 → 正常加载。`stateOverviewLocked` 落盘时写 `Version`。新增 `LoadErr()` |
+| `internal/pool/pool.go` | `Pool` 加 `loadErr error` 字段（构造期写、之后只读） |
+| `cmd/server/main.go` | `pool.New` 之后检查 `LoadErr()` → `log.Fatalf`（拒绝启动） |
+| `internal/pool/state_version_gate_test.go` | 五个子用例（见下） |
+
+### 7.1 验证
+
+`go test ./internal/pool/ -run TestStateFileVersionGate -v` → **5/5 PASS**：
+
+| 子用例 | 断言 |
+|---|---|
+| 版本 999（> 1） | 返回错误，且点名 999 |
+| 无 version 字段 | 可加载 |
+| 版本 == 1 | 可加载 |
+| 文件不存在 | **不算错误**（首次启动） |
+| 文件损坏 | 返回错误（不再静默当成没有状态） |
+
+另：`go build ./...` 通过；`go test ./internal/pool/ ./cmd/server/ ./internal/usage/` 三包全绿（8.1s / 0.27s / 0.10s 量级）。
+
+**牙齿**：去掉 `if sf.Version > stateFileVersion` → 第一条红；把 unmarshal 失败改回静默 return → 最后一条红。
+
+### 7.2 边界
+
+- 读文件失败（权限等）仍保持旧行为**不致命**——账号状态可由 `auths/` 重建，丢的只是健康度观测；
+  这一点与 usage.json 的处理**不同**（台账无法重建，故那边连读失败也致命），已写进注释。
+- Redis 快照路径（`RestoreFromSnapshot`）不在本条范围：快照与本文件择新恢复，版本闸门只作用于本地文件。
