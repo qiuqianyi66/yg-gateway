@@ -225,7 +225,7 @@ Get-ChildItem internal -Recurse -Filter *.js | ForEach-Object { (Get-Content $_.
 | ~~**B2a**~~ ✅ | **N6 转述失真已加更正**：两份交接文档保留原文 + 追加「⚠ 更正」块（4 个短语全仓 0 命中、wiki 真正的四件事、改指向本文件 B2 实质） | `.harness/changes/2026-10-17-n6-distortion-correction/` | 已完成 | L0 |
 | ~~**B4c**~~ ✅ | **`AGENTS.md` 部署纪律已指向脚本**：保留四条原则 + 三条用法命令 + 退出码表（`1` vs `4` 的区别）+ `-Build` 脏工作区拒绝 + 先跑排练 | `.harness/changes/2026-10-17-deploy-discipline-pointer/` | 已完成 | L0 |
 | **B1b** | **A3 的剩余部分：造一条 unknown 验「有值态」的面板观感**（B1 已被拆成两半：归档链路 ✅ 见 §9.2 的 B1a；这里只剩面板观感） | 半天 | **无** |
-| **B4b** | 启动失败时 launcher 可能残留 `cmd.exe`（无害但累积）；需写清「命令行含目标 exe 且父进程已死」的清理判据 | 2h | **无** |
+| ~~**B4b**~~ ✅ | **残留 launcher 已可自动清理**：`Clear-OrphanLaunchers`（三条判据：cmd.exe / 命令行含目标 exe 路径 / 父进程已死），在「停旧实例前」与「回滚启动前」各调一次。双向实测（真孤儿被杀、在用不误伤）+ 排练 53/53 无回归 | `.harness/changes/2026-10-18-deploy-orphan-launcher/` | 已完成 | L2 |
 | ~~**B5**~~ ✅ | **`build-image` 的墙钟瓶颈已消**：根因不是双架构，而是构建阶段没走 `BUILDPLATFORM`（arm64 整段 Go 编译在 QEMU 下模拟）。改成构建机架构交叉编译后，**实测 239s → 108s → 96s（−60%）**，两架构验证强度不变 | `bf5a4aa`；CI run `39014207601`；PRD `REQ-image-buildplatform-2026-10-17` | 已完成 | L2 |
 | ~~**B3**~~ ✅ | **四包变异核验 + 复审三条缺口全部闭环**：入库清单 23 条变异 23 咬住（auth 6 / session 6 / scheduler 4 / cmd/server 7）；驱动与清单在 `scripts/mutation/`。复审自选的 3 个更难变异原本 3/3 存活 → B3-a `SaveAtomic` rename（`6b1a886`）· B3-b session 空闲号优先（本轮）· B3-c 多 Key 归一化口径（`9823ebd`）**各补了带牙齿的常驻测试**。⚠️ 注意：另一个会话用同名 B3-a/b/c 指 scheduler 的三件事，**同名不同物**，见 summary §10.1 | `.harness/changes/2026-10-17-mutation-auth-session-scheduler-cmdserver/` | 已完成 | L1 |
 | **B2 实质** | wiki 真实的 3 条高价值建议（剪枝前回填派生值 / 持久化版本闸门 / 跨文件写前意图），②③ 需先立 ADR | 数小时~1天（L2） | 需立项 |

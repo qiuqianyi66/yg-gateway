@@ -160,6 +160,35 @@ function Stop-Listener([int]$p, [string]$expectedExe) {
     return (Wait-PortReleased $p $PortReleaseTimeoutSec)
 }
 
+# 清理**孤儿 launcher**（B4b）：我们启动实例是借 `cmd.exe` 做重定向的，启动失败时（坏 exe /
+# 端口占用 / 上游拒启动）那个 cmd 可能残留。`Replace-Binary` 的改名替换使它**无害**
+# （它只握着一个已摘链的 inode），但它会一直累积，而且让「有没有进程在跑」的排查变脏。
+#
+# 判据（三条全中才杀，避免误伤）：
+#   1) 进程名是 cmd.exe；
+#   2) 命令行里出现**目标 exe 的完整路径**（我们的 launcher 一定带它，别人的 shell 不会）；
+#   3) 父进程已不存在（孤儿）。正在跑的本脚本自己的 launcher，父进程就是我，因此不会被误杀。
+#
+# 为什么不用「按创建时间」或「按名字」：那会误伤并存的人工 shell（本机多会话共用一台机器）。
+function Clear-OrphanLaunchers([string]$exe) {
+    if (-not $exe) { return 0 }
+    $killed = 0
+    $procs = @(Get-CimInstance Win32_Process -Filter "Name='cmd.exe'" -ErrorAction SilentlyContinue)
+    foreach ($p in $procs) {
+        $cmd = [string]$p.CommandLine
+        if (-not $cmd) { continue }                       # 读不到命令行 → 不判断（保守）
+        if ($cmd.IndexOf($exe, [StringComparison]::OrdinalIgnoreCase) -lt 0) { continue }
+        $parentAlive = $false
+        if ($p.ParentProcessId) {
+            $parentAlive = [bool](Get-Process -Id $p.ParentProcessId -ErrorAction SilentlyContinue)
+        }
+        if ($parentAlive) { continue }                    # 父进程还在 → 可能是正在用的 launcher
+        taskkill /PID $p.ProcessId /F 2>&1 | Out-Null
+        $killed++
+    }
+    return $killed
+}
+
 # 写 pid 文件前同样核身份：否则会把「不是我们启动的监听者」的 PID 写进去，
 # 下一轮换版就会照着一份错的 pid 去杀（I1 的种子）。
 function Update-PidFile([int]$p, [string]$expectedExe) {
@@ -212,6 +241,9 @@ function Invoke-Rollback([string]$configPath, [string]$backupPath) {
         }
         $state.exe_hash_after = Sha256 $targetExe
     }
+
+    # 回滚前清残留 launcher：避免旧的启动命令与新的一次抢同一个 exe / 端口。
+    $null = Clear-OrphanLaunchers $targetExe
 
     # 4) 拉起 + 健康轮询（独立日志，不覆盖失败现场）。
     $state.rollback_log_path = Join-Path $LogDir ('yg-gateway-' + $stamp + '.rollback.err.log')
@@ -627,6 +659,11 @@ try {
     # 0 个是常态，所以只有命中才打印。
     $orphans = Remove-OrphanLaunchers $targetExe
     if ($orphans -gt 0) { Write-Step ('共回收孤儿 launcher ' + $orphans + ' 个') }
+    # 清掉上一轮失败留下的孤儿 launcher（B4b）：它们不占端口、也不持有可执行文件，
+    # 但会累积，并让「到底有没有进程在跑」的排查变脏。正在跑的实例不受影响（父进程就是本脚本）。
+    $orphans = Clear-OrphanLaunchers $targetExe
+    if ($orphans -gt 0) { Write-Step ('清理残留 launcher：' + $orphans + ' 个 cmd.exe（父进程已退出）') }
+
     $pidFile = Join-Path (Join-Path $ProdDir 'data') 'yg-gateway.pid'
     $stopFailed = $false
     if (Test-Path -LiteralPath $pidFile) {
