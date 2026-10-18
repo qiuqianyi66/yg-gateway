@@ -1,0 +1,44 @@
+[
+  {
+    "id": "S1",
+    "file": "internal/server/chatrun.go",
+    "desc": "空流（200+0 帧）记成 200 成功而不是 502（运维看到假成功）",
+    "old": "\t\tst.status = http.StatusBadGateway\n\t\tst.outcome = reqlog.OutcomeStreamError\n\t\tlog.Printf(\"WARN: [server] stream acct=%s model=%s: empty upstream stream (200+0 frames)\"",
+    "new": "\t\tst.status = http.StatusOK\n\t\tst.outcome = reqlog.OutcomeStreamError\n\t\tlog.Printf(\"WARN: [server] stream acct=%s model=%s: empty upstream stream (200+0 frames)\""
+  },
+  {
+    "id": "S2",
+    "file": "internal/server/chatrun.go",
+    "desc": "错误帧判据写反（上游报错帧被当成成功）",
+    "old": "\tcase errFrame != \"\":",
+    "new": "\tcase errFrame == \"\":"
+  },
+  {
+    "id": "S3",
+    "file": "internal/server/chatrun.go",
+    "desc": "客户端断连记成成功（Interrupted → Success）",
+    "old": "\t\tst.outcome = reqlog.OutcomeInterrupted",
+    "new": "\t\tst.outcome = reqlog.OutcomeSuccess"
+  },
+  {
+    "id": "S4",
+    "file": "internal/server/chatrun.go",
+    "desc": "超大帧（上游畸形流）记成 200 成功",
+    "old": "\t\tst.status = http.StatusBadGateway\n\t\tst.outcome = reqlog.OutcomeStreamError\n\t\tlog.Printf(\"WARN: [server] stream acct=%s model=%s: upstream frame too large",
+    "new": "\t\tst.status = http.StatusOK\n\t\tst.outcome = reqlog.OutcomeStreamError\n\t\tlog.Printf(\"WARN: [server] stream acct=%s model=%s: upstream frame too large"
+  },
+  {
+    "id": "S5",
+    "file": "internal/server/chatrun.go",
+    "desc": "错误帧不再套用错误策略（限流号被当健康号，粘性还钉在它身上）",
+    "old": "\t\th.applyErrorPolicy(acct.UID, kind, errFrame, bareModel, nil)",
+    "new": "\t\t_ = kind"
+  },
+  {
+    "id": "S6",
+    "file": "internal/server/chatrun.go",
+    "desc": "真成功分支不再 NoteSuccess（健康度/计量不更新）",
+    "old": "\t\tst.outcome = reqlog.OutcomeSuccess\n\t\th.cfg.Pool.NoteSuccess(acct.UID)\n\t\t// 11102 负缓存清命",
+    "new": "\t\tst.outcome = reqlog.OutcomeSuccess\n\t\t// 11102 负缓存清命"
+  }
+]
