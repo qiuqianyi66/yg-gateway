@@ -48,3 +48,23 @@
 ## 五、回滚
 
 `git revert <本提交>`。回滚后重新回到「静默从零开始 / 静默丢字段」的旧行为。
+## 六、`state.json` 那一半的施工图（下一轮直接照做，已勘察完）
+
+同族问题确认：`internal/pool/entry.go` 的 `stateFile` **没有版本字段**，且
+`internal/pool/persist.go` 的 `load()` 对 `json.Unmarshal` 失败**直接 return**（静默丢账号状态）。
+改法与本轮 usage 完全对称，**不需要改 `pool.New` 的签名**（避免动全部调用点）：
+
+1. `entry.go`：`stateFile` 加 `Version int `json:"version"``，新增 `const stateFileVersion = 1`；
+2. `persist.go` 的 `stateOverviewLocked`：`sf := stateFile{Version: stateFileVersion, Accounts: ...}`；
+3. `persist.go` 的 `load()`：
+   - 读文件失败（不存在）→ 仍静默 return（首次启动，不致命）；
+   - `json.Unmarshal` 失败 → `p.loadErr = fmt.Errorf("state.json 解析失败…")`；
+   - `sf.Version > stateFileVersion` → `p.loadErr = fmt.Errorf("版本 %d 比程序支持的 %d 更新（典型是回滚到旧版）…")`；
+   - 否则 `applyAccountsLocked`。
+4. `pool.go`：`Pool` 加 `loadErr error` 字段 + `func (p *Pool) LoadErr() error`（构造期写、之后只读）；
+5. `cmd/server` 里 `pool.New(stateFp)` 之后：`if err := pl.LoadErr(); err != nil { log.Fatalf(...) }`；
+6. 测试：`internal/pool/state_version_test.go`，用例与本轮 `TestLedgerVersionGate` 五条一一对应
+   （新版本→错误 / 旧版本→可加载 / 缺版本→可加载 / 损坏→错误；备份可选，state.json 无字段变换）。
+
+**风险**：`p.load()` 目前在 `New` 里调用且无返回值，改动只是**记录**错误，不改变控制流；
+唯一的调用面新增是 `cmd/server` 的一处 `LoadErr` 检查。
