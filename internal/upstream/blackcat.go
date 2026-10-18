@@ -67,8 +67,10 @@ func (c *Client) sleepNightChat() {
 
 // RunNightChats 夜猫子：发 need 次 glm-5.2 真实对话（读干流）并上报事件链。
 // 返回成功次数。对话内容极短（1+1），消耗可忽略。
-// 每次成功后等 nightChatGap（可注入，见 SetNightChatSleep）——含最后一次，
-// 与改动前逐位一致（不顺手省掉末次等待：那是另一件事，不该夹在测试提速里做）。
+//
+// 等待只发生在**相邻两次对话之间**，共 need-1 次（可注入，见 SetNightChatSleep）：
+// 末次成功后没有第 need+1 个请求要拉开间距，那次等待只是空耗（B4a，每任务 4s）。
+// 间隔时长本身与风控观感相关（见 nightChatGap），所以只去掉末次，不动时长。
 func (c *Client) RunNightChats(a *auth.Auth, need int) (int64, error) {
 	var ok int64
 	for i := 0; i < need; i++ {
@@ -90,7 +92,9 @@ func (c *Client) RunNightChats(a *auth.Auth, need int) (int64, error) {
 			return ok, fmt.Errorf("第 %d 次上报失败: %w", i+1, err)
 		}
 		ok++
-		c.sleepNightChat()
+		if i < need-1 { // 只拉相邻两次对话的间距；末次之后没有下一个请求
+			c.sleepNightChat()
+		}
 	}
 	return ok, nil
 }
