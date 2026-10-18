@@ -99,3 +99,42 @@
 |---|---|
 | 咬住（4） | S2 错误帧判据、S3 断连、S5 错误策略、**S6 成功计数** |
 | 存活（2） | S1/S4：只改 `st.status`，仅 stderr 日志行可见（reqlog 的 Status 恒 200） |
+## 十、S1/S4 已收（第四轮，2026-10-18）——并且纠正了一处我自己写错的观测结论
+
+结论：**server 6 条变异现在 6/6 咬住**（在新克隆里复跑确认，0 存活 0 无效）。
+
+### 10.1 出口查清了：chatLogOut（含面板日志视图）
+
+`chatrun` 的 `st.status` 经 `chatStat.done()` → `logChatRowEx` 写进 **`chatLogOut`**
+（`fmt.Fprintf`，不是标准 logger）。生产里 main 通过 `SetChatLogOutput` 给 `chatLogOut`
+注入 MultiWriter，**镜像进面板的 `/panel/api/logs` 环形缓冲**。
+
+所以 502 的可见性是：**面板日志视图能看到；面板统计与 reqlog 归档看不到**（后者取 handler 层
+HTTP 码，流式恒 200）。
+
+### 10.2 我上一轮写错的注释已改
+
+§七 里我写过「只对看 stderr 的人成立，对看面板不成立」——**错的**：面板日志视图也能看到。
+`chatrun.go` 的注释已按上面口径重写。
+
+### 10.3 测试
+
+新增 `internal/server/stream_logrow_test.go`：把 `chatLogOut` 重定向到 buffer，
+捕获聊天表格行，断言空流/超大帧**记 502**、正常流**不记 502**。
+
+> 过程记录（两类误判，都记下来免得复发）：
+> ① 第一次捕获标准 `log`，一行都没抓到——因为表格行走 `fmt.Fprintf(chatLogOut)`；
+> ② 因此一度以为「流式路径根本不写表格行、S1/S4 是等价变异」，差点把真缺口判成「不是缺口」。
+> **先验证出口，再下结论。**
+
+### 10.4 副本复跑
+
+```
+[S1] 咬住 | --- FAIL: TestStreamFailureStatusReachesLogRow
+[S2] 咬住 | --- FAIL: TestRequestMetricsRecordsStream
+[S3] 咬住 | --- FAIL: TestStreamClientDisconnectRecordsInterrupted
+[S4] 咬住 | --- FAIL: TestStreamFailureStatusReachesLogRow
+[S5] 咬住 | --- FAIL: TestStreamOutcomeClassification
+[S6] 咬住 | --- FAIL: TestStreamOutcomeClassification
+包 internal/server：咬住 6 / 存活 0 / 无效 0
+```
