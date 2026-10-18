@@ -101,3 +101,26 @@
 - 读文件失败（权限等）仍保持旧行为**不致命**——账号状态可由 `auths/` 重建，丢的只是健康度观测；
   这一点与 usage.json 的处理**不同**（台账无法重建，故那边连读失败也致命），已写进注释。
 - Redis 快照路径（`RestoreFromSnapshot`）不在本条范围：快照与本文件择新恢复，版本闸门只作用于本地文件。
+## 八、生产换版已落地（2026-10-18 21:13）
+
+`deploy-prod.ps1 -Build -Feature adr009-010-guards` → **exit 0**。
+
+| 项 | 值 |
+|---|---|
+| stage | `done` |
+| exe_hash_after | `0E10FA1F17929030175887F87D5A72303EC0D8B29C6F47D7C112CC7D5E42C4BA` |
+| git_head | `6251ecb`（`git_dirty=False`，可追溯） |
+| backup | `D:\yg-gateway\yg-gateway.exe.pre-adr009-010-guards-20261018.bak` |
+| 健康 | `healthy=3/4`（未健康的是 global 账号：`realm_servable.global=false`，与本改动无关） |
+| 冒烟 | `/v1/models` 200（20 模型）· 非流式 OK · 流式 OK（增量帧 + [DONE]） |
+
+**闸门在真机上的实际行为**（新实例日志）：
+
+```
+loaded 4 account(s) from ./auths          # 无跳过 → 正常对齐（不是「只增不删」分支）
+pool: 恢复来源=本地 state.json（无 Redis 快照）  # state.json 版本缺失=0 → 放行
+[usage] 已恢复 248 个用量桶（data\usage.json）   # version 6 == fileVersion → 放行，未产生 .bak
+```
+
+即：**两条闸门都走的是「正常放行」路径**，没有误伤现有数据（usage 版本相同 → 不备份；
+state 版本缺失 → 按 0 处理）。回滚方式：把上面的 backup 换回 `D:\yg-gateway\yg-gateway.exe`。
