@@ -1,0 +1,44 @@
+[
+  {
+    "id": "P1",
+    "file": "internal/pool/pick.go",
+    "desc": "积分保底判据从「credits < floor」变成「credits == 0 才拦」（保底形同虚设）",
+    "old": "\tif p.creditFloor <= 0 || model == \"\" || e.credits >= p.creditFloor {",
+    "new": "\tif p.creditFloor <= 0 || model == \"\" || e.credits > 0 {"
+  },
+  {
+    "id": "P2",
+    "file": "internal/pool/pick.go",
+    "desc": "实测台账判收费从 CostPer1k > 0 改成 >= 0（免费模型也被保底拦）",
+    "old": "\t\treturn mc.CostPer1k > 0",
+    "new": "\t\treturn mc.CostPer1k >= 0"
+  },
+  {
+    "id": "P3",
+    "file": "internal/pool/pick.go",
+    "desc": "pick 不再跳过已试过的号（请求级轮换失效，失败重试会打同一个号）",
+    "old": "\t\tif tried != nil && tried[uid] {\n\t\t\tcontinue\n\t\t}\n\t\t// 过期模型级冷却",
+    "new": "\t\tif tried != nil && tried[uid] && false {\n\t\t\tcontinue\n\t\t}\n\t\t// 过期模型级冷却"
+  },
+  {
+    "id": "P4",
+    "file": "internal/pool/pick.go",
+    "desc": "目录倍率判收费从 v > 0 改成 v >= 0（倍率 0 的免费模型被保底拦）",
+    "old": "\treturn v > 0",
+    "new": "\treturn v >= 0"
+  },
+  {
+    "id": "P5",
+    "file": "internal/pool/pick.go",
+    "desc": "去掉在途占满判定（同一账号可以被并发请求超发）",
+    "old": "\t\tif p.inFlightFull(e) {\n\t\t\tcontinue // 在途占满：跳过（max=0 不限时不触发）",
+    "new": "\t\tif false && p.inFlightFull(e) {\n\t\t\tcontinue // 在途占满：跳过（max=0 不限时不触发）"
+  },
+  {
+    "id": "P6",
+    "file": "internal/pool/pick.go",
+    "desc": "去掉健康过滤（冷却/熔断/余额耗尽的号也参与选号）",
+    "old": "\t\tif !healthyOf(e) {\n\t\t\tcontinue\n\t\t}",
+    "new": "\t\tif false && !healthyOf(e) {\n\t\t\tcontinue\n\t\t}"
+  }
+]
