@@ -101,27 +101,15 @@ func main() {
 		}
 	}
 
-	// LoadDirReport：额外拿到「被跳过的文件」。扫描不完整时不能按这份短列表做破坏性对齐
-	// （ADR-010 §2.2）——否则读不到的账号会被当成已删除，状态被永久剔除。
-	auths, skippedAuths, err := auth.LoadDirReport(cfg.AuthDir)
+	// 启动期装配（账号扫描 + 池构造 + 加载错误判定）抽成函数：main() 里的 log.Fatalf 不可测，
+	// 而「扫描不完整只增不删」「加载失败拒绝启动」这两条语义必须被测试覆盖。
+	auths, skippedAuths, p, err := loadAccountsAndPool(cfg)
 	if err != nil {
-		log.Fatalf("load auths: %v", err)
-	}
-	log.Printf("loaded %d account(s) from %s", len(auths), cfg.AuthDir)
-	if len(skippedAuths) > 0 {
-		log.Printf("WARN: %d 个账号文件被跳过（见上方 WARN）—— 本次对齐只增不删", len(skippedAuths))
+		log.Fatalf("%v", err)
 	}
 
 	// redisstore：未配置/连接失败 → Noop（纯内存模式，一切功能照常）。
 	store := redisstore.New(cfg.Upstash.URL, cfg.Upstash.Token)
-
-	p := pool.New(cfg.StateFile)
-	// ADR-009 同族：账号健康度台账（state.json）加载失败不得静默「当成没有状态」——
-	// 历史上损坏文件被直接 return 忽略，限流/熔断/成功率的观测全丢，选号依据被无声重置。
-	// 版本比程序新（典型是回滚到旧版）同样走这条：宁可启动失败让人看见。
-	if err := p.LoadErr(); err != nil {
-		log.Fatalf("pool state: %v", err)
-	}
 	// 停机序：先 pool.Close()（最后一次 Flush → SaveState 已提交到 store），
 	// 再 store.Close() 排空在途异步写（最后一笔 Redis 镜像必须写完才关连接）。
 	defer func() {
@@ -300,11 +288,11 @@ func main() {
 	// 用量记录器：与 state 文件同目录，随 state_file 配置一起搬移。
 	// datapath 由 state 文件路径推出，避免再加一个配置项。
 	usagePath := usagePathFor(cfg.StateFile)
-	rec := usage.New(usagePath)
+	rec, err := newUsageRecorder(usagePath)
 	// ADR-009：用量台账是选号与成本控制的输入，加载失败不能「从零开始」继续跑
 	// （历史上只打日志，等于静默丢掉全部台账）。版本比程序新（典型是回滚到旧版）
 	// 与文件损坏都在这里变成**拒绝启动**，让人看见而不是让数据被无声污染。
-	if err := rec.LoadErr(); err != nil {
+	if err != nil {
 		log.Fatalf("usage ledger: %v", err)
 	}
 	rec.Start()
@@ -847,4 +835,47 @@ func mergedJSON(m map[string]any) []byte {
 		return []byte("{}")
 	}
 	return b
+}
+
+// newPool 构造账号池，并把 state.json 的加载错误上抛（ADR-009 同族）。
+// 抽成函数的目的：main() 里的 log.Fatalf 不可测，而「加载失败 → 拒绝启动」这条判定必须被测试覆盖
+// （它是「损坏文件不再静默当成没有状态」的唯一保证）。
+func newPool(stateFile string) (*pool.Pool, error) {
+	p := pool.New(stateFile)
+	if err := p.LoadErr(); err != nil {
+		return p, err
+	}
+	return p, nil
+}
+
+// newUsageRecorder 同上，针对 usage.json 台账（ADR-009）。
+func newUsageRecorder(path string) (*usage.Recorder, error) {
+	rec := usage.New(path)
+	if err := rec.LoadErr(); err != nil {
+		return rec, err
+	}
+	return rec, nil
+}
+
+// loadAccountsAndPool 启动期装配：扫描 auths → 构造池（含 state.json 加载判定）。
+// 返回 skippedAuths 供调用方决定对齐方式（>0 → 只增不删，ADR-010 §2.2）。
+//
+// 抽成函数的原因：main() 里的 log.Fatalf 不可测，而这里的两条语义都必须被覆盖——
+// 「扫描不完整 → 只增不删」与「状态文件不可用 → 拒绝启动」。
+func loadAccountsAndPool(cfg *Config) (auths []*auth.Auth, skipped []string, p *pool.Pool, err error) {
+	auths, skipped, err = auth.LoadDirReport(cfg.AuthDir)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("load auths: %w", err)
+	}
+	log.Printf("loaded %d account(s) from %s", len(auths), cfg.AuthDir)
+	if len(skipped) > 0 {
+		log.Printf("WARN: %d 个账号文件被跳过（见上方 WARN）—— 本次对齐只增不删", len(skipped))
+	}
+	// ADR-009 同族：state.json 加载失败不得静默「当成没有状态」——
+	// 历史上损坏文件被直接 return 忽略，健康度观测全丢，选号依据被无声重置。
+	p, err = newPool(cfg.StateFile)
+	if err != nil {
+		return auths, skipped, p, fmt.Errorf("pool state: %w", err)
+	}
+	return auths, skipped, p, nil
 }
