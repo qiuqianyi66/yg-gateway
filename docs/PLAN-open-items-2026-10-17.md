@@ -28,7 +28,7 @@ last_updated: 2026-10-17
 | **A1** | **CI gate 的 R10 覆盖漏洞**：push 事件用 `HEAD~1` 作 base，多提交 push 只检查最后一个提交的新增行 | `.harness/changes/2026-10-16-ci-gate/summary.md` §四.2；`git rev-parse HEAD~1` 口径 | 2h | L0 |
 | **A2** | **CI `gate` job 重复跑一次全量测试**（只为拿覆盖率），Linux 上多约 2 分钟 | 同上 §四.3 | 3h | L1 |
 | **A3** | **面板 unknown 端到端观感验证**：本轮只保证 unknown 进入登记链路，没在面板验过（避让并行会话已结束，现在可验） | `.harness/changes/2026-10-16-t7-unknown-admission/summary.md` §七.2；当前 `/metrics` `yg_gateway_unknowns_open 0` → 先验空态，再造一条有值态 | 2h | L1 |
-| **A4** | **20 条 per-model `supports_images` 声明未逐条实测**：现有证据只有「目录声明全 true」+「2 次落地实测」，按四态这只是 declaration | `2026-10-16-dsh-default-input/summary.md` §六.3 | 半天（~20 次带图调用，走自己网关，成本可忽略） | L1 |
+| ~~**A4**~~ ⛔ | **20 条 per-model `supports_images` 声明未逐条实测**：现有证据只有「目录声明全 true」+「2 次落地实测」，按四态这只是 declaration | **2026-10-18 用户裁定：不做全量，按设计不实测**——保持 `unknown`（字段缺失=未知），面板已按三值处理。裁定记在 `docs/PLAN-next-2026-10-18.md` §2.5 | — | L1 |
 | **A5** | **`internal/server` 沙箱两份手工同步副本**：`handler_test.go` 与 `main_test.go` 各一份，生成脚本留在 `%TEMP%` 未入库 | `2026-10-16-t5-sandbox/summary.md` §六.3 | 3h | L1 |
 | **A6** | **变异核验未穷尽**：panel 只做 5 条、`autotask` 20 分片 / `taskcenter` 其它终态分支未逐条（当前 10 条≠已穷尽） | `2026-10-16-t3-mutation/summary.md` §七.2/3 | 1 天（分批） | L2 |
 | **A7** | **`runAutoAll` 与队列路径对「达标未领」处理不一致**：前者跳过不领、后者入队去领 | `2026-10-16-depth-tasks-4-6/summary.md` §四.3 | 2h（需先定语义，见 D3） | L1 |
@@ -39,11 +39,11 @@ last_updated: 2026-10-17
 
 | # | 决策点 | 现状 | 推荐 | 代价 / 反转条件 |
 |---|---|---|---|---|
-| **D1** | **upstream 收窄为 interface**（F-807 / deep-opt P0-1） | 两处记录都说"暂缓/未做，需 YG 确认"：`architecture-foundation-evidence/summary.md` §F-807、`deep-optimization-2026-10/summary.md` §一 | **明确记为「不做」** | 零用户可见收益，要动两个 2000+ 行文件的核心类型；反转条件=出现需要替换 upstream 实现的真实需求（多 provider） |
-| **D2** | **401 是否走上游错误档**（现在一律归「登录未完成」） | `t7-unknown-admission` §七.4 P4 提示文案已单测覆盖，未真机跑；`login_test` 现有注释标"待确认" | 保持「未完成」 | 改=要区分"账号被拒"与"凭证过期"，牵动 CLI 退出码语义 |
+| ~~**D1**~~ ⛔ | **upstream 收窄为 interface**（F-807 / deep-opt P0-1） | 两处记录都说"暂缓/未做，需 YG 确认"：`architecture-foundation-evidence/summary.md` §F-807、`deep-optimization-2026-10/summary.md` §一 | **2026-10-18 用户裁定：不做**（记入 `PLAN-next-2026-10-18.md` §2.5） | 零用户可见收益，要动两个 2000+ 行文件的核心类型；反转条件=出现需要替换 upstream 实现的真实需求（多 provider） |
+| ~~**D2**~~ ⛔ | **401 是否走上游错误档**（现在一律归「登录未完成」） | `t7-unknown-admission` §七.4 P4 提示文案已单测覆盖，未真机跑；`login_test` 现有注释标"待确认" | **2026-10-18 用户裁定：保持现状**（按设计不区分，记入 `PLAN-next-2026-10-18.md` §2.5） | 改=要区分"账号被拒"与"凭证过期"，牵动 CLI 退出码语义 + 需一次真实 401 样本 |
 | **D3** | **「达标未领」语义统一**（A7 的前提） | 两条路径行为相反 | 统一为「入队去领」 | 会产生一批后台调用；若积分保底策略要求不领，则统一为「跳过」 |
-| **D4** | **生产备份清理**：`D:\yg-gateway` 42 份 `*.exe*.bak`，合计 **431.5 MB**（2026-10-11 起） | 实测 `Get-ChildItem D:\yg-gateway -Filter '*yg-gateway*'` | 清到「最新 1 + 里程碑 1」 | 回滚只需最新一份；删前我会再核一次 hash |
-| **D5** | **7864 eval 实例去留**：`D:\yg-gateway-eval\config.json` 还在，进程**没在跑**（`/healthz` 拒连），但 `HANDOFF.md` 仍写"当前活实例 7864" | 实测 `Get-Process yg-gateway` 只有 7863 的 PID 40912 | 退役并删配置（或复活后改 HANDOFF） | 复活=多一个实例要养；退役=丢真机对照环境 |
+| **D4** | **生产备份清理**：`D:\yg-gateway` 44 份 `yg-gateway.exe*.bak` + 1 份 `config.json.bak`，合计 **452.3 MB**（2026-10-11 起，2026-10-18 实测） | 实测 `Get-ChildItem D:\yg-gateway -Filter *.bak`；含 3 份同 hash（`8F357C25…`：`pre-n1-livefire2/3`、`pre-yg-unknown-tristate-20261017`） | **2026-10-18 已授权**：按 mtime 保留**最近 2 份**（`pre-adr009-010-guards-20261018` + `pre-pg-dropdown-multiplier-20261017-192048`），其余先出 sha256 清单给用户确认后删 | 回滚只需最新一份；删前逐份核 hash 并与部署报告 `exe_hash_after` 对照 |
+| ~~**D5**~~ ✅ | **7864 eval 实例去留** | **2026-10-18 退役**：`D:\yg-gateway-eval` 已删除，归档 `D:\yg-gateway-eval.retired-20261018.zip`（11.6 MB）；7864 无监听；`HANDOFF.md` §二/§五 已改 | 退役并删配置 | 已完成（复活路径：解 zip + ADR-005 脚本） |
 
 ## 3. 文档债：写着「未做」，实测已经不成立（防重复劳动）
 
@@ -51,7 +51,7 @@ last_updated: 2026-10-17
 |---|---|---|
 | `2026-10-16-t5-sandbox/summary.md` §六.2 | `dynamicModelsCache` 仍是包级全局，建议搬进 Handler | **已完成**：`git grep dynamicModelsCache` 零命中，现为 `Handler.modelsCache` 实例字段（`internal/server/handler.go`） |
 | `2026-10-16-depth-tasks-4-6/summary.md` §四.1 | `TestModelsEndpoint` 跨用例全局状态污染（`-count=3` 会挂） | **不复现**：`go test ./internal/server/ -count=3` → `ok 24.455s`（exit 0） |
-| `HANDOFF.md` §五 | 「`D:\yg-gateway-eval` 当前活实例 7864」 | **进程不在**：7864 `/healthz` 连接被拒（见 D5） |
+| `HANDOFF.md` §五 | 「`D:\yg-gateway-eval` 当前活实例 7864」 | **已就地更正**（2026-10-18）：§二 写「只有一个实例在跑（7863）」+ §五 写退役与归档路径（见 D5） |
 | `HANDOFF.md` §五 下一轮候选 2 | 竞品路线图 4 项全未做 | **2 项已有**：Anthropic 基础版（`internal/server/anthropic.go`）、用量落库（`usage.json` 派生路径）；剩余 = OpenRouter 费率细化 + 客户端生态 |
 | `docs/adr/ADR-007` §105 | `internal/tools/doccheck` 未落地 | **已决策不做**（避免新增维护面），属记录不是待办 |
 | `README.md` L53 | 「20 个 Go 包测试全绿」 | 实际 **23 包**：20 有测试 + 3 个 cmd（`credit`/`signin`/`trial`）无测试 → 措辞宜精确为「20 包有测试」 |
@@ -229,12 +229,12 @@ Get-ChildItem internal -Recurse -Filter *.js | ForEach-Object { (Get-Content $_.
 | ~~**B5**~~ ✅ | **`build-image` 的墙钟瓶颈已消**：根因不是双架构，而是构建阶段没走 `BUILDPLATFORM`（arm64 整段 Go 编译在 QEMU 下模拟）。改成构建机架构交叉编译后，**实测 239s → 108s → 96s（−60%）**，两架构验证强度不变 | `bf5a4aa`；CI run `39014207601`；PRD `REQ-image-buildplatform-2026-10-17` | 已完成 | L2 |
 | ~~**B3**~~ ✅ | **四包变异核验 + 复审三条缺口全部闭环**：入库清单 23 条变异 23 咬住（auth 6 / session 6 / scheduler 4 / cmd/server 7）；驱动与清单在 `scripts/mutation/`。复审自选的 3 个更难变异原本 3/3 存活 → B3-a `SaveAtomic` rename（`6b1a886`）· B3-b session 空闲号优先（本轮）· B3-c 多 Key 归一化口径（`9823ebd`）**各补了带牙齿的常驻测试**。⚠️ 注意：另一个会话用同名 B3-a/b/c 指 scheduler 的三件事，**同名不同物**，见 summary §10.1 | `.harness/changes/2026-10-17-mutation-auth-session-scheduler-cmdserver/` | 已完成 | L1 |
 | **B2 实质**（①②③ 全部处置完毕） | wiki 三条：①剪枝前回填 ②持久化版本闸门 ③跨文件写前意图。**②的 `usage.json` 已落地**（ADR-009：新版本→拒绝启动、旧版本→加载+`.pre-upgrade-vN.bak`、损坏→拒绝；5 个子用例）；**`state.json` 也已落地**（同 ADR-009 口径：损坏→拒绝启动、版本更新→拒绝启动、缺失/相等→加载；未改 `pool.New` 签名，5 个子用例）；①**判定不适用**（推导值在摄入时即落台账，归档只是副本——见 `.harness/changes/2026-10-18-b2-item1-not-applicable/`，附 grep 与调用点证据）；③**已处置**（ADR-010：启动期对账本已存在——前提修正；落地的是空集下限 + 坏文件点名 WARN，写前意图明确不做） | `.harness/changes/2026-10-18-ledger-version-gate/` + `docs/adr/ADR-009-*` | ② 完成（usage + state）；① 不适用（有证据）；③ 空集下限 + 跳过留痕 + **不完整扫描只增不删**（ADR-010） | L3 |
-| **B4a** | 夜猫子末次 4s 等待（`blackcat.go` 循环末次也 `sleepNightChat()`），改了每次任务省 4s | 1h | **你**（行为变更，PRD 一句话） |
-| **A7 / D3** | 「达标未领」两条路径语义相反 | 2h | **你**（D3 语义） |
-| **D2** | 401 是否走上游错误档 | 3h | **你** |
-| **D1** | upstream 收窄为 interface | — | **你**（建议明确记「不做」） |
-| **D4/D5** | 备份清理 / 7864 实例 | — | **你**（我按必要性分析建议都不做，理由见 `PLAN-necessity-review` §D4/D5） |
-| **A4** | 20 条 `supports_images` 全量实测 | 半天 | **你**（我建议不做全量，转 unknown + 按需） |
+| ~~**B4a**~~ ✅ | 夜猫子末次 4s 等待 | 1h | **已完成**（`c8968c0`）：等待改为 `need-1` 次，间隔时长不动；表格测试 need=1/2/3 + 2 条变异咬住 |
+| ~~**A7 / D3**~~ ✅ | 「达标未领」两条路径语义相反 | 2h | **已完成**（`444376d`）：`disposeTask` 唯一判定，两条入口都「去领奖」；一致性测试钉住「领奖次数必须相等」 |
+| ~~**D2**~~ ⛔ | 401 是否走上游错误档 | 3h | **已裁定：保持现状**（2026-10-18，按设计不区分） |
+| ~~**D1**~~ ⛔ | upstream 收窄为 interface | — | **已裁定：不做**（2026-10-18） |
+| **D4/D5** | 备份清理 / 7864 实例 | — | **已授权**：D4 留 2 份（删前出 sha256 清单确认）；D5 退役并改 HANDOFF |
+| ~~**A4**~~ ⛔ | 20 条 `supports_images` 全量实测 | 半天 | **已裁定：不做全量**，保持 unknown（2026-10-18） |
 | **A6** | 变异核验穷尽度（增量回合） | **2026-10-18 两轮**：`pool` 6/6 咬住（保底/收费/轮换/在途/健康）；`server` 流式结果分类 **6 条 → 6 咬住 / 0 存活**（S3 断连、S5 错误策略、S6 成功计数、S1/S4 日志行 502 均已补测试）。同轮修掉驱动两个方法学缺陷（编译失败曾被记成「咬住」、`go test` stderr 曾被当异常中断） | 剩余：S3（需写失败 writer）/ S6（需断言池侧健康度）/ 日志行口径；另有观测事实待拍板——**`st.status` 的 502 不进 reqlog/面板，只进 stderr** |
 | **O2/O3/O4/O6/O7** | 超长文件拆分 / 覆盖率抖动 / flake 观察 / 3 个 cmd 包无测试 | — | 不做（棘轮已冻结；见必要性分析） |
 | ~~**生产换版**~~ ✅ | **已上**（2026-10-18 21:13，`6251ecb` 干净树构建，exit 0）：exe `0E10FA1F…`、健康 3/4（未健康的是 global 账号，与本改动无关）、冒烟三条全过；两条闸门在真机走「正常放行」（usage version 6 相同、state 缺版本按 0） | `.harness/changes/2026-10-18-ledger-version-gate/` §八 | 已完成 | — |
