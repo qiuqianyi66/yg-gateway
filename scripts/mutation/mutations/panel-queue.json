@@ -1,0 +1,65 @@
+[
+  {
+    "id": "QX1",
+    "file": "internal/panel/taskcenter.go",
+    "desc": "扫描侧 global 门控失效（global 账号被发 CN 成长任务请求，上游无语义）",
+    "old": "\t\t\tif a.IsGlobal() {\n\t\t\t\treturn\n\t\t\t}\n\t\t\t// 企业版门控：同上——企业版无个人成长体系",
+    "new": "\t\t\tif false && a.IsGlobal() {\n\t\t\t\treturn\n\t\t\t}\n\t\t\t// 企业版门控：同上——企业版无个人成长体系"
+  },
+  {
+    "id": "QX2",
+    "file": "internal/panel/taskcenter.go",
+    "desc": "扫描侧企业版门控失效（企业版任务端点上游一律 403）",
+    "old": "\t\t\tif a.IsEnterprise() {\n\t\t\t\treturn\n\t\t\t}\n\t\t\tif tasks, err := p.cfg.Upstream.ListTasks(a); err != nil {",
+    "new": "\t\t\tif false && a.IsEnterprise() {\n\t\t\t\treturn\n\t\t\t}\n\t\t\tif tasks, err := p.cfg.Upstream.ListTasks(a); err != nil {"
+  },
+  {
+    "id": "QX3",
+    "file": "internal/panel/taskcenter.go",
+    "desc": "队列侧 global 门控失效（队列会为 global 号发起任务拉取）",
+    "old": "\t\t\tif a.IsGlobal() {\n\t\t\t\treturn\n\t\t\t}\n\t\t\t// 企业版门控：同上（企业版无个人成长体系",
+    "new": "\t\t\tif false && a.IsGlobal() {\n\t\t\t\treturn\n\t\t\t}\n\t\t\t// 企业版门控：同上（企业版无个人成长体系"
+  },
+  {
+    "id": "QX4",
+    "file": "internal/panel/taskcenter.go",
+    "desc": "队列侧企业版门控失效",
+    "old": "\t\t\tif a.IsEnterprise() {\n\t\t\t\treturn\n\t\t\t}\n\t\t\tif growth {",
+    "new": "\t\t\tif false && a.IsEnterprise() {\n\t\t\t\treturn\n\t\t\t}\n\t\t\tif growth {"
+  },
+  {
+    "id": "QX5",
+    "file": "internal/panel/taskcenter.go",
+    "desc": "队列启动不再跳过禁用账号（被禁用的号仍被派任务）",
+    "old": "\tfor _, st := range states {\n\t\tif st.Disabled {\n\t\t\tcontinue\n\t\t}",
+    "new": "\tfor _, st := range states {\n\t\tif false && st.Disabled {\n\t\t\tcontinue\n\t\t}"
+  },
+  {
+    "id": "QX6",
+    "file": "internal/panel/taskcenter.go",
+    "desc": "队列侧 mp 待办不再按 code 去重（同一任务跑两遍）",
+    "old": "\t\t\t\t\t\t\tif growthPending(t) && !seen[t.TaskCode] {\n\t\t\t\t\t\t\t\tone.grow = append(one.grow, t)",
+    "new": "\t\t\t\t\t\t\tif growthPending(t) {\n\t\t\t\t\t\t\t\tone.grow = append(one.grow, t)"
+  },
+  {
+    "id": "QX7",
+    "file": "internal/panel/taskcenter.go",
+    "desc": "队列不再按 autoActions 顺序排序（依赖前置的任务顺序被打乱）",
+    "old": "\t\t\t\t\tsort.Slice(one.grow, func(i, j int) bool { // 按 autoActions 顺序（依赖前置）\n\t\t\t\t\t\treturn autoActionIndex(one.grow[i].TaskCode) < autoActionIndex(one.grow[j].TaskCode)",
+    "new": "\t\t\t\t\tsort.Slice(one.grow, func(i, j int) bool { // 按 autoActions 顺序（依赖前置）\n\t\t\t\t\t\treturn false"
+  },
+  {
+    "id": "QX8",
+    "file": "internal/panel/taskcenter.go",
+    "desc": "并发上限不再夹到 4（可被请求体拉到任意并发）",
+    "old": "\tif concurrency > 4 {\n\t\tconcurrency = 4\n\t}\n\tq := p.queue()",
+    "new": "\tif false && concurrency > 4 {\n\t\tconcurrency = 4\n\t}\n\tq := p.queue()"
+  },
+  {
+    "id": "QX9",
+    "file": "internal/panel/taskcenter.go",
+    "desc": "无待办时不回滚 running（队列永久卡在「执行中」，后续触发全被 409）",
+    "old": "\tif len(items) == 0 {\n\t\tlog.Printf(\"panel: 队列启动：无可执行待办（全部账号任务已完成）\")\n\t\tq.mu.Lock()\n\t\tq.running = false",
+    "new": "\tif len(items) == 0 {\n\t\tlog.Printf(\"panel: 队列启动：无可执行待办（全部账号任务已完成）\")\n\t\tq.mu.Lock()"
+  }
+]

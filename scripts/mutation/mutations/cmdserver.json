@@ -1,4 +1,4 @@
-[
+﻿[
   {
     "id": "D1",
     "file": "cmd/server/config.go",
@@ -24,8 +24,8 @@
     "id": "D3",
     "file": "cmd/server/config.go",
     "desc": "去掉「多 Key 与顶层 api_key 同值」的拦截（约束可被另一把 Key 绕过）",
-    "old": "\t\tif c.APIKey != \"\" && key == c.APIKey {",
-    "new": "\t\tif false && key == c.APIKey {"
+    "old": "\t\tif c.APIKey != \"\" && key == strings.TrimSpace(c.APIKey) {",
+    "new": "\t\tif false && key == strings.TrimSpace(c.APIKey) {"
   },
   {
     "id": "D4a",
