@@ -74,3 +74,31 @@ powershell -NoProfile -File scripts/mutation/mutation-check.ps1 `
 
 删 `scripts/mutation/mutations/panel-claim.json` 与 `TestClaimOnlyFailureIsVisible` 即可；
 产品代码未改动。
+
+---
+
+## 八、第二批：终态分支（`panel-autotask.json`，7 条）
+
+第一条清单钉的是「判定与领奖口径」，这一批钉的是 `runAutoAll` / `runGrowthQueued` 的**终态分类**——
+把失败读成成功的那些分支（都是「不报错但语义反转」的形态）。
+
+| id | 变异 | 首轮 |
+|---|---|---|
+| AX1 | 「该账号无此任务」`skipped` → `done` | **存活** |
+| AX2 | 任务查询失败 `error` → `skipped` | 咬住（`RunAutoAllListErrorItem`） |
+| AX3 | 动作失败 `error` → `done` | 咬住（`RunAutoAllActionErrorItem`） |
+| AX4 | 批量接受失败 `error` → `skipped` | 咬住（`RunAutoAllDefaultBatchAcceptError`） |
+| AX5 | 回读去掉 `after.Claimable` 条件 | 咬住（`TaskEntryPointsAgreeOnClaim`） |
+| AX6 | 队列侧查询失败改成 `return "", nil` | 咬住（`RunGrowthQueuedClaimAndQueryErrors`） |
+| AX7 | 队列侧回读失败仍继续领奖 | 咬住（`TaskEntryPointsAgreeOnClaim`） |
+
+**AX1 是第一轮的真实缺口**：`TestPanelAutoTaskRunAutoAllSkipsTerminalAndAbsent` 只断言了
+「该账号无此任务」这句**文案**，没断言 `status`——于是「缺任务」被写成 `done`（看起来像已经做完）
+也能绿。补 `status == skipped` 后：
+
+```
+包 internal/panel：咬住 7 / 存活 0 / 无效 0     exit 0
+```
+
+两批合计 **15 条入库变异（8 + 7），全部咬住**。复跑命令同上，把 `-MutsFile` 换成
+`scripts/mutation/mutations/panel-autotask.json`。
