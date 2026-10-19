@@ -1,0 +1,58 @@
+[
+  {
+    "id": "PA1",
+    "file": "internal/panel/taskcenter.go",
+    "desc": "达标判据 >= 变 >（恰好达标的任务被当成「未达标」去跑动作，奖励不领）",
+    "old": "\tif t.Target > 0 && t.Current >= t.Target {\n\t\treturn taskClaim\n\t}",
+    "new": "\tif t.Target > 0 && t.Current > t.Target {\n\t\treturn taskClaim\n\t}"
+  },
+  {
+    "id": "PA2",
+    "file": "internal/panel/taskcenter.go",
+    "desc": "锁定任务不再跳过（每日解锁窗口里的任务被自动化尝试，accept 不落账报失败）",
+    "old": "\tif t.Locked {\n\t\treturn taskSkip\n\t}",
+    "new": "\tif false && t.Locked {\n\t\treturn taskSkip\n\t}"
+  },
+  {
+    "id": "PA3",
+    "file": "internal/panel/taskcenter.go",
+    "desc": "无自动化动作的任务也进处置（入队后 autoActionFor 为 nil 直接报错）",
+    "old": "\tif autoActionFor(t.TaskCode) == nil {\n\t\treturn taskSkip\n\t}",
+    "new": "\tif false && autoActionFor(t.TaskCode) == nil {\n\t\treturn taskSkip\n\t}"
+  },
+  {
+    "id": "PA4",
+    "file": "internal/panel/taskcenter.go",
+    "desc": "growthPending 与 disposeTask 分叉（达标未领不再入队）",
+    "old": "\treturn disposeTask(t) != taskSkip\n}",
+    "new": "\treturn disposeTask(t) == taskRun\n}"
+  },
+  {
+    "id": "PA5",
+    "file": "internal/panel/taskcenter.go",
+    "desc": "mp 领奖降到 Web 域（缺 mp 头，上游领不到）",
+    "old": "\tif isMPTaskCode(code) {\n\t\treturn p.cfg.Upstream.ClaimRewardMP(a, code)\n\t}",
+    "new": "\tif false && isMPTaskCode(code) {\n\t\treturn p.cfg.Upstream.ClaimRewardMP(a, code)\n\t}"
+  },
+  {
+    "id": "PA6",
+    "file": "internal/panel/taskcenter.go",
+    "desc": "队列侧达标未领不领奖（回到 A7 的 bug 形状：一键完成领、队列不领）",
+    "old": "\t\tcredit, energy, cerr := p.claimRewardFor(a, code)\n\t\tprogress := taskProgressText(before)",
+    "new": "\t\tcredit, energy, cerr := int64(0), int64(0), error(nil)\n\t\tprogress := taskProgressText(before)"
+  },
+  {
+    "id": "PA7",
+    "file": "internal/panel/autotask.go",
+    "desc": "达标未领领奖失败时把原因折掉（只剩「已达标未领」，运维看不到为什么没领到）",
+    "old": "\tif cerr != nil {\n\t\titem[\"claim_error\"] = cerr.Error()\n\t\titem[\"message\"] = \"已达标未领；领奖失败（可在列表手动重试）: \" + cerr.Error()\n\t\treturn\n\t}",
+    "new": "\tif cerr != nil {\n\t\titem[\"claim_error\"] = cerr.Error()\n\t\titem[\"message\"] = \"已达标未领\"\n\t\treturn\n\t}"
+  },
+  {
+    "id": "PA8",
+    "file": "internal/panel/autotask.go",
+    "desc": "一键完成的达标未领项不再标 claimable（前端拿不到「可领」信号）",
+    "old": "\titem[\"claimable\"] = true\n\tcredit, energy, cerr := p.claimRewardFor(a, code)",
+    "new": "\tcredit, energy, cerr := p.claimRewardFor(a, code)"
+  }
+]

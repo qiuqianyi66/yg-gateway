@@ -1,6 +1,7 @@
 package panel
 
 import (
+	"strings"
 	"testing"
 
 	"yg-gateway/internal/upstream"
@@ -89,6 +90,10 @@ func TestTaskEntryPointsAgreeOnClaim(t *testing.T) {
 				if got := caBool(t, item, "claimed"); !got {
 					t.Fatalf("一键完成 claimed = false, want true（item=%+v）", item)
 				}
+				// 前端靠 claimable 打「可领」标记；达标未领项必须带出来（PA8 变异即红）。
+				if got := caBool(t, item, "claimable"); !got {
+					t.Fatalf("一键完成 claimable = false, want true（item=%+v）", item)
+				}
 			} else if v, ok := item["claimed"]; ok && v != false {
 				t.Fatalf("不该领奖却写了 claimed=%v（item=%+v）", v, item)
 			}
@@ -104,5 +109,37 @@ func TestTaskEntryPointsAgreeOnClaim(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestClaimOnlyFailureIsVisible 达标未领的领奖失败必须在结果里看得见（A7/D3 的失败分支）：
+// 一键完成要带 claim_error 与原因，队列执行要把原因写进返回文案——只回一句
+// 「已达标未领」的话，运维既不知道奖励没到账，也不知道为什么（R10 的反面）。
+//
+// 这条是 PA7 变异咬出来的缺口：原先 claim-only 分支的失败路径没有任何测试。
+func TestClaimOnlyFailureIsVisible(t *testing.T) {
+	caFastGaps(t)
+	f := caNewFake()
+	f.caSetTask(caTask("chat_5", 5, 5, "accepted"))
+	f.raw["POST /activity/growth/tasks/chat_5/claim"] = caRaw{Status: 500, Body: `{"code":10000,"msg":"claim down"}`}
+	p := caNewPanel(t, f, caAccount("u1"))
+
+	item := caFindItem(t, p.runAutoAll(caAccount("u1")), "chat_5")
+	if msg := caStr(t, item, "message"); !strings.Contains(msg, "领奖失败") {
+		t.Fatalf("一键完成 message = %q, want 含「领奖失败」", msg)
+	}
+	if ce := caStr(t, item, "claim_error"); !strings.Contains(ce, "http 500") {
+		t.Fatalf("claim_error = %q, want 带上游状态码 500", ce)
+	}
+	if caStr(t, item, "status") != "done" {
+		t.Fatalf("status = %q, want done（领奖失败不改变主流程结果）", caStr(t, item, "status"))
+	}
+
+	msg, err := p.runGrowthQueued(caAccount("u1"), "chat_5")
+	if err != nil {
+		t.Fatalf("队列项不该因领奖失败中断: %v", err)
+	}
+	if !strings.Contains(msg, "领奖失败") || !strings.Contains(msg, "http 500") {
+		t.Fatalf("队列文案 = %q, want 含「领奖失败」与状态码", msg)
 	}
 }
