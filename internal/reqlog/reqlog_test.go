@@ -312,3 +312,41 @@ func TestArchivePruneHonorsSize(t *testing.T) {
 		t.Fatalf("remaining = %+v, want newest file only", entries)
 	}
 }
+
+// TestArchiveDefaultLimitAndMaxCap 钉住归档读取的两个边界（2026-10-19 变异 RQ1/RQ2 咬出来的缺口）：
+//   - limit<=0 → 默认 200（不是更小：面板默认页看的就是这个口径）；
+//   - limit 超上限 → 夹到 1000（防止一次把整个归档读进内存）。
+//
+// 只按条数判定，不依赖具体事件内容。
+func TestArchiveDefaultLimitAndMaxCap(t *testing.T) {
+	const n = 1005
+	dir := t.TempDir()
+	r := New(Config{Enabled: true, Dir: dir, FileMaxBytes: 1 << 20, MaxBytes: 1 << 30, RetentionDays: 7})
+	base := time.Now().Add(-time.Hour)
+	for i := 0; i < n; i++ {
+		r.Record(Event{
+			Time:      base.Add(time.Duration(i) * time.Millisecond),
+			RequestID: "ev-" + strconv.Itoa(i),
+			Status:    200,
+			OK:        true,
+			Outcome:   OutcomeSuccess,
+		})
+	}
+	r.Close()
+
+	rows, err := r.ReadArchive(0, Filter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 200 {
+		t.Fatalf("limit=0 应回默认 200 条, got %d", len(rows))
+	}
+
+	rows, err = r.ReadArchive(100000, Filter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != defaultReadMax {
+		t.Fatalf("limit=100000 应夹到 %d, got %d", defaultReadMax, len(rows))
+	}
+}

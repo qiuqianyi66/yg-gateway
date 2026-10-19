@@ -1,0 +1,30 @@
+[
+  {
+    "id": "MP1",
+    "file": "internal/panel/autotask.go",
+    "desc": "mp 码不再回落 mp 列表（mp 专属任务在默认列表查不到 → 当成「无此任务」）",
+    "old": "\tif isMPTaskCode(code) {\n\t\treturn p.taskByCodeMP(a, code)\n\t}",
+    "new": "\tif false && isMPTaskCode(code) {\n\t\treturn p.taskByCodeMP(a, code)\n\t}"
+  },
+  {
+    "id": "MP2",
+    "file": "internal/panel/autotask.go",
+    "desc": "异步计分的有界轮询退化为只读一次（达标前就判「没达标」，领奖被跳过）",
+    "old": "\tfor i := 1; i < claimPollAttempts; i++ {",
+    "new": "\tfor i := 1; i < 1; i++ {"
+  },
+  {
+    "id": "MP3",
+    "file": "internal/panel/autotask.go",
+    "desc": "accept 不再回读验证（上游 200 但未登记也被当成功）",
+    "old": "\t\tif err == nil && t != nil && t.AcceptStatus != \"not_accepted\" && t.AcceptStatus != \"\" {\n\t\t\treturn true\n\t\t}",
+    "new": "\t\tif err == nil {\n\t\t\treturn true\n\t\t}"
+  },
+  {
+    "id": "MP4",
+    "file": "internal/panel/autotask.go",
+    "desc": "轮询期间的查询失败覆盖已拿到的结果（本来约定保留）",
+    "old": "\t\tif err2 != nil {\n\t\t\treturn t, nil // 轮询期间的查询失败不覆盖已拿到的结果\n\t\t}",
+    "new": "\t\tif err2 != nil {\n\t\t\treturn t2, err2\n\t\t}"
+  }
+]

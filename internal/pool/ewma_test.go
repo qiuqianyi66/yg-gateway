@@ -380,3 +380,23 @@ func TestPickConcurrentRLockSmoke(t *testing.T) {
 		t.Fatalf("并发 pick 过度集中（读锁路径异常?）: %v", counts)
 	}
 }
+
+// TestEwmaFirstFailureIsOnlyOneStep 首个事件就是失败时 sr 必须只掉一步（0.9）。
+// 缺口来源（2026-10-19 变异 EW2 存活）：把失败分支的懒初始化从 1.0 改成 0.0 仍全绿，
+// 因为既有用例都是「先成功再失败」，从未走过 samples==0 的失败路径。
+func TestEwmaFirstFailureIsOnlyOneStep(t *testing.T) {
+	p := New("")
+	p.SetEwma(true, 0.1, 5)
+	p.Add(&auth.Auth{UID: "u1"})
+
+	p.NoteError("u1")
+	p.mu.RLock()
+	sr, n := p.byUID["u1"].ewmaSuccess, p.byUID["u1"].ewmaSuccessSamples
+	p.mu.RUnlock()
+	if n != 1 {
+		t.Fatalf("samples=%d want 1", n)
+	}
+	if want := 0.9; sr != want {
+		t.Fatalf("首个事件即失败：sr=%v want %v（懒初始化 1.0 后掉一步，不能直接归零）", sr, want)
+	}
+}

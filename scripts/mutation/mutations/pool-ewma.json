@@ -1,0 +1,37 @@
+[
+  {
+    "id": "EW1",
+    "file": "internal/pool/entry.go",
+    "desc": "成功事件不再懒初始化 1.0（新号从 0 慢爬升，前几十个样本被误罚）",
+    "old": "\tif e.ewmaSuccessSamples == 0 {\n\t\te.ewmaSuccess = 1.0\n\t}\n\te.ewmaSuccess += alpha * (1 - e.ewmaSuccess)",
+    "new": "\tif e.ewmaSuccessSamples == 0 {\n\t\te.ewmaSuccess = 0.0\n\t}\n\te.ewmaSuccess += alpha * (1 - e.ewmaSuccess)"
+  },
+  {
+    "id": "EW2",
+    "file": "internal/pool/entry.go",
+    "desc": "失败事件懒初始化改成 0（第一次失败直接把成功率打到 0）",
+    "old": "\tif e.ewmaSuccessSamples == 0 {\n\t\te.ewmaSuccess = 1.0\n\t}\n\te.ewmaSuccess -= alpha * e.ewmaSuccess",
+    "new": "\tif e.ewmaSuccessSamples == 0 {\n\t\te.ewmaSuccess = 0.0\n\t}\n\te.ewmaSuccess -= alpha * e.ewmaSuccess"
+  },
+  {
+    "id": "EW3",
+    "file": "internal/pool/pick.go",
+    "desc": "成功率因子方向写反（高于基线反而减权）",
+    "old": "\t\tif sr > ewmaSuccessBaseline {",
+    "new": "\t\tif sr < ewmaSuccessBaseline {"
+  },
+  {
+    "id": "EW4",
+    "file": "internal/pool/pick.go",
+    "desc": "成功率样本下限失效（冷启动即参与加权，新号被饿死）",
+    "old": "\tif e.ewmaSuccessSamples >= p.ewmaMinSamples {",
+    "new": "\tif e.ewmaSuccessSamples >= 0 {"
+  },
+  {
+    "id": "EW5",
+    "file": "internal/pool/pick.go",
+    "desc": "延迟罚分不再封顶（极慢号可被罚到权重 0）",
+    "old": "\t\tif pen > ewmaLatencyPenaltyMax {\n\t\t\tpen = ewmaLatencyPenaltyMax\n\t\t}",
+    "new": "\t\tif false && pen > ewmaLatencyPenaltyMax {\n\t\t\tpen = ewmaLatencyPenaltyMax\n\t\t}"
+  }
+]

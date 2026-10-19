@@ -1,0 +1,44 @@
+[
+  {
+    "id": "RQ1",
+    "file": "internal/reqlog/reqlog.go",
+    "desc": "归档默认条数 200 变 20（面板默认只看得到十分之一）",
+    "old": "\tif limit <= 0 {\n\t\tlimit = 200\n\t}",
+    "new": "\tif limit <= 0 {\n\t\tlimit = 20\n\t}"
+  },
+  {
+    "id": "RQ2",
+    "file": "internal/reqlog/reqlog.go",
+    "desc": "归档条数上限夹取失效（大 limit 可把整个归档读进内存）",
+    "old": "\tif limit > defaultReadMax {\n\t\tlimit = defaultReadMax\n\t}",
+    "new": "\tif false && limit > defaultReadMax {\n\t\tlimit = defaultReadMax\n\t}"
+  },
+  {
+    "id": "RQ3",
+    "file": "internal/reqlog/reqlog.go",
+    "desc": "归档排序方向写反（返回最旧而不是最近）",
+    "old": "\tsort.SliceStable(out, func(i, j int) bool { return out[i].Time.After(out[j].Time) })",
+    "new": "\tsort.SliceStable(out, func(i, j int) bool { return out[i].Time.Before(out[j].Time) })"
+  },
+  {
+    "id": "RQ4",
+    "file": "internal/reqlog/reqlog.go",
+    "desc": "Filter.Outcome 不再生效（按结果筛选返回全部）",
+    "old": "\tif f.Outcome != \"\" && e.Outcome != f.Outcome {\n\t\treturn false\n\t}",
+    "new": "\tif false && f.Outcome != \"\" && e.Outcome != f.Outcome {\n\t\treturn false\n\t}"
+  },
+  {
+    "id": "RQ5",
+    "file": "internal/reqlog/reqlog.go",
+    "desc": "环形缓冲倒序索引写错（Recent 顺序/内容错位）",
+    "old": "\t\tidx := (r.recentHead - 1 - i + recentLimit) % recentLimit",
+    "new": "\t\tidx := (r.recentHead + i) % recentLimit"
+  },
+  {
+    "id": "RQ6",
+    "file": "internal/reqlog/reqlog.go",
+    "desc": "HTTP 成功率不再计入 2xx（成功率口径失真）",
+    "old": "\tif e.Status >= 200 && e.Status < 300 {\n\t\tr.httpSuccess++\n\t}",
+    "new": "\tif false && e.Status >= 200 && e.Status < 300 {\n\t\tr.httpSuccess++\n\t}"
+  }
+]

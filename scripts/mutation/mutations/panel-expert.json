@@ -1,0 +1,30 @@
+[
+  {
+    "id": "EX1",
+    "file": "internal/panel/autotask.go",
+    "desc": "召唤失败不再计入 fail（部分失败对运维不可见）",
+    "old": "\t\tif err := p.cfg.Upstream.ReportDesktopEvent(a, summonEvents...); err != nil {\n\t\t\tfail++\n\t\t\tcontinue\n\t\t}",
+    "new": "\t\tif err := p.cfg.Upstream.ReportDesktopEvent(a, summonEvents...); err != nil {\n\t\t\tcontinue\n\t\t}"
+  },
+  {
+    "id": "EX2",
+    "file": "internal/panel/autotask.go",
+    "desc": "达标判断从 >= 变 >（比目标多召唤一个专家，白花上游调用）",
+    "old": "\t\tif ok >= count {\n\t\t\tbreak\n\t\t}",
+    "new": "\t\tif ok > count {\n\t\t\tbreak\n\t\t}"
+  },
+  {
+    "id": "EX3",
+    "file": "internal/panel/autotask.go",
+    "desc": "部分失败不再 WARN（召唤链静默失败）",
+    "old": "\tif fail > 0 {",
+    "new": "\tif false && fail > 0 {"
+  },
+  {
+    "id": "EX4",
+    "file": "internal/panel/autotask.go",
+    "desc": "专家列表为空当成成功（返回「已对 0 位专家完成」而不是报错）",
+    "old": "\tif len(experts) == 0 {\n\t\treturn \"\", fmt.Errorf(\"专家市场列表为空\")\n\t}",
+    "new": "\tif false && len(experts) == 0 {\n\t\treturn \"\", fmt.Errorf(\"专家市场列表为空\")\n\t}"
+  }
+]
