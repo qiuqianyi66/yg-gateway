@@ -1,7 +1,7 @@
-# 判定记录 — B1b「面板 unknown 有值态观感」：**不做真机观感，交付可复现步骤**
+# 判定记录 — B1b「面板 unknown 有值态观感」：**不做真机调用；改用零成本通路+像素验证**
 
-- 日期：2026-10-18
-- 分级：**L0**（判定 + 交付操作步骤，不改代码）
+- 日期：2026-10-18（判定）→ 2026-10-19（像素观感补完，见 §5.4）
+- 分级：**L0**（判定 + 操作步骤 + 一处测试补齐，不改产品代码）
 - 关联：PLAN B1b / A3 的剩余部分
 
 ## 一、为什么不在这一轮做
@@ -79,10 +79,30 @@ start http://127.0.0.1:7863/panel
 
 脚本与数据留在 `%TEMP%\b1b-unknown\`（`render_unknowns.js`、`overview-live.json`、`overview-stub.json`、`stub_panel.py`）。
 
-### 5.4 仍然没做到的（诚实边界）
+### 5.4 像素级观感（2026-10-19 补完，零上游调用）
 
-- **像素级肉眼观感没做**：本会话浏览器桥接不可用（`browser_open_tab` → `no browser extension is connected to the bridge`）。
-- 曾起过 7878 端口的 stub 面板（真实 `index.html` + `app.js` + stub overview）准备截图，无浏览器可看，**已停服**（PID 18028），
-  生产实例全程未动。
-- 要补这一步只需：有浏览器的会话打开该 stub 或生产面板，确认徽章外观（颜色/换行/悬停宽度）。
-  徽章的 HTML 与文案已在 5.3 固定，剩下的只影响观感，不影响正确性。
+工具链：本会话 Playwright 未安装，改用 **chromium headless + 原生 CDP**（Node 24 自带 `WebSocket`，
+脚本 `%TEMP%\b1b-unknown\cdp_shot.js`）。被测页面是**真实产线资产**：`internal/panel/index.html` +
+`internal/panel/app.js`（stub 只替换 `/panel/api/overview` 的 JSON，数据取自生产 overview 快照）。
+
+| 态 | 证据 | 实测 |
+|---|---|---|
+| 有值态（第 1 个账号注入 2 条 unknown） | `panel-unknowns-badge.png` | 提示行「2 个 (账号,模型) 成本未知，悬停账号卡片查看明细」；第 1 张卡右上 **「2 未知成本」** 琥珀色 warn 徽章，位置在「可用」标签**左侧**，卡片高度/网格未被撑破；徽章 `title` 为两条 question + 「需要：…」 |
+| 空态（去掉 `unknowns` 字段） | `panel-unknowns-empty.png` | 无提示行、无徽章，**不显示「0 未知」**（四态纪律：缺失不是「没有」，但也不该伪造一个 0） |
+
+CDP 直接读到的 DOM 事实（不是靠截图猜）：
+
+```
+badges = [{"text":"2 未知成本","title":"账号 A 在模型 glm-5.2 上的实际成本未知（仅目录声明）\n需要：一次上游返回 credit 的真实调用\n\n账号 A 在模型 hy4-preview 上的成本分层未知（样本 2 条）\n需要：再 N 条带 credit 的样本把推断升级为观测"}]
+noteText = "2 个 (账号,模型) 成本未知，悬停账号卡片查看明细"
+空态: badges 只剩「已暂停」状态标签，noteText = ""
+```
+
+**一条被排除的假警报**（顺手确认，不是产品问题）：stub 最初把 index.html 直接挂在 `/panel`（无尾斜杠），
+页面相对路径 `app.js` 解析成 `/app.js` → 404 → 面板空白。生产不会这样：
+`GET /panel` 返回 **307 → `/panel/`**（`internal/panel/panel.go:165` 的 `GET /panel/{$}`），
+`GET /panel/app.js` 200，`GET /app.js` 404——三条实测都对。
+
+**过程记录（两条新坑）**：①`chromium --headless --screenshot` 在本机沙箱下会因 crashpad 走命名管道失败
+（`TransactNamedPipe: 管道已结束`），必须 `Start-Process` 不捕获 stdout，或干脆走 CDP；
+②`--virtual-time-budget` 会在真实网络返回前结束，用它会拍到「未加载」的空壳（第一次截图全是「—」就是它）。
