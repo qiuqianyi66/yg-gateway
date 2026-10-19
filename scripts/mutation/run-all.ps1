@@ -27,6 +27,29 @@ if (-not (Test-Path -LiteralPath $Clone)) {
     if ($LASTEXITCODE -ne 0) { throw "git clone 失败（exit=$LASTEXITCODE）" }
 }
 
+# 副本完整性自检（2026-10-19 实测事故）：一次 -Fresh 全量跑到后半程时，副本里的
+# go.mod / .git 消失，后续每个清单都以「GOMOD=NUL」在基线处失败，而汇总只显示
+# 「异常清单 9 个」——看起来像 9 个清单都有存活变异，实际是**副本坏了**。
+# 所以：进任何清单之前先证副本是完整的仓库，坏了就自动重建一次并复检。
+function Test-CloneOk {
+    param([string]$Path)
+    if (-not (Test-Path -LiteralPath (Join-Path $Path 'go.mod'))) { return $false }
+    if (-not (Test-Path -LiteralPath (Join-Path $Path '.git'))) { return $false }
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $null = & git -C $Path rev-parse --is-inside-work-tree 2>&1
+        return ($LASTEXITCODE -eq 0)
+    } finally { $ErrorActionPreference = $prev }
+}
+if (-not (Test-CloneOk $Clone)) {
+    Write-Host "副本不完整（缺 go.mod/.git）——重建：$Clone" -ForegroundColor Yellow
+    Remove-Item -LiteralPath $Clone -Recurse -Force -ErrorAction SilentlyContinue
+    & git clone --quiet $repo $Clone
+    if ($LASTEXITCODE -ne 0) { throw "重建副本失败（exit=$LASTEXITCODE）" }
+    if (-not (Test-CloneOk $Clone)) { throw "副本仍不完整：$Clone（盘满或被安全软件拦截？）" }
+}
+
 $lists = @(Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot 'mutations') -Filter '*.json' | Sort-Object Name)
 if ($Only -ne '') { $lists = @($lists | Where-Object { $_.BaseName -like "*$Only*" }) }
 if ($lists.Count -eq 0) { throw "没有匹配的清单（-Only $Only）" }
@@ -56,6 +79,12 @@ foreach ($l in $lists) {
     $verdict = if ($code -eq 0) { 'OK' } else { 'CHECK' }
     $color = if ($code -eq 0) { 'Green' } else { 'Red' }
     Write-Host ("  -> {0}  {1}" -f $verdict, $line) -ForegroundColor $color
+    # 失败时把子脚本输出的尾巴打出来：否则「无汇总行」这种形态要靠人再跑一遍才知道原因
+    # （2026-10-19 的副本损坏就是这么藏住的）。
+    if ($code -ne 0 -and $summary.Count -eq 0) {
+        Write-Host '     子脚本输出（末 8 行）：' -ForegroundColor DarkGray
+        @($out | Select-Object -Last 8) | ForEach-Object { Write-Host ("       " + $_) -ForegroundColor DarkGray }
+    }
     [void]$results.Add([pscustomobject]@{ list = $l.BaseName; pkg = $pkg; mutants = $entries.Count; exit = $code; summary = $line })
 }
 
