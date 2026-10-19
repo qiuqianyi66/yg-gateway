@@ -1,0 +1,44 @@
+[
+  {
+    "id": "W1",
+    "file": "internal/reqlog/reqlog.go",
+    "desc": "队列满丢弃事件不再计数（运维看不到丢了多少条）",
+    "old": "\t\tw.dropped.Add(1)",
+    "new": "\t\t_ = e // MUTANT: 丢弃不计数"
+  },
+  {
+    "id": "W2",
+    "file": "internal/reqlog/reqlog.go",
+    "desc": "单文件大小上限失效（永不轮转，单文件无限增长）",
+    "old": "\tif w.size > 0 && w.size+int64(len(raw))+1 > w.cfg.FileMaxBytes {",
+    "new": "\tif false && w.size > 0 && w.size+int64(len(raw))+1 > w.cfg.FileMaxBytes {"
+  },
+  {
+    "id": "W3",
+    "file": "internal/reqlog/reqlog.go",
+    "desc": "保留天数不再裁切（过期归档永不删除）",
+    "old": "\t\tif it.path != w.path && (it.mtime.Before(cutoff) || total > w.cfg.MaxBytes) {",
+    "new": "\t\tif it.path != w.path && (it.mtime.Before(cutoff) && total > w.cfg.MaxBytes) {"
+  },
+  {
+    "id": "W4",
+    "file": "internal/reqlog/reqlog.go",
+    "desc": "总容量上限不再裁切（MaxBytes 形同虚设）",
+    "old": "\t\tif it.path != w.path && (it.mtime.Before(cutoff) || total > w.cfg.MaxBytes) {",
+    "new": "\t\tif it.path != w.path && it.mtime.Before(cutoff) {"
+  },
+  {
+    "id": "W5",
+    "file": "internal/reqlog/reqlog.go",
+    "desc": "关停时不排空队列（进程退出丢尾部事件）",
+    "old": "\t\tcase <-w.stop:\n\t\t\tfor {\n\t\t\t\tselect {\n\t\t\t\tcase e := <-w.ch:\n\t\t\t\t\tw.writeEvent(e)",
+    "new": "\t\tcase <-w.stop:\n\t\t\tfor {\n\t\t\t\tselect {\n\t\t\t\tcase e := <-w.ch:\n\t\t\t\t\t_ = e"
+  },
+  {
+    "id": "W6",
+    "file": "internal/reqlog/reqlog.go",
+    "desc": "删除文件后不递减总量（按旧总量继续删，过度清理）",
+    "old": "\t\t\tif err := os.Remove(it.path); err == nil {\n\t\t\t\ttotal -= it.size\n\t\t\t}",
+    "new": "\t\t\tif err := os.Remove(it.path); err == nil {\n\t\t\t\t_ = it.size\n\t\t\t}"
+  }
+]

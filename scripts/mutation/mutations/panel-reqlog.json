@@ -1,0 +1,37 @@
+[
+  {
+    "id": "H1",
+    "file": "internal/panel/panel.go",
+    "desc": "request_logs 默认条数 200 → 20（面板默认只看得到十分之一）",
+    "old": "\tlimit := 200",
+    "new": "\tlimit := 20"
+  },
+  {
+    "id": "H2",
+    "file": "internal/panel/panel.go",
+    "desc": "request_logs 上限 1000 不再夹取（大 limit 可把整个归档读进内存）",
+    "old": "\tif limit > 1000 {\n\t\tlimit = 1000\n\t}",
+    "new": "\tif false && limit > 1000 {\n\t\tlimit = 1000\n\t}"
+  },
+  {
+    "id": "H3",
+    "file": "internal/panel/panel.go",
+    "desc": "outcome 筛选参数不再透传（选「失败」返回全部）",
+    "old": "\t\tOutcome:   q.Get(\"outcome\"),",
+    "new": "\t\tOutcome:   \"\","
+  },
+  {
+    "id": "H4",
+    "file": "internal/panel/panel.go",
+    "desc": "空结果返回 null 而不是 []（前端会走错分支）",
+    "old": "\tif rows == nil {\n\t\trows = []reqlog.Event{}\n\t}",
+    "new": "\tif false && rows == nil {\n\t\trows = []reqlog.Event{}\n\t}"
+  },
+  {
+    "id": "H5",
+    "file": "internal/panel/panel.go",
+    "desc": "from 时间参数不再透传（「今天/区间」查询变成全量）",
+    "old": "\t\tFrom:      parseTimeParam(q.Get(\"from\")),",
+    "new": "\t\tFrom:      parseTimeParam(\"\"),"
+  }
+]
