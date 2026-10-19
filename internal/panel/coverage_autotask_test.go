@@ -2858,7 +2858,11 @@ func TestPanelAutoTaskRunAutoAllSkipsTerminalAndAbsent(t *testing.T) {
 	caEqStr(t, caStr(t, chatItem, "status"), "done", "达标未领项 status")
 	caEqStr(t, caStr(t, chatItem, "message"), "已达标未领：奖励为 0 或此前已领取", "达标未领项 message")
 	caEqStr(t, caStr(t, caFindItem(t, out, "RichMeow_Chat"), "message"), "已完成（1/1）", "已领项 message")
-	caEqStr(t, caStr(t, caFindItem(t, out, "first_buddy"), "message"), "该账号无此任务", "缺失项 message")
+	missing := caFindItem(t, out, "first_buddy")
+	caEqStr(t, caStr(t, missing, "message"), "该账号无此任务", "缺失项 message")
+	// 缺任务必须是 skipped 而不是 done：写成 done 会让「这号根本没这个任务」看起来像「已经做完了」
+	// （AX1 变异咬出来的缺口，原来只断言了文案没断言状态）。
+	caEqStr(t, caStr(t, missing, "status"), "skipped", "缺失项 status")
 	if n := f.caCallCount("POST", "/v2/report"); n != 0 {
 		t.Fatalf("skipped / 只领奖项不该有任何动作上报，次数 %d", n)
 	}

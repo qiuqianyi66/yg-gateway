@@ -1,0 +1,51 @@
+[
+  {
+    "id": "AX1",
+    "file": "internal/panel/autotask.go",
+    "desc": "「该账号无此任务」判成 done（缺任务被当成已完成，用户以为做过了）",
+    "old": "\t\tif before == nil {\n\t\t\titem[\"status\"] = \"skipped\"\n\t\t\titem[\"message\"] = \"该账号无此任务\"",
+    "new": "\t\tif before == nil {\n\t\t\titem[\"status\"] = \"done\"\n\t\t\titem[\"message\"] = \"该账号无此任务\""
+  },
+  {
+    "id": "AX2",
+    "file": "internal/panel/autotask.go",
+    "desc": "任务查询失败降级成 skipped（上游报错被读成「已跳过」，R10 反面）",
+    "old": "\t\tbefore, err := p.taskByCode(a, act.TaskCode)\n\t\tif err != nil {\n\t\t\titem[\"status\"] = \"error\"",
+    "new": "\t\tbefore, err := p.taskByCode(a, act.TaskCode)\n\t\tif err != nil {\n\t\t\titem[\"status\"] = \"skipped\""
+  },
+  {
+    "id": "AX3",
+    "file": "internal/panel/autotask.go",
+    "desc": "动作失败降级成 done（真失败被读成已完成）",
+    "old": "\t\tmsg, err := act.run(p, a)\n\t\tif err != nil {\n\t\t\titem[\"status\"] = \"error\"",
+    "new": "\t\tmsg, err := act.run(p, a)\n\t\tif err != nil {\n\t\t\titem[\"status\"] = \"done\""
+  },
+  {
+    "id": "AX4",
+    "file": "internal/panel/autotask.go",
+    "desc": "批量接受失败的 error 项降级成 skipped（失败不阻塞 ≠ 失败不记录）",
+    "old": "\"task_code\": \"(批量接受)\", \"status\": \"error\"",
+    "new": "\"task_code\": \"(批量接受)\", \"status\": \"skipped\""
+  },
+  {
+    "id": "AX5",
+    "file": "internal/panel/autotask.go",
+    "desc": "回读不再要求 Claimable（没达标也去领奖，上游报错/空领）",
+    "old": "\t\tif after != nil && after.Claimable {",
+    "new": "\t\tif after != nil {"
+  },
+  {
+    "id": "AX6",
+    "file": "internal/panel/taskcenter.go",
+    "desc": "队列侧查询失败不再冒泡（队列项把上游故障当成成功文本）",
+    "old": "\tbefore, err := p.taskByCode(a, code)\n\tif err != nil {\n\t\treturn \"\", err\n\t}",
+    "new": "\tbefore, err := p.taskByCode(a, code)\n\tif err != nil {\n\t\treturn \"\", nil\n\t}"
+  },
+  {
+    "id": "AX7",
+    "file": "internal/panel/autotask.go",
+    "desc": "队列侧回读失败后仍按「进度未知」继续领奖（把 unknown 当成 claimable）",
+    "old": "\tif after != nil && after.Claimable {",
+    "new": "\tif after != nil || true {"
+  }
+]
