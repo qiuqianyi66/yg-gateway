@@ -562,6 +562,10 @@ func TestUpstreamHTTPDesktopChatWithExpert(t *testing.T) {
 	if body["model"] != "fast-model" || body["stream"] != true || body["agent"] != "cli" {
 		t.Errorf("chat body=%v want model=fast-model stream=true agent=cli", body)
 	}
+	// include_usage 决定上游回不回 usage：去掉它 = 成本观测静默断流（XC5 变异咬出来的缺口）。
+	if so, ok := body["stream_options"].(map[string]any); !ok || so["include_usage"] != true {
+		t.Errorf("stream_options=%v want include_usage=true（否则上游不回 usage）", body["stream_options"])
+	}
 
 	// 无 expertID：不下发 X-Expert-Id。
 	rec2 := &upstreamhttpRec{}
@@ -587,6 +591,24 @@ func TestUpstreamHTTPDesktopChatWithExpertHTTPError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "chat http 500") {
 		t.Errorf("err=%v want 含 http 500", err)
+	}
+}
+
+// TestUpstreamHTTPDesktopChatWithExpertRedirectIsError 3xx 也是失败：判据必须是「非 200」，
+// 不能放宽成「>=400」——否则重定向/异常状态会让解析器去读空 body，最终以
+// 「未找到 requestId」的错误形态掩盖真实原因（XC2 变异咬出来的缺口）。
+func TestUpstreamHTTPDesktopChatWithExpertRedirectIsError(t *testing.T) {
+	rec := &upstreamhttpRec{}
+	c := testClient(upstreamhttpFixed(rec, 302, ""))
+	conv, rid, err := c.DesktopChatWithExpert(upstreamhttpCNAuth(), "ex_1")
+	if err == nil {
+		t.Fatal("want err on http 302")
+	}
+	if conv != "" || rid != "" {
+		t.Errorf("失败时应返回空 conv/rid，got %q/%q", conv, rid)
+	}
+	if !strings.Contains(err.Error(), "chat http 302") {
+		t.Errorf("err=%v want 含 chat http 302（不得退化成「未找到 requestId」）", err)
 	}
 }
 

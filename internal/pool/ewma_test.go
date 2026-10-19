@@ -400,3 +400,22 @@ func TestEwmaFirstFailureIsOnlyOneStep(t *testing.T) {
 		t.Fatalf("首个事件即失败：sr=%v want %v（懒初始化 1.0 后掉一步，不能直接归零）", sr, want)
 	}
 }
+
+// TestEwmaLatencyZeroMillisecondRecorded 0ms 是合法观测（本地回环、缓存命中都可能 0ms），
+// 必须计入延迟样本。缺口来源（2026-10-19 变异 L4 存活）：把 `>= 0` 写成 `> 0` 仍然全绿。
+func TestEwmaLatencyZeroMillisecondRecorded(t *testing.T) {
+	p := New("")
+	p.SetEwma(true, 0.1, 5)
+	p.Add(&auth.Auth{UID: "u1"})
+
+	p.RecordTokenUsage("u1", TokenUsageDelta{HasLatencyMs: true, LatencyMs: 0})
+	p.mu.RLock()
+	n, lat := p.byUID["u1"].ewmaLatencySamples, p.byUID["u1"].ewmaLatencyMs
+	p.mu.RUnlock()
+	if n != 1 {
+		t.Fatalf("延迟样本数=%d want 1（0ms 也是观测）", n)
+	}
+	if lat != 0 {
+		t.Fatalf("延迟 EWMA=%v want 0", lat)
+	}
+}

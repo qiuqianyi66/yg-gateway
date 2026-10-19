@@ -1,0 +1,37 @@
+[
+  {
+    "id": "L1",
+    "file": "internal/pool/entry.go",
+    "desc": "首个延迟观测不再直接赋值（从 0 按 alpha 爬升，冷启动延迟被低估）",
+    "old": "\tif e.ewmaLatencySamples == 0 {\n\t\te.ewmaLatencyMs = float64(ms)\n\t} else {",
+    "new": "\tif false && e.ewmaLatencySamples == 0 {\n\t\te.ewmaLatencyMs = float64(ms)\n\t} else {"
+  },
+  {
+    "id": "L2",
+    "file": "internal/pool/entry.go",
+    "desc": "延迟样本数不累加（永远达不到 minSamples，延迟因子恒 1）",
+    "old": "\te.ewmaLatencySamples++",
+    "new": "\t_ = e.ewmaLatencySamples"
+  },
+  {
+    "id": "L3",
+    "file": "internal/pool/state.go",
+    "desc": "RecordTokenUsage 不再喂 EWMA 延迟（延迟信号整条断掉）",
+    "old": "\t\te.noteEwmaLatency(p.ewmaAlpha, delta.LatencyMs)",
+    "new": "\t\t_ = delta.LatencyMs"
+  },
+  {
+    "id": "L4",
+    "file": "internal/pool/state.go",
+    "desc": "0ms 延迟不再记录（>=0 变 >0，合法的 0 延迟样本被丢）",
+    "old": "\tif delta.HasLatencyMs && delta.LatencyMs >= 0 {",
+    "new": "\tif delta.HasLatencyMs && delta.LatencyMs > 0 {"
+  },
+  {
+    "id": "L5",
+    "file": "internal/pool/state.go",
+    "desc": "LastLatencyMs 写 0（面板/状态里的最近延迟永远显示 0ms）",
+    "old": "\t\tusage.LastLatencyMs = delta.LatencyMs",
+    "new": "\t\tusage.LastLatencyMs = 0"
+  }
+]

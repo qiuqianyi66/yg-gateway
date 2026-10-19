@@ -1,0 +1,44 @@
+[
+  {
+    "id": "XC1",
+    "file": "internal/upstream/desktop.go",
+    "desc": "专家对话不再发 X-Expert-Id（上游不认这次「专家使用」，任务不计数）",
+    "old": "\tif expertID != \"\" {\n\t\th.Set(\"X-Expert-Id\", expertID)\n\t}",
+    "new": "\tif false && expertID != \"\" {\n\t\th.Set(\"X-Expert-Id\", expertID)\n\t}"
+  },
+  {
+    "id": "XC2",
+    "file": "internal/upstream/desktop.go",
+    "desc": "非 200 判据放宽到 >=400（3xx/2xx 异常都当成功，空 body 继续解析）",
+    "old": "\tif resp.StatusCode != 200 {",
+    "new": "\tif resp.StatusCode >= 400 {"
+  },
+  {
+    "id": "XC3",
+    "file": "internal/upstream/desktop.go",
+    "desc": "requestId 形状校验去掉（任意 id 都当服务端 requestId）",
+    "old": "\t\t\t\t\tif idRegex.MatchString(id) {\n\t\t\t\t\t\treturn conversationID, id, nil\n\t\t\t\t\t}",
+    "new": "\t\t\t\t\tif true {\n\t\t\t\t\t\treturn conversationID, id, nil\n\t\t\t\t\t}"
+  },
+  {
+    "id": "XC4",
+    "file": "internal/upstream/desktop.go",
+    "desc": "R8：conversationId 前缀 wb2api-conv- 被改（报文指纹变化）",
+    "old": "\tconversationID = fmt.Sprintf(\"wb2api-conv-%d\", time.Now().UnixNano())",
+    "new": "\tconversationID = fmt.Sprintf(\"conv-%d\", time.Now().UnixNano())"
+  },
+  {
+    "id": "XC5",
+    "file": "internal/upstream/desktop.go",
+    "desc": "stream_options.include_usage 去掉（上游不回 usage，成本观测断流）",
+    "old": "\t\t\"stream_options\": map[string]any{\"include_usage\": true},",
+    "new": "\t\t\"stream_options\": map[string]any{},"
+  },
+  {
+    "id": "XC6",
+    "file": "internal/upstream/desktop.go",
+    "desc": "搜索偏移不再推进（首个不匹配 id 会反复命中，最终误报「未找到 requestId」）",
+    "old": "\t\t\t\t\tsearchFrom = abs + 1",
+    "new": "\t\t\t\t\tsearchFrom = abs"
+  }
+]
