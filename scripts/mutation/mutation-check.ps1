@@ -71,9 +71,14 @@ try {
         # 2026-10-17 实测：变异去掉 uid 的唯一用法 → declared and not used → build failed，
         # 被本脚本误记成「咬住」。编译失败一律判「无效变异」。
         $buildBroken = [bool]($out | Select-String -Pattern '\[build failed\]|declared and not used|undefined:|cannot use ')
-        $verdict = if ($buildBroken) { '无效变异' } elseif ($code -ne 0) { '咬住' } else { '存活' }
+        # 构建缓存命中 = 变异没进编译（LESSONS L-17：2026-10-18 手写验证在错误的目录里跑，
+        # 读到原树 + 缓存，得到「变异全绿」的假象）。本脚本本就用 -count=1；
+        # 这条判据是防止后人去掉 -count=1 或改动调用方式时，把「未生效」读成「存活」。
+        $cacheHit = [bool]($out | Select-String -Pattern '\(cached\)')
+        $verdict = if ($cacheHit) { '无效变异' } elseif ($buildBroken) { '无效变异' } elseif ($code -ne 0) { '咬住' } else { '存活' }
         # 抓证据：测试失败（--- FAIL）或编译错误（./x.go:NN: ...）都算「咬住」的依据
         $firstFail = ($out | Select-String -Pattern '^--- FAIL|^FAIL\s|^\./.*\.go:\d+:' | Select-Object -First 1).Line
+        if ($cacheHit -and -not $firstFail) { $firstFail = '构建缓存命中 —— 变异未进编译（检查 -count=1 是否被去掉）' }
         $color = if ($verdict -eq '咬住') { 'Green' } else { 'Yellow' }
         Write-Host ("[{0}] {1}  {2}  {3}" -f $m.id, $verdict, $m.desc, $(if ($firstFail) { "| $firstFail" } else { '' })) -ForegroundColor $color
         [void]$results.Add([pscustomobject]@{ id = $m.id; pkg = $Pkg; desc = $m.desc; verdict = $verdict; detail = $firstFail })

@@ -30,7 +30,7 @@ last_updated: 2026-10-17
 | **A3** | **面板 unknown 端到端观感验证**：本轮只保证 unknown 进入登记链路，没在面板验过（避让并行会话已结束，现在可验） | `.harness/changes/2026-10-16-t7-unknown-admission/summary.md` §七.2；当前 `/metrics` `yg_gateway_unknowns_open 0` → 先验空态，再造一条有值态 | 2h | L1 |
 | ~~**A4**~~ ⛔ | **20 条 per-model `supports_images` 声明未逐条实测**：现有证据只有「目录声明全 true」+「2 次落地实测」，按四态这只是 declaration | **2026-10-18 用户裁定：不做全量，按设计不实测**——保持 `unknown`（字段缺失=未知），面板已按三值处理。裁定记在 `docs/PLAN-next-2026-10-18.md` §2.5 | — | L1 |
 | **A5** | **`internal/server` 沙箱两份手工同步副本**：`handler_test.go` 与 `main_test.go` 各一份，生成脚本留在 `%TEMP%` 未入库 | `2026-10-16-t5-sandbox/summary.md` §六.3 | 3h | L1 |
-| **A6** | **变异核验未穷尽**：panel 只做 5 条、`autotask` 20 分片 / `taskcenter` 其它终态分支未逐条（当前 10 条≠已穷尽） | `2026-10-16-t3-mutation/summary.md` §七.2/3 | 1 天（分批） | L2 |
+| **A6** | **变异核验未穷尽**：panel 曾只做 5 条**临时**变异（未入库、不可复跑），`autotask` / `taskcenter` 其它终态分支未逐条 | `2026-10-16-t3-mutation/summary.md` §七.2/3 | 1 天（分批，按轮推进） | L2 |
 | **A7** | **`runAutoAll` 与队列路径对「达标未领」处理不一致**：前者跳过不领、后者入队去领 | `2026-10-16-depth-tasks-4-6/summary.md` §四.3 | 2h（需先定语义，见 D3） | L1 |
 | **A8** | **`internal/session` 覆盖率口径未标注**：98.8% 含 legacy 派生分支，生产可达语句约 89%——对外不能说成热路径覆盖率 | 同上 §四.4 | 1h（文档+注释） | L0 |
 | **A9** | **401 归类与流式错误吞掉**：`cmd/login` 4xx 全归「登录未完成」、`server/anthropic.go` 的 `stream` 类型错被吞 | 同上 §四.5；`2026-10-16-t7-unknown-admission` §七.4 | 3h（需先定语义，见 D2） | L1 |
@@ -235,6 +235,6 @@ Get-ChildItem internal -Recurse -Filter *.js | ForEach-Object { (Get-Content $_.
 | ~~**D1**~~ ⛔ | upstream 收窄为 interface | — | **已裁定：不做**（2026-10-18） |
 | **D4/D5** | 备份清理 / 7864 实例 | — | **已授权**：D4 留 2 份（删前出 sha256 清单确认）；D5 退役并改 HANDOFF |
 | ~~**A4**~~ ⛔ | 20 条 `supports_images` 全量实测 | 半天 | **已裁定：不做全量**，保持 unknown（2026-10-18） |
-| **A6** | 变异核验穷尽度（增量回合） | **2026-10-18 两轮**：`pool` 6/6 咬住（保底/收费/轮换/在途/健康）；`server` 流式结果分类 **6 条 → 6 咬住 / 0 存活**（S3 断连、S5 错误策略、S6 成功计数、S1/S4 日志行 502 均已补测试）。同轮修掉驱动两个方法学缺陷（编译失败曾被记成「咬住」、`go test` stderr 曾被当异常中断） | 剩余：S3（需写失败 writer）/ S6（需断言池侧健康度）/ 日志行口径；另有观测事实待拍板——**`st.status` 的 502 不进 reqlog/面板，只进 stderr** |
+| **A6** | 变异核验穷尽度（增量回合） | **2026-10-18 两轮**：`pool` 6/6 咬住；`server` 流式结果分类 6/6 咬住（同轮修掉驱动两个方法学缺陷：编译失败曾被记成「咬住」、`go test` stderr 曾被当异常中断）。**2026-10-19 第三轮：`panel` 8 条入库（`mutations/panel-claim.json`）→ 首轮 6 咬住 / 2 存活（claim-only 失败原因未断言、缺 `claimable` 断言）→ 补测试后 8/8 咬住**；驱动再补 `(cached)` ⇒ 无效变异（L-17 机器检查） | 剩余：`autotask` / `taskcenter` 其它终态分支（按域分批）；S3（需写失败 writer）/ 日志行口径；另有观测事实——**`st.status` 的 502 不进 reqlog/面板，只进 stderr** |
 | **O2/O3/O4/O6/O7** | 超长文件拆分 / 覆盖率抖动 / flake 观察 / 3 个 cmd 包无测试 | — | 不做（棘轮已冻结；见必要性分析） |
 | ~~**生产换版**~~ ✅ | **已上**（2026-10-18 21:13，`6251ecb` 干净树构建，exit 0）：exe `0E10FA1F…`、健康 3/4（未健康的是 global 账号，与本改动无关）、冒烟三条全过；两条闸门在真机走「正常放行」（usage version 6 相同、state 缺版本按 0） | `.harness/changes/2026-10-18-ledger-version-gate/` §八 | 已完成 | — |

@@ -302,6 +302,40 @@
   能机器化的是它抓到的**缺陷形态**——本轮已把 `-c core.quotePath=false` 与 git 退出码判据
   落进 `scripts/check-req-necessity.ps1` 本体；独立性本身靠规则。
 
+### L-17｜「变异全绿」先问一句：跑的是副本吗 —— **Seen: 1 → 已升级为机器检查**
+
+- **Seen 1**（2026-10-18，A-1 夜猫子 B4a 验证）：在 `%TEMP%\mut-nightchat` 副本里把
+  `if i < need-1` 改成 `if true`（旧行为），`go test` 却**全绿**，差点判成「测试没咬住」。
+  真因：**工作目录是会话根目录**——`go test ./internal/upstream/` 读的是原树 + 构建缓存，
+  副本里的改动根本没被编译。
+- **为什么危险**：「变异全绿」在核验里意味着「测试有缺口」，而真实含义是「我没测到我以为在测的代码」。
+  绿比红更容易被接受，所以这个坑不会自己暴露。
+- **规则（ad-hoc 验证必须自证）**：
+  1. 显式把 `workdir` 指到副本（用工具参数，不要靠 `cd`，它只影响那一条命令）；
+  2. `go test -count=1` 禁缓存，或 `go env GOMOD` 断言指向副本；
+  3. 输出里出现 `(cached)` 一律读作**未生效**，不是「通过」。
+- **机器检查**：`scripts/mutation/mutation-check.ps1` 原本就有 GOMOD 断言 + `-count=1`；本轮再补一条
+  **`(cached)` ⇒ 判「无效变异」**，把这条从「靠人记得」变成「脚本拒绝」。手写临时验证没有 driver
+  兜底，规则 1/2/3 要自己照抄。
+
+### L-18｜外部工具验证：就绪判据必须是真实状态，不是「等一会儿」 —— **Seen: 1**
+
+- **Seen 1**（2026-10-19，B1b 面板像素观感）：连着两次截到空壳（页面全是「—」）。
+  - 第一次：`chromium --headless --screenshot --virtual-time-budget=12000` —— 虚拟时间在真实
+    网络返回前就走完了，DOM 还没数据；
+  - 第二次（改走 CDP 仍空）：stub 把 index.html 挂在 `/panel`（无尾斜杠），相对路径 `app.js`
+    解析成 `/app.js` → 404 → **JS 根本没执行**（请求日志只有 `/panel`、`/app.js`、`/favicon.ico`）。
+    我先怀疑的是「数据没返回」，而实际是「页面没跑起来」。
+- **根因**：把「等待」当成了「就绪」。证据型操作（截图/DOM 断言）必须先确认对象到了目标状态，
+  否则拿到的是「看起来像结果的东西」——和 L-15 同族：**没证据的结论不许写成事实**。
+- **规则**：
+  1. 就绪判据用**目标状态**：`document.querySelectorAll('#accBody .acc-card').length > 0`、
+     或请求日志里出现关键 API 且 200；**不用**固定 sleep、**不用** `--virtual-time-budget`；
+  2. 空白页先看**请求日志 + DOM 快照**，再猜数据层；
+  3. 复用 `%TEMP%\b1b-unknown\cdp_shot.js`（chromium + 原生 CDP，轮询 DOM）；本机沙箱下
+     `--screenshot` 直出会因 crashpad 走命名管道失败（`TransactNamedPipe: 管道已结束`）。
+- **为什么不是纯机器检查**：「等什么算就绪」依赖场景；但**轮询 DOM** 这一步已固化进脚本默认行为。
+
 ## 二、已知 flake（待修缺陷，不是流程教训）
 
 | flake | 现象 | 现状 |
