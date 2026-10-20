@@ -5,14 +5,17 @@
 # 任何清单出现「存活 / 无效」即 exit 1（存活是测试缺口，无效是变异脚本自身坏了）。
 #
 # 用法：
-#   powershell -NoProfile -File scripts/mutation/run-all.ps1            # 复用/新建 %TEMP%\mut-all
+#   powershell -NoProfile -File scripts/mutation/run-all.ps1            # 复用/新建默认副本
 #   powershell -NoProfile -File scripts/mutation/run-all.ps1 -Fresh     # 删掉副本重新克隆
 #   powershell -NoProfile -File scripts/mutation/run-all.ps1 -Only panel-queue   # 只跑某个清单
+#
+# 副本默认位置在 **%LOCALAPPDATA%\yg-mut\all**，不放 %TEMP%（LESSONS L-19：一次长跑中途
+# %TEMP% 被清理任务清掉了副本，后半程每个清单都在基线失败、却被汇总显示成「9 个清单异常」）。
 #
 # 包名从清单里第一条的 file 字段推导（internal/panel/x.go → internal/panel，cmd/server/x.go → cmd/server），
 # 所以新增清单只需保证 file 字段是仓库相对路径。
 param(
-    [string]$Clone = (Join-Path $env:TEMP 'mut-all'),
+    [string]$Clone = (Join-Path $env:LOCALAPPDATA 'yg-mut\all'),
     [string]$Only = '',
     [switch]$Fresh
 )
