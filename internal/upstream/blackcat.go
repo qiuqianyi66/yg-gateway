@@ -105,11 +105,7 @@ func (c *Client) ClaimGift(a *auth.Auth) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-	var resp struct {
-		Credit int64 `json:"credit"`
-	}
-	_ = json.Unmarshal(data, &resp)
-	return resp.Credit, nil
+	return claimCredit(data, "新手礼包")
 }
 
 // ClaimCompensation 领取活动补偿（有则领，无则业务错误）。
@@ -118,11 +114,34 @@ func (c *Client) ClaimCompensation(a *auth.Auth) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
+	return claimCredit(data, "补偿领取")
+}
+
+// claimCredit 解析「领取类」响应的 credits 数。
+//
+// 关键口径（R10 + 四态语义）：**解析失败与字段缺失都必须返回错误**，绝不返回 (0, nil)。
+// 因为调用方（scheduler/streak.go streak-bonus）在 err==nil 时会打日志
+// 「🎊 新手礼包 +%dc」——若把 unknown 冒充成 0，日志会写下一条**凭空捏造的事实**
+// （"观测到领了 0 信用"），而真实状态是 unknown。这比功能缺失更危险：它不报错。
+//
+// 三种状态分别如何用 (int64, error) 表达：
+//   - credit=500      → (500, nil)      observation: 观测到 +500
+//   - credit=0        → (0, nil)        observation: 确实观测到 0（credits 为指针，与 nil 可区分）
+//   - 解析失败/缺字段 → (0, err)        unknown: 不知道，交给调用方决定是否静默跳过
+//
+// Credit 用 *int64 而非 int64，正是为了把「字段缺失」与「字段存在且为 0」分开——
+// 这正是本项目「缺失 ≠ 否定」的落地点。
+func claimCredit(data []byte, op string) (int64, error) {
 	var resp struct {
-		Credit int64 `json:"credit"`
+		Credit *int64 `json:"credit"`
 	}
-	_ = json.Unmarshal(data, &resp)
-	return resp.Credit, nil
+	if err := json.Unmarshal(data, &resp); err != nil {
+		return 0, fmt.Errorf("解析%s响应失败（积分为 unknown，非 0）: %w body=%.120s", op, err, data)
+	}
+	if resp.Credit == nil {
+		return 0, fmt.Errorf("%s响应缺 credit 字段（积分为 unknown，非 0）: body=%.120s", op, data)
+	}
+	return *resp.Credit, nil
 }
 
 // HeatmapYesterdayMissed 检查昨日是否漏签（heatmap cell score==0）。

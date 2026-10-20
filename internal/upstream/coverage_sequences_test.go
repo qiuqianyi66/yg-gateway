@@ -2067,8 +2067,12 @@ func TestUpstreamHTTPParseGlobalModelNames(t *testing.T) {
 // blackcat.go
 // ---------------------------------------------------------------------------
 
-// TestUpstreamHTTPClaimGiftAndCompensation 新手礼包/补偿：路径 + credit 解析；data 非
-// 对象时不 panic 且按零积分返回（生产用 `_ = json.Unmarshal` 的兜底语义）。
+// TestUpstreamHTTPClaimGiftAndCompensation 新手礼包/补偿：路径 + credit 解析。
+//
+// 语义变更说明（R10 + 四态语义修复）：过去 data 非对象时用 `_ = json.Unmarshal` 吞掉错误，
+// 返回 (0, nil)，把 unknown 冒充成「观测到领了 0 信用」——而调用方 streak.go 在 err==nil
+// 时会打日志「🎊 新手礼包 +0c」，等于写下一个凭空捏造的事实。现在统一由 claimCredit 处理：
+// 解析失败与缺 credit 字段都返回 error（unknown），只有真正观测到数值才返回 (credit, nil)。
 func TestUpstreamHTTPClaimGiftAndCompensation(t *testing.T) {
 	rec := &upstreamhttpRec{}
 	c := testClient(upstreamhttpFixed(rec, 200, upstreamhttpEnvelope(`{"credit":500}`)))
@@ -2090,14 +2094,28 @@ func TestUpstreamHTTPClaimGiftAndCompensation(t *testing.T) {
 		t.Errorf("claim-compensation 请求=%s %s", req.Method, req.Host)
 	}
 
-	// data 非对象：不 panic，credit=0 且无错误（兜底语义）。
+	// data 非对象：不 panic，且**不许**返回 0/nil（那会把 unknown 冒充成"观测到 0"），
+	// 必须返回错误让调用方知道积分未知。
 	rec2 := &upstreamhttpRec{}
 	c2 := testClient(upstreamhttpFixed(rec2, 200, `{"code":0,"msg":"ok","data":"oops-not-json"}`))
-	if got, err := c2.ClaimGift(a); err != nil || got != 0 {
-		t.Errorf("非对象 data: got %d/%v want 0/nil", got, err)
+	if got, err := c2.ClaimGift(a); err == nil || got != 0 {
+		t.Errorf("非对象 data: got %d/%v want 0/err（unknown 必须报错，不得冒充 0）", got, err)
 	}
-	if got, err := c2.ClaimCompensation(a); err != nil || got != 0 {
-		t.Errorf("非对象 data(compensation): got %d/%v want 0/nil", got, err)
+	if got, err := c2.ClaimCompensation(a); err == nil || got != 0 {
+		t.Errorf("非对象 data(compensation): got %d/%v want 0/err", got, err)
+	}
+	// 缺 credit 字段（合法 JSON 对象但字段缺失）：同样是 unknown，不是 0。
+	rec4 := &upstreamhttpRec{}
+	c4 := testClient(upstreamhttpFixed(rec4, 200, `{"code":0,"msg":"ok","data":{"unrelated":1}}`))
+	if got, err := c4.ClaimGift(a); err == nil || got != 0 {
+		t.Errorf("缺 credit 字段: got %d/%v want 0/err（缺字段=unknown≠0）", got, err)
+	}
+	// credit 显式为 0：这是**真实观测**，必须返回 (0, nil) 而非错误——
+	// 与上面两种 unknown 严格区分，正是 *int64 指针的意义。
+	rec5 := &upstreamhttpRec{}
+	c5 := testClient(upstreamhttpFixed(rec5, 200, `{"code":0,"msg":"ok","data":{"credit":0}}`))
+	if got, err := c5.ClaimGift(a); err != nil || got != 0 {
+		t.Errorf("credit=0（显式观测）: got %d/%v want 0/nil", got, err)
 	}
 	// 业务错误：返回错误且不误报积分。
 	rec3 := &upstreamhttpRec{}
