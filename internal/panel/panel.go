@@ -465,8 +465,6 @@ func panelModelEntry(realm string, mi upstream.ModelInfo, remoteEfforts []string
 		"default_effort":       mi.DefaultEffort,
 		"supported_efforts":    mi.Efforts,
 		"can_disable_thinking": mi.CanDisableThinking,
-		"supports_reasoning":   mi.SupportsReasoning,
-		"supports_images":      mi.SupportsImages,
 		"credits":              mi.Credits,
 		"description":          mi.Description,
 		"tags":                 mi.Tags,
@@ -476,6 +474,15 @@ func panelModelEntry(realm string, mi upstream.ModelInfo, remoteEfforts []string
 		"only_reasoning":       mi.OnlyReasoning,
 		"reasoning_effort":     mi.ReasoningEffort,
 		"reasoning_summary":    mi.ReasoningSummary,
+	}
+	// 两个能力字段是**三值**，必须条件透出：nil（上游未声明 = 未知）要**省略**，
+	// 绝不能落成 false——否则前端 `m.supports_images === false` 会把未知模型当成
+	// "不支持"筛掉，正是 AGENTS.md 明令禁止的形态（面板 known bug 的根因就在这一层）。
+	if mi.SupportsReasoning != nil {
+		entry["supports_reasoning"] = *mi.SupportsReasoning
+	}
+	if mi.SupportsImages != nil {
+		entry["supports_images"] = *mi.SupportsImages
 	}
 	// 限时优惠（modelPromotions）：credits 是牌价，promo_* 是当前生效折扣
 	//（WorkBuddy 客户端显示的就是这个生效价）。前端据此显示「生效价+标签+划线牌价」。

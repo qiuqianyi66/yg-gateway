@@ -417,9 +417,10 @@ func TestUpstreamParseGatewayHint11133(t *testing.T) {
 		ctx  HintContext
 		want string
 	}{
-		{"带图+目录声明不支持 → 点名换模型", ErrSoftRate, body, HintContext{Model: "glm-5.2", HasImage: true, ModelInCatalog: true, ModelSupportsImages: false}, pickModel},
+		{"带图+目录声明不支持 → 点名换模型", ErrSoftRate, body, HintContext{Model: "glm-5.2", HasImage: true, ModelInCatalog: true, ModelSupportsImages: boolp(false)}, pickModel},
+		{"带图+目录未声明该能力(nil=未知) → 中性参数提示，不得断言不支持", ErrSoftRate, body, HintContext{Model: "glm-5.2", HasImage: true, ModelInCatalog: true}, neutral},
 		{"带图但目录未收录该模型 → 中性参数提示", ErrSoftRate, body, HintContext{Model: "glm-5.2", HasImage: true, ModelInCatalog: false}, neutral},
-		{"带图+目录声明支持 → 中性参数提示", ErrSoftRate, body, HintContext{Model: "gpt-5.5", HasImage: true, ModelInCatalog: true, ModelSupportsImages: true}, neutral},
+		{"带图+目录声明支持 → 中性参数提示", ErrSoftRate, body, HintContext{Model: "gpt-5.5", HasImage: true, ModelInCatalog: true, ModelSupportsImages: boolp(true)}, neutral},
 		{"无图 → 中性参数提示", ErrSoftRate, body, HintContext{Model: "glm-5.2", ModelInCatalog: true}, neutral},
 		{"model_param_invalid 文案家族同样命中", ErrSoftRate, `{"extError":{"code":"model_param_invalid"}}`, HintContext{}, neutral},
 		{"11133 命中先于 Kind 表（Kind=prompt_too_long）", ErrPromptTooLong, body, HintContext{}, neutral},
@@ -1052,9 +1053,9 @@ func TestUpstreamParseGlobalModelNamesObjectShape(t *testing.T) {
 	if infos[0].ID != "gpt-5.5" || infos[0].ContextWindow != 900000 || infos[0].MaxTokens != 64000 {
 		t.Errorf("infos[0] 窗口字段 = %+v want 900000/64000", infos[0])
 	}
-	if !infos[0].SupportsImages || !infos[0].SupportsReasoning {
-		t.Errorf("infos[0] 能力字段丢失: %+v", infos[0])
-	}
+	// 三值：必须**显式 true**（nil=未知 算失败，与 false 分别报告）。
+	capTrue(t, "infos[0].supportsImages", infos[0].SupportsImages)
+	capTrue(t, "infos[0].supportsReasoning", infos[0].SupportsReasoning)
 	if infos[1].ID != "alias-model" || infos[1].ContextWindow != 1000 {
 		t.Errorf("name 回退条目 = %+v want ID=alias-model/1000", infos[1])
 	}
@@ -1116,9 +1117,7 @@ func TestUpstreamParseGlobalModelNamesLooseShape(t *testing.T) {
 	if infos[1].ID != "m2" || infos[1].ContextWindow != 0 {
 		t.Errorf("裸 ID 条目应只有 ID: %+v", infos[1])
 	}
-	if !infos[2].SupportsImages {
-		t.Errorf("宽松解析应保留 supportsImages: %+v", infos[2])
-	}
+	capTrue(t, "infos[2].supportsImages", infos[2].SupportsImages)
 	if len(efforts["m1"]) != 2 || defaults["m1"] != "low" {
 		t.Errorf("宽松路径 effort 桶 = %v/%v want m1:[low high]/low", efforts, defaults)
 	}
@@ -1188,9 +1187,11 @@ func TestUpstreamParseGlobalModelLoose(t *testing.T) {
 	if mi.ContextWindow != 100 || mi.MaxTokens != 50 || mi.MaxAllowedSize != 200 {
 		t.Errorf("窗口字段 = %d/%d/%d want 100/50/200", mi.ContextWindow, mi.MaxTokens, mi.MaxAllowedSize)
 	}
-	if !mi.SupportsReasoning || !mi.SupportsImages || !mi.CanDisableThinking {
-		t.Errorf("能力字段丢失: %+v", mi)
+	if !mi.CanDisableThinking {
+		t.Errorf("canDisableThinking = false, want true")
 	}
+	capTrue(t, "mi.supportsReasoning", mi.SupportsReasoning)
+	capTrue(t, "mi.supportsImages", mi.SupportsImages)
 	if mi.DefaultEffort != "low" {
 		t.Errorf("DefaultEffort = %q want low（新键优先）", mi.DefaultEffort)
 	}

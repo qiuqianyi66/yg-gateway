@@ -567,9 +567,11 @@ func TestFetchModelsDefaultEffortDualKeyAndSizes(t *testing.T) {
 	if g.DefaultEffort != "high" {
 		t.Errorf("glm-5.3 DefaultEffort=%q want high (from defaultEffort key)", g.DefaultEffort)
 	}
-	if !g.CanDisableThinking || !g.SupportsReasoning {
-		t.Errorf("glm-5.3 capability flags: canDisable=%v supportsReasoning=%v want true/true", g.CanDisableThinking, g.SupportsReasoning)
+	if !g.CanDisableThinking {
+		t.Errorf("glm-5.3 canDisable = false, want true")
 	}
+	// 三值：必须**显式 true**，nil（未知）也算失败。
+	capTrue(t, "glm-5.3 supportsReasoning", g.SupportsReasoning)
 	if g.MaxAllowedSize != 1000000 || g.MaxTokens != 48000 || g.Credits != "x0.79" {
 		t.Errorf("glm-5.3 sizes: maxAllowed=%d maxOut=%d credits=%q", g.MaxAllowedSize, g.MaxTokens, g.Credits)
 	}
@@ -652,9 +654,10 @@ func TestFetchModelsOverlaysV3ConfigCapabilities(t *testing.T) {
 	if mi.ContextWindow != 1000000 {
 		t.Errorf("ContextWindow=%d want 1000000", mi.ContextWindow)
 	}
-	if !mi.CanDisableThinking || !mi.SupportsReasoning {
-		t.Errorf("flags canDisable=%v supportsReasoning=%v", mi.CanDisableThinking, mi.SupportsReasoning)
+	if !mi.CanDisableThinking {
+		t.Errorf("canDisable = false, want true")
 	}
+	capTrue(t, "supportsReasoning", mi.SupportsReasoning)
 	if mi.DefaultEffort != "high" {
 		t.Errorf("DefaultEffort=%q want high", mi.DefaultEffort)
 	}

@@ -683,11 +683,15 @@ func applyModelInfoFields(entry map[string]any, mi upstream.ModelInfo) map[strin
 	if mi.IsDefault {
 		entry["is_default"] = true
 	}
-	if mi.SupportsImages {
-		entry["supports_images"] = true // 多模态能力透出
+	// 三值透出（AGENTS.md：缺失=未知，不是"不支持"）：
+	//   *true → true；*false → false；nil（上游未声明）→ **字段省略**。
+	// 旧实现只在 true 时 emit，于是「显式不支持」与「未知」都表现为省略，消费者
+	// 无法区分；这里让显式 false 也落库，unknown 仍保持省略。
+	if mi.SupportsImages != nil {
+		entry["supports_images"] = *mi.SupportsImages
 	}
-	if mi.SupportsReasoning {
-		entry["supports_reasoning"] = true
+	if mi.SupportsReasoning != nil {
+		entry["supports_reasoning"] = *mi.SupportsReasoning
 		if mi.CanDisableThinking {
 			entry["can_disable_thinking"] = true
 		}

@@ -1215,10 +1215,10 @@ type ModelInfo struct {
 	Tags               []string // tags 模型标签（含 badge:限时免费 等）
 	Vendor             string   // vendor 厂商标识
 	IsDefault          bool     // isDefault 是否默认模型
-	SupportsReasoning  bool     // supportsReasoning 是否支持推理
+	SupportsReasoning  *bool    // supportsReasoning；nil=目录未声明=**未知**，不是"不支持"（AGENTS.md「缺失≠否定」）
 	SupportsToolCall   bool     // supportsToolCall 是否支持工具调用
 	OnlyReasoning      bool     // onlyReasoning 是否纯推理模型
-	SupportsImages     bool     // 顶层 supportsImages（多模态能力，透出到 /v1/models）
+	SupportsImages     *bool    // 顶层 supportsImages（多模态能力，透出到 /v1/models；nil=未知）
 	MaxAllowedSize     int64    // maxAllowedSize 最大允许上下文（与 maxInputTokens 口径并列，上游各自下发）
 	CanDisableThinking bool     // reasoning.canDisableThinking：思考可关（off 档可用）
 	ReasoningEffort    string   // reasoning.effort 推理模式（与 supportedEfforts 数组不同源）
@@ -1254,8 +1254,8 @@ type dynModelEntry struct {
 	MaxOutputTokens int64    `json:"maxOutputTokens"`
 	MaxAllowedSize  int64    `json:"maxAllowedSize"`
 	Disabled        bool     `json:"disabled"`
-	SupportsImages  bool     `json:"supportsImages"`
-	SupportsReason  bool     `json:"supportsReasoning"`
+	SupportsImages  *bool    `json:"supportsImages"`    // 指针：省略=nil（未知），非 false
+	SupportsReason  *bool    `json:"supportsReasoning"` // 指针：省略=nil（未知），非 false
 	SupportsTool    bool     `json:"supportsToolCall"`
 	OnlyReasoning   bool     `json:"onlyReasoning"`
 	Reasoning       struct {

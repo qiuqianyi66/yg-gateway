@@ -38,7 +38,10 @@ func GatewayHint(kind ErrKind, msg string, ctx HintContext) string {
 	// 参数被模型供应商拒绝）。只有请求确实带图、且目录能对该模型做出「不支持图片」
 	// 的判定时才给「换模型」指向，否则退中性参数形态（可能是任意参数问题，不点名图片）。
 	if isModelParamInvalid(msg) {
-		if ctx.HasImage && ctx.ModelInCatalog && !ctx.ModelSupportsImages {
+		// 三值：只有目录**显式声明不支持**才指向"换模型"。
+		// nil（目录没声明）是 unknown，不能据此下"不支持"判定——否则会把换模型的
+		// 责任甩给一个我们并不知道的能力字段（AGENTS.md 四态纪律）。
+		if ctx.HasImage && ctx.ModelInCatalog && ctx.ModelSupportsImages != nil && !*ctx.ModelSupportsImages {
 			return "model " + ctx.Model + " does not support images; pick one with supports_images=true from /v1/models"
 		}
 		return "request parameters were rejected by the model provider; check message format and model capabilities"
@@ -81,7 +84,7 @@ func GatewayHint(kind ErrKind, msg string, ctx HintContext) string {
 type HintContext struct {
 	Model               string // 请求裸模型名（可空）
 	HasImage            bool   // 请求体是否携带 image_url part
-	ModelSupportsImages bool   // 模型目录 supports_images 声明（仅 ModelInCatalog 时有意义）
+	ModelSupportsImages *bool  // 模型目录 supports_images 声明：true/false=已声明；**nil=目录未声明（未知）**
 	ModelInCatalog      bool   // 模型目录是否收录该模型（「不支持」判定的前提）
 }
 

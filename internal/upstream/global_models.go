@@ -642,8 +642,16 @@ func parseGlobalModelLoose(obj map[string]any) (ModelInfo, bool) {
 		MaxTokens:      num("maxOutputTokens", "maxTokens"),
 		MaxAllowedSize: num("maxAllowedSize"),
 	}
-	mi.SupportsReasoning, _ = obj["supportsReasoning"].(bool)
-	mi.SupportsImages, _ = obj["supportsImages"].(bool)
+	// 三值解析（AGENTS.md：缺失 ≠ 否定）：只有上游**明确声明且是 bool** 才赋值，
+	// 其余（键缺失 / 值不是 bool / 类型断言失败）一律保持 nil = 未知。
+	// 旧实现 `mi.X, _ = obj["x"].(bool)` 会把上述全部塌缩成 false，等于把 unknown
+	// 冒充成"观测到不支持"——下游据此做能力筛选时会静默误伤，且不报错。
+	if v, ok := obj["supportsReasoning"].(bool); ok {
+		mi.SupportsReasoning = &v
+	}
+	if v, ok := obj["supportsImages"].(bool); ok {
+		mi.SupportsImages = &v
+	}
 	if r, ok := obj["reasoning"].(map[string]any); ok {
 		reasonStr := func(key string) string {
 			s, _ := r[key].(string)
