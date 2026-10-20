@@ -14,6 +14,61 @@ import (
 	"time"
 )
 
+// nodeDiag 把 node 失败时的 stdout 与 stderr 拼成诊断文本（只在 t.Fatalf 里用）。
+//
+// 为什么必须分开取（2026-10-20 实测：**17 条 TestAppJS\* 在 HEAD 上全红**）：
+// 这些测试此前一律用 CombinedOutput()，于是 node 自己吐到 stderr 的警告
+// （`(node:41696) [UNDICI-EHPA] Warning: EnvHttpProxyAgent is experimental…`）
+// 会插在 stdout 的 JSON 前面，断言 `TrimSpace(out) == want` 恒不成立。
+// 报出来的形态是「面板代码坏了」，实际是**测试自己的取数方式**坏了——这正是会伪造结论的那一类。
+// 修法：断言只建立在 stdout 上（各处一律 Output()，**不许**改回 CombinedOutput()），
+// stderr 单独留在 ExitError.Stderr 里，仅用于失败时打印。
+func nodeDiag(err error, stdout []byte) string {
+	if ee, ok := err.(*exec.ExitError); ok && len(ee.Stderr) > 0 {
+		return "stdout=" + strconv.Quote(string(stdout)) + "\nstderr=" + strconv.Quote(string(ee.Stderr))
+	}
+	return "stdout=" + strconv.Quote(string(stdout))
+}
+
+// TestNodeCallsDoNotMergeStderr 自检：本包里调用 node 的测试**不许**用 CombinedOutput()。
+//
+// 为什么是测试而不是门禁项（2026-10-20）：这条是刚踩的坑（17 条 TestAppJS* 假红），
+// 但按 PRD §六 Q4「先跑两周统计真问题再决定加检项」，不往 check-harness.ps1 里加项；
+// 放在 go test 里，它随既有门禁一起跑，零新增门禁项、零 CI 配置改动。
+// 等同类问题第 2 次出现，再按 Seen 制升级为机器检查（候选：check-harness.ps1 检项 [8]）。
+//
+// 判据刻意收窄，避免误伤：只扫「既出现 exec.Command( 又出现 node」的测试文件，
+// 且只看**代码行**（跳过 // 注释行——本文件的注释里正写着 CombinedOutput 这几个字）。
+func TestNodeCallsDoNotMergeStderr(t *testing.T) {
+	paths, err := filepath.Glob("*_test.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range paths {
+		b, err := os.ReadFile(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Contains(b, []byte("exec.Command(")) || !bytes.Contains(b, []byte("node")) {
+			continue
+		}
+		// 判据取**方法调用形态**，且把关键字**拼出来**而不是写成一个字面量：
+		// 否则本行自己就会含这个串 → 自检把自己扫红（实测踩到一次）。
+		// 拼装不影响判据强度：`x.CombinedOutput()` 这类写法一个都跑不掉。
+		needle := "." + "Combined" + "Output" + "("
+		for i, ln := range strings.Split(string(b), "\n") {
+			if strings.HasPrefix(strings.TrimSpace(ln), "//") {
+				continue
+			}
+			if !strings.Contains(ln, needle) {
+				continue
+			}
+			t.Errorf("%s:%d 用了 CombinedOutput()：node 的 stderr（如 UNDICI-EHPA 警告）会混进 stdout，"+
+				"下游的 JSON 断言因此恒不成立。改用 Output() + nodeDiag()，%s", p, i+1, ln)
+		}
+	}
+}
+
 // TestAppJSSyntax app.js 必须能通过 JS 解析器语法校验。
 //
 // 为什么需要：app.js 是 go:embed 进二进制的静态资源，Go 编译器不检查其内容——
@@ -29,9 +84,10 @@ func TestAppJSSyntax(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	out, err := exec.Command(node, "--check", path).CombinedOutput()
+	// --check 的诊断一律走 stderr（stdout 恒空），所以要走 nodeDiag 才看得到报错。
+	out, err := exec.Command(node, "--check", path).Output()
 	if err != nil {
-		t.Fatalf("app.js syntax error:\n%s", out)
+		t.Fatalf("app.js syntax error:\n%s", nodeDiag(err, out))
 	}
 }
 
@@ -118,9 +174,9 @@ try {
 		cmd := exec.Command(node, hf.Name(), "app.js")
 		cmd.Dir = "." // 测试工作目录 = internal/panel
 		cmd.Env = append(os.Environ(), "SMOKE_HASH="+hash)
-		out, err := cmd.CombinedOutput()
+		out, err := cmd.Output()
 		if err != nil {
-			t.Fatalf("app.js 顶层求值 %s 崩溃: %v\n%s", hash, err, out)
+			t.Fatalf("app.js 顶层求值 %s 崩溃: %v\n%s", hash, err, nodeDiag(err, out))
 		}
 		if !bytes.Contains(out, []byte("SMOKE OK")) {
 			t.Fatalf("app.js smoke %s 未通过:\n%s", hash, out)
@@ -165,9 +221,9 @@ process.stdout.write(JSON.stringify({
 		t.Fatal(err)
 	}
 	f.Close()
-	out, err := exec.Command(node, f.Name(), "app.js").CombinedOutput()
+	out, err := exec.Command(node, f.Name(), "app.js").Output()
 	if err != nil {
-		t.Fatalf("credit formatting node test failed: %v\n%s", err, out)
+		t.Fatalf("credit formatting node test failed: %v\n%s", err, nodeDiag(err, out))
 	}
 	const want = `{"credit":"1.25","zero":"0","hundred":"100","ratio":"12.5 / 1M","noSamples":"—","noTokens":"—","rate":"x0.5","noRate":"—"}`
 	if strings.TrimSpace(string(out)) != want {
@@ -209,9 +265,9 @@ process.stdout.write(JSON.stringify({
 		t.Fatal(err)
 	}
 	f.Close()
-	out, err := exec.Command(node, f.Name(), "app.js").CombinedOutput()
+	out, err := exec.Command(node, f.Name(), "app.js").Output()
 	if err != nil {
-		t.Fatalf("rate-limit formatting node test failed: %v\n%s", err, out)
+		t.Fatalf("rate-limit formatting node test failed: %v\n%s", err, nodeDiag(err, out))
 	}
 	const want = `{"rate":"预计 2026-09-28 16:00 解封（剩余 2时00分） · 网关最快 1时00分 后重试","unavailable":"预计 1时00分 后重试","unknown":"预计解封时间未知"}`
 	if strings.TrimSpace(string(out)) != want {
@@ -259,9 +315,9 @@ process.stdout.write(JSON.stringify({
 		t.Fatal(err)
 	}
 	f.Close()
-	out, err := exec.Command(node, f.Name(), "app.js").CombinedOutput()
+	out, err := exec.Command(node, f.Name(), "app.js").Output()
 	if err != nil {
-		t.Fatalf("request log formatting node test failed: %v\n%s", err, out)
+		t.Fatalf("request log formatting node test failed: %v\n%s", err, nodeDiag(err, out))
 	}
 	text := "14:05:06 | 200 成功 | glm-5.3 | 账号(uid8) | 203.0.113.7 | python-requests/2.31.0 | 1.25s | 2.3k tok | 0.12 credit | req-1"
 	noSource := "14:05:06 | 200 成功 | glm-5.3 | 账号(uid8) | — | — | 1.25s | 2.3k tok | 0.12 credit | req-3"
@@ -309,9 +365,9 @@ process.stdout.write(JSON.stringify({
 		t.Fatal(err)
 	}
 	f.Close()
-	out, err := exec.Command(node, f.Name(), "app.js").CombinedOutput()
+	out, err := exec.Command(node, f.Name(), "app.js").Output()
 	if err != nil {
-		t.Fatalf("request filter node test failed: %v\n%s", err, out)
+		t.Fatalf("request filter node test failed: %v\n%s", err, nodeDiag(err, out))
 	}
 	// q 对 outcome 不参与匹配（outcome 有独立下拉），multiKw 里的 success 命中不了任何字段。
 	const want = `{"all":["req-1","req-2"],"byIP":["req-1"],"byUA":["req-2"],"byModel":["req-1"],"multiKw":[],"multiMiss":[],"byOutcome":["req-2"],"combined":["req-2"]}`
@@ -372,9 +428,9 @@ process.stdout.write(JSON.stringify({
 		t.Fatal(err)
 	}
 	f.Close()
-	out, err := exec.Command(node, f.Name(), "app.js").CombinedOutput()
+	out, err := exec.Command(node, f.Name(), "app.js").Output()
 	if err != nil {
-		t.Fatalf("model filter node test failed: %v\n%s", err, out)
+		t.Fatalf("model filter node test failed: %v\n%s", err, nodeDiag(err, out))
 	}
 	const want = `{"all":["cn:glm-5.2","cn:hy3","global:hy3","cn:auto"],` +
 		`"realm":["cn:glm-5.2","cn:hy3","cn:auto"],` +
@@ -440,9 +496,9 @@ process.stdout.write(JSON.stringify({
 		t.Fatal(err)
 	}
 	f.Close()
-	out, err := exec.Command(node, f.Name(), "app.js").CombinedOutput()
+	out, err := exec.Command(node, f.Name(), "app.js").Output()
 	if err != nil {
-		t.Fatalf("unknown-capability filter node test failed: %v\n%s", err, out)
+		t.Fatalf("unknown-capability filter node test failed: %v\n%s", err, nodeDiag(err, out))
 	}
 	const want = `{"vision":["cn:yes","cn:unknown"],` +
 		`"reasoning":["cn:yes","cn:unknown"],` +
@@ -502,9 +558,9 @@ process.stdout.write(JSON.stringify({
 		t.Fatal(err)
 	}
 	f.Close()
-	out, err := exec.Command(node, f.Name(), "app.js").CombinedOutput()
+	out, err := exec.Command(node, f.Name(), "app.js").Output()
 	if err != nil {
-		t.Fatalf("playground model label node test failed: %v\n%s", err, out)
+		t.Fatalf("playground model label node test failed: %v\n%s", err, nodeDiag(err, out))
 	}
 	const want = `{"labels":["Hy4 preview · x0.29","GLM-5.3-Flash · x0.06","Hy4 preview · 倍率未知","Auto · 倍率未知","GLM-5.3 · x0.79"],` +
 		`"dupHy4":true,"dupHy4F":true,"uniqueNoSuffix":true,"autoUnknown":true,"selectedFirst":true}`
@@ -564,9 +620,9 @@ process.stdout.write(JSON.stringify({
 		t.Fatal(err)
 	}
 	f.Close()
-	out, err := exec.Command(node, f.Name(), "app.js").CombinedOutput()
+	out, err := exec.Command(node, f.Name(), "app.js").Output()
 	if err != nil {
-		t.Fatalf("unknown badge node test failed: %v\n%s", err, out)
+		t.Fatalf("unknown badge node test failed: %v\n%s", err, nodeDiag(err, out))
 	}
 	const want = `{"empty":"","emptyArr":"","count":true,"hasQuestions":true,` +
 		`"hasRequiresLabel":true,"hasRequires":true,"escAngle":true,"escQuote":true,` +
@@ -628,9 +684,9 @@ process.stdout.write(JSON.stringify({
 		t.Fatal(err)
 	}
 	f.Close()
-	out, err := exec.Command(node, f.Name(), "app.js").CombinedOutput()
+	out, err := exec.Command(node, f.Name(), "app.js").Output()
 	if err != nil {
-		t.Fatalf("usage chart node test failed: %v\n%s", err, out)
+		t.Fatalf("usage chart node test failed: %v\n%s", err, nodeDiag(err, out))
 	}
 	const want = `{"hasUsbar":true,"hasBareBar":false,"hasGradient":true,"barCount":6,"hasPeak":true,"hasAvg":true,"emptyState":true}`
 	if strings.TrimSpace(string(out)) != want {
@@ -702,9 +758,9 @@ process.stdout.write(JSON.stringify({
 		t.Fatal(err)
 	}
 	f.Close()
-	out, err := exec.Command(node, f.Name(), "app.js").CombinedOutput()
+	out, err := exec.Command(node, f.Name(), "app.js").Output()
 	if err != nil {
-		t.Fatalf("time range node test failed: %v\n%s", err, out)
+		t.Fatalf("time range node test failed: %v\n%s", err, nodeDiag(err, out))
 	}
 	local := func(h, m int) string {
 		return strconv.FormatInt(time.Date(2026, 9, 30, h, m, 0, 0, time.Local).Unix(), 10)
@@ -837,9 +893,9 @@ process.stdout.write(JSON.stringify({
 		t.Fatal(err)
 	}
 	f.Close()
-	out, err := exec.Command(node, f.Name(), "app.js").CombinedOutput()
+	out, err := exec.Command(node, f.Name(), "app.js").Output()
 	if err != nil {
-		t.Fatalf("detail groups node test failed: %v\n%s", err, out)
+		t.Fatalf("detail groups node test failed: %v\n%s", err, nodeDiag(err, out))
 	}
 	const want = `{"visible":["large-early","small-early"],"rest":["small-late","large-unknown","small-unknown"],"used":["zero-early-b","zero-early-a","zero-late"],"restSize":500,"restRemain":5,"usedSize":700,"defaultLimit":5,"configuredLimit":7,"unchanged":true}`
 	if strings.TrimSpace(string(out)) != want {
@@ -889,9 +945,9 @@ process.stdout.write(JSON.stringify({
 		t.Fatal(err)
 	}
 	f.Close()
-	out, err := exec.Command(node, f.Name(), "app.js").CombinedOutput()
+	out, err := exec.Command(node, f.Name(), "app.js").Output()
 	if err != nil {
-		t.Fatalf("expiry summary node test failed: %v\n%s", err, out)
+		t.Fatalf("expiry summary node test failed: %v\n%s", err, nodeDiag(err, out))
 	}
 	const want = `{"rows":[{"days":1,"credits":50},{"days":7,"credits":70}],"accountCount":3,"unavailable":1,"colorA":"#4f8cff","colorB":"#25b08b"}`
 	if strings.TrimSpace(string(out)) != want {
@@ -949,9 +1005,9 @@ process.stdout.write(JSON.stringify([
 		t.Fatal(err)
 	}
 	f.Close()
-	out, err := exec.Command(node, f.Name(), "app.js").CombinedOutput()
+	out, err := exec.Command(node, f.Name(), "app.js").Output()
 	if err != nil {
-		t.Fatalf("collectConfig node test failed: %v\n%s", err, out)
+		t.Fatalf("collectConfig node test failed: %v\n%s", err, nodeDiag(err, out))
 	}
 	// [user_agent 已发, 其值, prompt.file 已发, 其值, listen 未发, checkin_hours 未发, api_key]
 	const want = `[true,"",true,"",false,false,"secret"]`
@@ -1013,9 +1069,9 @@ process.stdout.write(JSON.stringify(names));`
 		t.Fatal(err)
 	}
 	f.Close()
-	out, err := exec.Command(node, f.Name(), "app.js").CombinedOutput()
+	out, err := exec.Command(node, f.Name(), "app.js").Output()
 	if err != nil {
-		t.Fatalf("expiry sort node test failed: %v\n%s", err, out)
+		t.Fatalf("expiry sort node test failed: %v\n%s", err, nodeDiag(err, out))
 	}
 	// 最快到期的排最前（跨域）；无 7 天内到期的与查询失败的排最后。
 	const want = `["gl-soon","cn-mid","cn-late","no-expiry","broken"]`
@@ -1110,13 +1166,13 @@ process.stdout.write(JSON.stringify(out));`
 		t.Fatal(err)
 	}
 	f.Close()
-	out, err := exec.Command(node, f.Name(), "app.js").CombinedOutput()
+	out, err := exec.Command(node, f.Name(), "app.js").Output()
 	if err != nil {
-		t.Fatalf("expiry card grid node test failed: %v\n%s", err, out)
+		t.Fatalf("expiry card grid node test failed: %v\n%s", err, nodeDiag(err, out))
 	}
 	var got map[string]any
 	if err := json.Unmarshal([]byte(strings.TrimSpace(string(out))), &got); err != nil {
-		t.Fatalf("decode expiry card grid output: %v\nraw: %s", err, out)
+		t.Fatalf("decode expiry card grid output: %v\nraw: %s", err, nodeDiag(err, out))
 	}
 	// 逐字段比较而非整串比对：字段顺序变化不该让用例失败，缺失字段要指出。
 	want := map[string]any{
@@ -1201,9 +1257,9 @@ process.stdout.write(JSON.stringify({
 		t.Fatal(err)
 	}
 	f.Close()
-	out, err := exec.Command(node, f.Name(), "app.js").CombinedOutput()
+	out, err := exec.Command(node, f.Name(), "app.js").Output()
 	if err != nil {
-		t.Fatalf("expiry snapshot node test failed: %v\n%s", err, out)
+		t.Fatalf("expiry snapshot node test failed: %v\n%s", err, nodeDiag(err, out))
 	}
 	const want = `{"visible":true,"rows":3,"order":true,"got":"[\"秋\",\"<account>\",\"长期包\"]","want":"[\"秋\",\"<account>\",\"长期包\"]"}`
 	if strings.TrimSpace(string(out)) != want {
@@ -1294,9 +1350,9 @@ process.stdout.write(JSON.stringify({
 		t.Fatal(err)
 	}
 	f.Close()
-	out, err := exec.Command(node, f.Name(), "app.js").CombinedOutput()
+	out, err := exec.Command(node, f.Name(), "app.js").Output()
 	if err != nil {
-		t.Fatalf("chart tooltip node test failed: %v\n%s", err, out)
+		t.Fatalf("chart tooltip node test failed: %v\n%s", err, nodeDiag(err, out))
 	}
 	const want = `{"points":5,"groups":5,"titles":5,"loose":0}`
 	if strings.TrimSpace(string(out)) != want {
@@ -1369,9 +1425,9 @@ process.stdout.write(JSON.stringify(out));`
 		t.Fatal(err)
 	}
 	f.Close()
-	out, err := exec.Command(node, f.Name(), "app.js").CombinedOutput()
+	out, err := exec.Command(node, f.Name(), "app.js").Output()
 	if err != nil {
-		t.Fatalf("key import configs node test failed: %v\n%s", err, out)
+		t.Fatalf("key import configs node test failed: %v\n%s", err, nodeDiag(err, out))
 	}
 	const want = `{"openai":"# 可用模型：GET http://127.0.0.1:7863/v1/models 查看\nOPENAI_BASE_URL=http://127.0.0.1:7863/v1\nOPENAI_API_KEY=sk-test-key-123","anthropic":"# 可用模型：GET http://127.0.0.1:7863/v1/models 查看\nANTHROPIC_BASE_URL=http://127.0.0.1:7863\nANTHROPIC_AUTH_TOKEN=sk-test-key-123"}`
 	if strings.TrimSpace(string(out)) != want {
@@ -1441,9 +1497,9 @@ process.stdout.write(JSON.stringify(out));`
 		t.Fatal(err)
 	}
 	f.Close()
-	out, err := exec.Command(node, f.Name(), "app.js").CombinedOutput()
+	out, err := exec.Command(node, f.Name(), "app.js").Output()
 	if err != nil {
-		t.Fatalf("buildEnvFile node test failed: %v\n%s", err, out)
+		t.Fatalf("buildEnvFile node test failed: %v\n%s", err, nodeDiag(err, out))
 	}
 	const want = `"# yg-gateway 接入配置（OpenAI + Anthropic 协议）\n# 可用模型：GET http://127.0.0.1:7863/v1/models 查看\nOPENAI_BASE_URL=http://127.0.0.1:7863/v1\nOPENAI_API_KEY=sk-test-key-123\n\n# 可用模型：GET http://127.0.0.1:7863/v1/models 查看\nANTHROPIC_BASE_URL=http://127.0.0.1:7863\nANTHROPIC_AUTH_TOKEN=sk-test-key-123\n"`
 	if strings.TrimSpace(string(out)) != want {

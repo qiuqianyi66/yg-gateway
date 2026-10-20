@@ -250,9 +250,9 @@ process.stdout.write(JSON.stringify({
 		t.Fatal(err)
 	}
 	f.Close()
-	out, err := exec.Command(node, f.Name(), "app.js").CombinedOutput()
+	out, err := exec.Command(node, f.Name(), "app.js").Output()
 	if err != nil {
-		t.Fatalf("csv node test failed: %v\n%s", err, out)
+		t.Fatalf("csv node test failed: %v\n%s", err, nodeDiag(err, out))
 	}
 	got := strings.TrimSpace(string(out))
 	// 期望（JSON 输出里 \n 是真实换行序列、\" 是转义引号）：
