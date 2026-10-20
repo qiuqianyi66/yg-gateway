@@ -2,6 +2,7 @@
 
 > **状态：v1（2026-10-20 修订）。P0 已落地并实测，见 §五「实现状态」列与
 > `.harness/changes/2026-10-19-harness-engineering/summary.md`。**
+> **2026-10-20 续作**：wiki 的 `api-contract` / `data-model` 已补（提交 `a93e890`，§八 收口）；`business-model` 刻意不写（与 `glossary` 重复即层次冲突，见 summary §5.9）。**
 > 本文的定位：**需求 + 验收 + 两周后的判据**。后续是否加层，按 §六 Q4 的数字判据走，不许凭感觉。
 >
 > 原始动机（v0，2026-10-19）：把"参考 tea 做 harness / 或往 agent 发展"这两个模糊方向，
@@ -66,11 +67,12 @@ P0 的实际代价是 3 个新脚本 + 1 个基线 json + 1 份技能路由表 +
 
 治理资产清点（实测，随改随更）：
 
-- 规则 6 份 / 技能 11 个（main-dev **6**、biz-dev 2、ops 1、trouble-shooting 2）/ wiki 2 份 /
+- 规则 6 份 / 技能 11 个（main-dev **6**、biz-dev 2、ops 1、trouble-shooting 2）/ wiki 4 份 /
   `changes/` 目录 53 个 / REQ 18 / ADR 10 / `.harness/lessons/` 20 篇 + `flake.md`
 - **已补**：`scripts/check-harness.ps1`、`scripts/check-context-budget.ps1`、
-  `.harness/skills/README.md`（静态路由表）、`.harness/lessons/`、`docs/agent-eval/`
-- **仍缺**：`changes/_template/`、wiki 的 `api-contract` 与 `data-model`、契约漂移审计、红线机械化审计
+  `.harness/skills/README.md`（静态路由表）、`.harness/lessons/`、`docs/agent-eval/`、
+  `.harness/changes/_template/`、`wiki/api-contract.md`、`wiki/data-model.md`
+- **仍缺**：契约漂移审计、红线机械化审计（按 §六 Q4 两周判据决定；`changes/_template/` 与 wiki 两份已于 2026-10-20 补齐）
 
 ---
 
@@ -229,9 +231,9 @@ L-1 写"检查 3/6"实际 3/10；L-3 写"检查 4/7"实际 4/10。
 - [ ] F1 检项 [5] 仍未实现（由 pre-commit 检查 8 承担，属**有意**不重复，不是缺口）
 - [x] ~~检项 [4] ADR 编号 / [6] changes summary.md 未实现~~ → **2026-10-20 已补**，见 §五 F1
 - [x] ~~`.harness/changes/_template/` 仍缺~~ → **2026-10-20 已补**（summary + rollback 两份模板）
-- [ ] wiki 的 `api-contract` 与 `data-model` 仍缺（yg 有 `/v1/*`、`/status` 等对外端点，尚无契约文档）
+- [x] ~~wiki 的 `api-contract` 与 `data-model` 仍缺~~ → **2026-10-20 已补**（`.harness/wiki/api-contract.md` + `data-model.md`，提交 `a93e890`；刻意不写 `business-model.md`，因 `glossary.md` 已覆盖全部业务域，再写即层次冲突，见 changes summary §5.9）
 - [ ] Q5（单人 vs 多人）未拍板
-- [ ] P0 + 本轮改动**尚未提交**（工作区脏，还混着用户此前的 mutation 改动）；提交前需跑 `pre-commit.ps1` 全量
+- [x] ~~P0 + 本轮改动尚未提交~~ → P0 已在 `19eb2f0` 提交；本轮回填的 wiki 两份（`a93e890`）+ 本跟踪文档更新已单独提交（不混用户其他改动；曾被并发会话 revert 一次后重做，见 summary §5.9 警示）
 
 ### 本轮（2026-10-20）新查出的两件事
 

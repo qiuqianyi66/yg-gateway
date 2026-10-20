@@ -198,3 +198,28 @@ ops 1、trouble-shooting 2）」，5+2+1+2=**10≠11**；实测 main-dev 是 **6
 
 3. **`changes/_template/` 补齐**：`summary.md` + `rollback.md` 两份模板（PRD §二列为缺项）。
    模板目录被 [6] 显式豁免，不需要自己的 summary.md，但它本身就是别人建 changes 时复制的母版。
+
+### 5.9 收口：wiki 契约 / 数据模型补全（填 §八 最后一项实质缺口）
+
+PRD §八 列的最后一项实质工作是「wiki 的 `api-contract` 与 `data-model` 仍缺」。本轮补齐（提交 `a93e890`）。
+
+新增：
+
+| 文件 | 作用 | 关键取舍 |
+|---|---|---|
+| `.harness/wiki/api-contract.md` | 接口契约**语义**：两个 mux 与挂载 / 两个 `withAuth` 口径差异（承重墙）/ 限流免鉴权 / 错误信封 404·405 / 响应字段四态 / R8 受保护字符串 / 流式 / 面板 API 共性 | **不复制路由表**：路由唯一真相在 `internal/server/handler.go` 的 `NewHandler` 与 `internal/panel/panel.go` 的 `routes()`；抄一份必漂（本项目已实证三次同类漂移——LESSONS L-1/L-3 的「检查 N/M」编号、两个 changes 漏 summary、pre-commit 检查 9 自己的描述） |
+| `.harness/wiki/data-model.md` | 落盘布局与不变量：四个落点 / 🔴 锚点规则（以 `state_file` 取同目录兄弟文件）/ state.json 五条不变量 / auths/ 不变量 / 删除重建语义 | **不复制字段表**：字段唯一真相在各 struct 定义（`internal/pool/entry.go`、`internal/usage/usage.go`）；字段漂移比路由漂移更隐蔽（路由漂至少 404，字段漂让人按不存在的字段写代码） |
+
+**刻意不写 `business-model.md`**：`.harness/wiki/glossary.md` 已完整覆盖账号域 / 积分域 / 调度域 / 上游域 / 面板域，再写一份就是「同一业务模型多处说」——正是 Handbook 反模式之二（层次冲突），与 §5.3 修掉的三处同源。`.harness/rules/工程结构.md:144` 早已声明 `wiki/ # 项目知识（业务模型 / 数据模型 / API 契约 / 术语）`，所以补 `api-contract` / `data-model` 是**补缺口**，不写 `business-model` 是**主动避重**（写了即层次冲突）。
+
+**已标 unknown（不伪装成已知）**：
+- `read_only_rate_limit.limit = 0` 的语义（关闭 vs unlimited）未核实，读 `internal/server` 限流装配代码；
+- 客户端传 `stream:false` 时网关侧聚合 / 何时回非流式响应未核实，读 `chatrun.go` / `chatflow.go`；
+- 删 `state.json` 的后果是**推测**（标 unknown + `requires`：沙箱实例删一次再启动观察选号与面板），不写进部署文档或交接。
+
+**验证**：
+- `check-harness.ps1` [8] 的受检面**包含 `wiki/`**（脚本 L461 显式列 `'rules','lessons','wiki'`）。本文件里的「检查 N/M」是字母 N/M，**不匹配** `检查\s+\d+\s*/\s+\d+` 数字正则 → 不会误报分母漂移；实测 `ERRORS: []`。
+- `pre-commit.ps1 -Fast -AllFiles -Base HEAD`：**10/10 通过**（检查 6 测试因 `-Fast` 跳过，纯 `.md` 改动不影响 `go test`）。
+- **预算观察（诚实记）**：`check-context-budget.ps1` 扫描面只含 `AGENTS.md` + `.harness/rules/*.md` + `.harness/LESSONS.md`（脚本 L19-21、L69-85），**不含 `wiki/`**。所以两份 wiki 新增（约 10KB）不影响常驻预算读数（仍是 15,822 / 15,822）。这是**有意为之**：wiki 是按需加载的项目知识，不是每次调用都常驻的 harness 规则；把它排除在预算外与「首调用上下文是税主源」口径一致。但记一笔：若将来 wiki 无序膨胀，现有棘轮**看不见**，需要另立观测（不在此 REQ 范围）。
+
+> **并发会话警示（2026-10-20 实测）**：本轮 §5.9 与 PRD §八的收口编辑**曾被同一工作树里的另一会话 revert 掉一次**（该会话在提交自己的 LESSONS/L-21 时对工作树做了 reset，把我未提交的 PRD/summary 编辑连同清掉；wiki 两个文件因为是 untracked 才幸存，后单独提交为 `a93e890`）。这正是 LESSONS **L-21** 与用户「不行就开 worktree」授权要防的场景。后续若继续在同一工作树改治理文档，**做完立刻单独提交**，或按用户授权开 worktree 隔离。
