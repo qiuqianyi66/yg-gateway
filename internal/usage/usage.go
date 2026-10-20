@@ -32,8 +32,17 @@ const hourlyKeep = 90 * 24 * time.Hour
 // flushInterval 防抖落盘间隔。
 const flushInterval = 30 * time.Second
 
-// maxBuckets 桶数硬上限。超过时立即触发一次折叠，避免异常流量把内存/文件撑爆。
+// maxBuckets 桶数硬上限。超过时触发容量保护（rollupWithLimits，ADR-011），
+// 把桶数压回上限，避免异常流量把内存/文件撑爆。
 const maxBuckets = 400_000
+
+// minHourlyKeep 压力期小时保留窗口的下限：最多把最近 24h 之外的小时桶折成日桶，
+// 保留最近一天的小时级尖峰粒度（见 rollupWithLimits，ADR-011）。
+const minHourlyKeep = 24 * time.Hour
+
+// rollupTargetRatio 压力期桶数压回的目标比例（相对 maxBuckets）。留出 15% 余量，
+// 避免压到上限后下一轮 tick 立刻又超、抖动（ADR-011）。
+const rollupTargetRatio = 0.85
 
 // hourLayout / dayLayout 分片键的时间格式（本地时区，与用户直觉一致）。
 const (
@@ -339,64 +348,9 @@ func (r *Recorder) MonthlySnapshot() map[string]int64 {
 	return out
 }
 
-// Rollup 把超出 hourlyKeep 的小时桶折叠为日桶（按本地日历日）。
-// 幂等：同一小时反复折叠不会重复计数（先累加再删源桶）。
-func (r *Recorder) Rollup(now time.Time) {
-	if r == nil {
-		return
-	}
-	cutoff := now.Add(-hourlyKeep)
-
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	type move struct{ from, to string }
-	var moves []move
-	for k, b := range r.buckets {
-		if !strings.HasPrefix(b.Scope, "h:") {
-			continue
-		}
-		ts, err := time.ParseInLocation(hourLayout, strings.TrimPrefix(b.Scope, "h:"), time.Local)
-		if err != nil || !ts.Before(cutoff) {
-			continue
-		}
-		day := "d:" + ts.Format(dayLayout)
-		moves = append(moves, move{from: k, to: bucketKey(day, b.Realm, b.UID, b.Model, b.Rate, b.Key)})
-	}
-	for _, m := range moves {
-		src := r.buckets[m.from]
-		if src == nil {
-			continue
-		}
-		dst := r.buckets[m.to]
-		if dst == nil {
-			cp := *src
-			cp.Scope = strings.SplitN(m.to, "|", 2)[0]
-			dst = &cp
-			r.buckets[m.to] = dst
-		} else {
-			dst.Req += src.Req
-			dst.Err += src.Err
-			dst.PT += src.PT
-			dst.CT += src.CT
-			dst.TT += src.TT
-			dst.LatMs += src.LatMs
-			dst.LatN += src.LatN
-			dst.TPS += src.TPS
-			dst.TPSN += src.TPSN
-			dst.CR += src.CR
-			dst.CRN += src.CRN
-			dst.CRT += src.CRT
-			dst.CH += src.CH
-			dst.CM += src.CM
-		}
-		delete(r.buckets, m.from)
-	}
-	if len(moves) > 0 {
-		r.dirty = true
-		log.Printf("[usage] 折叠 %d 个小时桶为日桶（保留 %v 细粒度）", len(moves), hourlyKeep)
-	}
-}
+// 容量保护（Rollup 及子流程 rollupNormal / rollupWithLimits / foldHourlyOlderThan /
+// dropOldestDailyUntil，含 ancientDayScope 常量）见同包 cap.go（ADR-011）。此处仅留
+// 导航指针，避免本文件越界千行——深度棘轮要求 oversizeFiles 只许降不许涨。
 
 // ---------------------------------------------------------------- 持久化 ----
 
@@ -743,6 +697,20 @@ func (r *Recorder) SnapshotWindow(w Window, nicks map[string]string, keyNames ma
 	matched := 0
 	for i := range bs {
 		b := &bs[i]
+		// 合成远古桶（ancientDayScope，维度全空）：只进"全部历史"的 totals，绝不进
+		// 维度/时序/窗口聚合，也不污染"数据起点" since（ADR-011）。窗口口径下它字典序
+		// 极老、本就不在任何真实窗口内，故直接跳过——避免 Years-ago 的聚合堆到图表
+		// 最左端或生成空维度行。
+		if b.Scope == ancientDayScope {
+			if !windowed {
+				var usd float64
+				if pricing != nil {
+					usd = bucketUSD(b, pricing(canonicalUsageModel(b.Model)))
+				}
+				total.add(b, usd)
+			}
+			continue
+		}
 		if b.Scope < since || since == "" {
 			since = b.Scope
 		}
