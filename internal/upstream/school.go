@@ -26,7 +26,13 @@ const schoolBase = "/portal/activity/school"
 func (c *Client) schoolJSON(a *auth.Auth, method, path string, body map[string]any, out any) error {
 	var raw []byte
 	if body != nil {
-		raw, _ = json.Marshal(body)
+		// R10：marshal 失败必须上报，不能静默发空 body——那会把「参数不可序列化」
+		// 伪装成上游拒绝，排障时全查错方向。同文件 ReportMPEvent 同口径。
+		b, err := json.Marshal(body)
+		if err != nil {
+			return fmt.Errorf("序列化 school-season 请求体失败（请求未发出）: %w", err)
+		}
+		raw = b
 	}
 	req, err := http.NewRequest(method, c.billingBase(a)+schoolBase+path, bytes.NewReader(raw))
 	if err != nil {
