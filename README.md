@@ -232,6 +232,8 @@ Server酱 / TG bot / 飞书自定义机器人直接接。
    Windows 上不改写继承 ACL。**每次加完账号跑一次** `powershell -ExecutionPolicy Bypass -File .\lock-auths.ps1`
    （用 `icacls` 而非 `Set-Acl`）。确认当前状态：`(Get-Acl .\auths\*.json).AccessToString`
    应只剩你自己 + `SYSTEM`，出现 `BUILTIN\Users` 说明没加固。
+   服务本身已内置自动收紧（F-101，2026-10-21）：Windows 上每次凭证写回后及启动时
+   自动执行同语义收紧，脚本仅作手动兜底。
 2. **只监听本机**：`listen` 保持 `127.0.0.1:7863`。默认的 `:7863` 等同 `0.0.0.0`，会暴露到局域网。
 3. **必设 api_key**：为空 = 完全不鉴权直接放行。
 4. **公网部署**：服务本身只提供明文 HTTP，挂公网**必须**前置 HTTPS 反代（Nginx / Caddy）并配访问限制。

@@ -365,7 +365,17 @@ func (a *Auth) SaveAtomic() error {
 		}
 		return errors.New(msg)
 	}
-	return os.Rename(tmp, a.FilePath)
+	if err := os.Rename(tmp, a.FilePath); err != nil {
+		return err
+	}
+	// F-101（凭证 ACL 常态加固）：Windows 上 WriteFile(0o600)/rename 都不改写继承
+	// ACL——新建文件继承父目录 ACL（对 BUILTIN\Users 可读），rename 替换同样产生
+	// 新文件。写回成功后立即收紧到「服务账户 + SYSTEM」。失败只 WARN 不阻断：
+	// 写回已成功，ACL 收紧是次级防御（R10：大声记录，不静默吞）。
+	if err := LockdownFile(a.FilePath); err != nil {
+		log.Printf("WARN: [auth] %s ACL 收紧失败: %v", logfmt.Label(a.UID, a.Nickname), err)
+	}
+	return nil
 }
 
 // LoadDir 扫描并解析 dir 下 workbuddy*.json；解析失败的文件跳过（见 LoadDirReport）。
@@ -424,6 +434,12 @@ func LoadDirReport(dir string) (auths []*Auth, skipped []string, err error) {
 					log.Printf("auth %s 存量迁移: 补 realm=global（domain=%s）", logfmt.Label(a.UID, a.Nickname), a.Domain)
 				}
 			}
+		}
+		// F-101 启动兜底：对每个存量文件收紧 ACL（历史文件可能从未收紧过，
+		// 或自旧版本升级而来）。失败 WARN 不阻断启动（与 backfill 失败同策略）。
+		// backfill 过的文件此处会再收紧一次——icacls /grant:r 幂等，无害。
+		if err := LockdownFile(f); err != nil {
+			log.Printf("WARN: [auth] %s 启动 ACL 兜底收紧失败: %v", logfmt.Label(a.UID, a.Nickname), err)
 		}
 		out = append(out, a)
 	}
