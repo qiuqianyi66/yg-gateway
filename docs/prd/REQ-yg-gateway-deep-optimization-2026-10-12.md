@@ -84,11 +84,11 @@ research: 本轮三份调研（安全审计 / 前端效果 / 后端与路由）
 | F-302 | **热路径降锁**：去掉每次尝试的 `Pool.Status(uid)` 重锁调用——✅ 已落地（commit `73911e4`，改为 `Pool.RealmOf(uid)` 单字段查询，不再全池 RLock + 构造整个 Status） | P0 |
 | F-303 | **reqlog 环形缓冲**：消除每请求 100 条 Event 的 O(n) 拷贝——✅ 已落地（commit `73911e4`，`recent [recentLimit]Event` + `recentHead` 写入位，无切片整体拷贝，`reqlog_test.go`） | P0 |
 | F-304 | 404/405 返回 OpenAI 错误信封而非 text/plain 页面——✅ 已落地（兜底注册与 `notFound` 在 commit `73911e4`；牙齿测试 `notfound_test.go` 在 commit `600fc48`） | P1 |
-| F-305 | 可观测性补齐：重试放大率、慢请求追踪（落地状态待回填——另一 shard 实现中） | P1 |
+| F-305 | 可观测性补齐：重试放大率、慢请求追踪——✅ 已落地（commit `5b3c245`，`yg_gateway_upstream_attempts_per_request` 直方图（整数分桶 1/2/3/4/6/8/+Inf，全局+model 标签）+ `attempts_total` 放大率分子 + `slow_requests_total`（阈值 `observability.slow_request_threshold_seconds` 默认 120s）；`internal/metrics/attempts.go` + `internal/server/retry_metrics.go`，零新增依赖） | P1 |
 | F-306 | 断路器 half-open——✅ 已落地（commit `9489e98`，`internal/pool/breaker_halfopen_test.go`；ADR 职责由 **ADR-003 D-400** 覆盖，含 Given-When-Then 与回滚，无需新建 ADR） | P1 |
 | F-307 | 全局准入控制 / 在途上限 429——✅ 已落地（commit `9489e98`，`internal/server/admission_test.go`、`internal/pool/globaladmission_test.go`；ADR 职责由 **ADR-003 D-401** 覆盖） | P2 |
 
-> **落地状态汇总（2026-10-21 回填）**：以上每行注记均经 `git show <sha>` / `git log -S/-G` 独立实证（非转述）。映射：F-101→`01d76c4`；F-103→`962fdc8`（现 release.yml test job）；F-201→`5ecfe71`；F-204→`acc7c0b`；F-301→`73911e4`+`981b0a1`；F-302→`73911e4`；F-303→`73911e4`；F-304→`73911e4`（生产兜底）+`600fc48`（牙齿测试）；F-306/F-307→`9489e98`（ADR-003 D-400/D-401）。F-305 留空待另一 shard 完成后补提交号。
+> **落地状态汇总（2026-10-21 回填）**：以上每行注记均经 `git show <sha>` / `git log -S/-G` 独立实证（非转述）。映射：F-101→`01d76c4`；F-103→`962fdc8`（现 release.yml test job）；F-201→`5ecfe71`；F-204→`acc7c0b`；F-301→`73911e4`+`981b0a1`；F-302→`73911e4`；F-303→`73911e4`；F-304→`73911e4`（生产兜底）+`600fc48`（牙齿测试）；F-305→`5b3c245`；F-306/F-307→`9489e98`（ADR-003 D-400/D-401）。
 
 **F-301 验收**
 - Given 一个典型聊天请求（多轮 messages + tools） / When 处理 / Then 全文档 JSON 解析次数 ≤3（可用计数断言或基准回归）

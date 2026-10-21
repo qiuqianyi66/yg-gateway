@@ -14,7 +14,7 @@ ADR：无（F-306/F-307 的 ADR 职责已由 ADR-003 D-400/D-401 覆盖，禁止
 | `新增：.harness/changes/2026-10-21-prd-landed-status-backfill/summary.md` | 本文件。 |
 
 **没做的（明写，免得下轮重提）**：
-- F-305 未动（另一 shard 本轮实现中，状态行留空，待 organizer 通知后二次补提交号）。
+- ~~F-305 未动~~ → 二次回填已完成：commit `5b3c245` 落地后补注记（本 summary 与 PRD 均已更新）。
 - 未碰 `docs/adr/`、`docs/agent-eval/`、`docs/code-review/`、任何代码文件、`.workbuddy/`。
 - 未更新 PRD front matter 的 `last_updated`（任务要求严格保持原格式，仅补状态）。
 
@@ -37,13 +37,14 @@ ADR：无（F-306/F-307 的 ADR 职责已由 ADR-003 D-400/D-401 覆盖，禁止
 | P0 #4 → `5ecfe71` | `git log -S VEIL_CLOSERS -- app.js`；当前 app.js:2157-2190 | ✅ |
 | P0 #10 → `5ecfe71` | `git log -S skipGuard -- app.js`；当前 app.js:568 `if (!skipGuard) window.scrollTo({top: 0})` | ✅ |
 | P1 #20 → `7c1601f` | `git log -S visibilitychange -- app.js`；当前 app.js:2522 | ✅ |
+| F-305 → `5b3c245`（二次回填） | `git show --stat 5b3c245`；`git grep` HEAD 核实指标名与配置项 | `internal/metrics/attempts.go`(197新)+`attempts_test.go`+`retry_metrics.go`(37新)+`retry_metrics_test.go`(155新)+prom.go/handler.go/metrics_handler.go/main.go/config.go；三个指标名在 retry_metrics_test.go 暴露断言中，`slow_request_threshold_seconds` 在 cmd/server/config.go:139 ✅ |
 
 **负向探针**：无代码改动，门禁不适用；仅做 `git diff --check`（无空白错误）与逐行复读 diff。
 **未跑** `scripts/pre-commit.ps1`（纯文档 L0，且另一 shard 正在跑 go test；文档变更不触及其门禁项）。
 
 ## 三、未完成 / 待补（诚实清单）
 
-- [ ] **F-305**（重试放大率、慢请求追踪）：落地状态行留空。requires：另一 shard 完成后由 organizer 通知提交号，二次补注记。
+- [x] **F-305**（重试放大率、慢请求追踪）：✅ 已消解——另一 shard 落地于 commit `5b3c245`（2026-10-21，见 `.harness/changes/2026-10-21-f305-retry-slow-metrics/`），PRD F-305 行与汇总段已补注记。
 - [ ] **§四「最该先动的三处」之③**（`handler.go:764` `hasImagePart(body)` 无条件调用）：状态标 **unknown**——本轮未核到对应落地 commit，不等于未做。requires：需 `git log -S hasImagePart -- internal/server/` 逐 diff 核实一次才能消解。
 - [ ] P0 表其余条目（#1/#3/#5/#7/#8/#9 等）本次未被 organizer 指派，不核不写。
 
