@@ -716,14 +716,14 @@ type Client struct {
 	GlobalEnabled bool
 }
 
-// New 生产默认值。Transport 由 newTransport() 集中构造（连接层加固：真正禁 h2 /
-// TLS 握手超时 / 短 keepalive 探测 / 失败清池，参数见 transport.go——吸收上游
-// kongjianguan 4 连击实测经验）。
+// New 生产默认值。Client 由 newUpstreamHTTP 集中构造（共享 newTransport 的连接层
+// 加固：真正禁 h2 / TLS 握手超时 / 短 keepalive 探测 / 失败清池，参数见
+// transport.go——吸收上游 kongjianguan 4 连击实测经验；外加显式重定向策略）。
 func New() *Client {
 	tr := newTransport()
 	c := &Client{
-		HTTP:          &http.Client{Timeout: 120 * time.Second, Transport: tr},
-		ChatHTTP:      &http.Client{Timeout: 0, Transport: tr}, // 无总时长；首字节由 ResponseHeaderTimeout 管
+		HTTP:          newUpstreamHTTP(120*time.Second, tr),
+		ChatHTTP:      newUpstreamHTTP(0, tr), // 无总时长；首字节由 ResponseHeaderTimeout 管
 		ChatBaseCN:    "https://copilot.tencent.com",
 		BillingBaseCN: "https://www.codebuddy.cn",
 		WebBaseCN:     "https://www.workbuddy.cn",

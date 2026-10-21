@@ -1,14 +1,17 @@
-// transport.go 出站 Transport 构造的单一事实来源（连接层加固，吸收 kongjianguan
-// 4 连击实测经验的前三件，见 .claude/reports/fork-scan-absorb.md T-2）：
-// 真正禁 h2 / TLS 握手超时 / 短 keepalive 探测，全参数集中定义可测试可调整。
-// 第四件 DisableKeepAlives 按报告 trade-off 不吸收（每请求 TLS 握手开销与连接
-// 复用意图相反），分析见 .claude/reports/transport-hardening.md。
+// transport.go 出站连接构造的单一事实来源（Transport + http.Client，吸收
+// kongjianguan 4 连击实测经验的前三件，见 .claude/reports/fork-scan-absorb.md T-2）：
+// 真正禁 h2 / TLS 握手超时 / 短 keepalive 探测 / 显式重定向策略，全参数集中定义
+// 可测试可调整。第四件 DisableKeepAlives 按报告 trade-off 不吸收（每请求 TLS
+// 握手开销与连接复用意图相反），分析见 .claude/reports/transport-hardening.md。
 package upstream
 
 import (
 	"crypto/tls"
+	"log"
 	"net"
 	"net/http"
+	"net/url"
+	"strings"
 	"time"
 )
 
@@ -85,6 +88,60 @@ func newTransport() *http.Transport {
 		IdleConnTimeout:       idleConnTimeout,
 		ResponseHeaderTimeout: responseHeaderTimeout,
 	}
+}
+
+// newUpstreamHTTP 构造出站 http.Client：共享 Transport + 显式重定向策略。
+// CheckRedirect 必须显式给出（不依赖 net/http 的默认跟随行为）：上游 base 是配置
+// 固定的受信端点，重定向只应发生在同 host 内（http→https 升级、路径调整）；
+// 跨 host 跳转一律拒绝。与 newTransport 同属「出站连接单一事实来源」。
+func newUpstreamHTTP(timeout time.Duration, tr http.RoundTripper) *http.Client {
+	return &http.Client{
+		Timeout:       timeout,
+		Transport:     tr,
+		CheckRedirect: sameHostRedirect,
+	}
+}
+
+// sameHostRedirect 重定向策略：仅同 host（hostname 大小写不敏感 + 生效端口相等）
+// 放行；跨 host 拒绝。via[0] 是原始请求，req 是待跳转目标。
+//
+// 拒绝时打 WARN 并返回 http.ErrUseLastResponse：调用方拿到 3xx 响应本体，走既有
+// 的状态码分类路径，而不是被静默引到一个未审计的 host（SSRF 纵深防御）。
+// 不返回普通 error——那会把它推进传输层错误路径，丢失「上游到底回了什么」的线索。
+func sameHostRedirect(req *http.Request, via []*http.Request) error {
+	if len(via) == 0 {
+		// 理论不可达（net/http 首次调用 CheckRedirect 必带原始请求）。防御性放行：
+		// 宁可回到默认跟随，也不要在这里误拒合法请求。
+		return nil
+	}
+	orig := via[0]
+	if sameHostPort(req.URL, orig.URL) {
+		return nil
+	}
+	log.Printf("WARN: [upstream] 拒绝跨 host 重定向 %s -> %s（上游 base 应为固定受信端点）",
+		orig.URL.Redacted(), req.URL.Redacted())
+	return http.ErrUseLastResponse
+}
+
+// sameHostPort 比较两个 URL 的 hostname（EqualFold）与生效端口。端口必须按
+// scheme 补缺省值再比——否则 "https://host" 与 "https://host:443"（同一端点）
+// 会被误判成跨 host，而 "host:8443"（换了端口=换了服务）必须判为跨 host。
+func sameHostPort(a, b *url.URL) bool {
+	if !strings.EqualFold(a.Hostname(), b.Hostname()) {
+		return false
+	}
+	return effectivePort(a) == effectivePort(b)
+}
+
+// effectivePort URL 的生效端口：显式端口优先，否则按 scheme 取缺省值。
+func effectivePort(u *url.URL) string {
+	if p := u.Port(); p != "" {
+		return p
+	}
+	if u.Scheme == "https" {
+		return "443"
+	}
+	return "80"
 }
 
 // closeIdler 实现该接口的 RoundTripper 支持清空空闲连接池（*http.Transport、
