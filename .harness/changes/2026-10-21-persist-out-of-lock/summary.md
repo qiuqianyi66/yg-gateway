@@ -81,10 +81,13 @@ saveUnlocked(job)        持 saveMu（新）：序列化 + 原子写 + Redis 镜
       用例 1 精确 FAIL「持锁调用死锁（实现回退成锁内落盘了）」；还原 → PASS
 - [x] 深度棘轮未回退（`persist.go`/`pool.go` 均非超限文件；基线 2058/5 持平）
 - [x] pre-commit 10 检项全过
-- [ ] **未跑 `-race`**：本机无 gcc（CGO 不可用），`go test -race` 无法构建。
-      并发安全性当前依据是别名分析（快照无共享）+ 锁序论证（saveMu 持有者从不持
-      p.mu，单向无死锁面），**未经竞态检测器实证**——这一点不作为"已验证并发安全"
-      呈报，有 gcc 的环境应补跑。
+- [ ] **本地未跑 `-race`**（写作时）：本机无 gcc（CGO 不可用），`go test -race` 无法构建。
+      并发安全性当时依据是别名分析（快照无共享）+ 锁序论证（saveMu 持有者从不持
+      p.mu，单向无死锁面）。
+  - **[x] 后验补记（2026-10-21，证据升级）**：CI `release.yml` 有专职 race job
+    （`go test -race ./...`，ubuntu runner 自带 gcc——正是为「Windows 本地无 gcc」设计）。
+    推送 `00aa737` 的运行 `39558740374` 中 race job **绿**（2m3s）：两段式落盘已过
+    竞态检测器实证。原「unknown 级证据」的表述以本条为准消解。
 
 ## 六、Learning
 
