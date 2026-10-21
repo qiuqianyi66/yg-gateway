@@ -131,7 +131,12 @@ type Config struct {
 	// Observability 可观测性阈值（F-305）。纯观测计数，不改写请求路径。
 	Observability struct {
 		// SlowRequestThresholdSeconds 端到端慢请求阈值（秒）：超过它的完成请求
-		// +1 到 yg_gateway_slow_requests_total。缺省 120；<=0 回落默认 120。
+		// +1 到 yg_gateway_slow_requests_total。
+		//
+		// 缺省 120 由「Load 先取 Default() 再 Unmarshal 覆盖」保证：存量 config
+		// 无此键时字段保留 Default 里的 120。显式配置 <=0 = 关闭慢请求计数——
+		// normalize 故意不做 <=0 clamp（加了就无法表达「关闭」），handler 侧
+		// 判定 threshold>0 才计数（旧配置零回归）。
 		//
 		// 取值理由：延迟直方图（internal/metrics）桶顶就在 120s——正常长生成再长
 		// 也很少越过这个量级；越过的正是「用户等得反常」的尾部分布，该信号要抓的
