@@ -1,6 +1,11 @@
 # syntax=docker/dockerfile:1
-# 基础镜像必须 ≥ go.mod 要求的 1.27.2：低版本带 9 个 stdlib CVE（HTTP/2 + TLS），
-# 且 GOTOOLCHAIN=local 时 go mod download 直接报错拒绝继续（见 go.mod 的 go 指令）。
+# 基础镜像必须 ≥ go.mod 要求的版本：低版本带 stdlib CVE（HTTP/2 + TLS），且官方 golang
+# 镜像设了 GOTOOLCHAIN=local——基础镜像落后于 go.mod 时 `go mod download` 直接报错
+# 拒绝继续（2026-10-21 实证：go.mod 升 1.27.3 修 GO-2026-6809/x509，浮动标签
+# `golang:1.27-alpine` 的更新滞后一个补丁号，就足以把镜像构建打红）。
+# GOTOOLCHAIN=auto：允许「浮动标签的基础镜像略旧于 go.mod」，缺的补丁由 go 命令在
+# 构建容器内自动获取（CI 有网络），产物仍由 go.mod 要求的工具链构建——安全补丁的
+# 生效不依赖 Docker Hub 的更新 timing。
 # 构建阶段跑在**构建机架构**上（$BUILDPLATFORM），再用 GOOS/GOARCH 交叉编译到目标架构。
 # 为什么（2026-10-17，REQ-image-buildplatform / PLAN B5）：原来是 `FROM golang:1.27-alpine`，
 # 构建 linux/arm64 时把 `go mod download` 与**整段 go build 都放进 QEMU 模拟**执行——实测
@@ -9,6 +14,7 @@
 # 注意：这里**不**砍掉 arm64 验证——不能用「PR 只造 amd64」省时间（那会把 arm64 的构建问题
 # 推到 merge 之后才暴露），只是去掉了模拟编译的开销。
 FROM --platform=$BUILDPLATFORM golang:1.27-alpine AS build
+ENV GOTOOLCHAIN=auto
 ARG TARGETOS
 ARG TARGETARCH
 WORKDIR /src
