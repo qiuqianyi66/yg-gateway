@@ -512,7 +512,7 @@ func (h *Handler) status(w http.ResponseWriter, r *http.Request) {
 	// (域, 模型) 的最近探索时刻（键 "realm|model"）。与 accounts[].model_costs
 	// 行对照即可读出「探索→毕业」全链路（单一事实来源，不做双表示）。零回归只增键。
 	exploreEvents, exploreLast := h.cfg.Pool.CostExploreStatus()
-	writeJSON(w, http.StatusOK, map[string]any{
+	body := map[string]any{
 		"accounts":       h.cfg.Pool.List(),
 		"total":          total,
 		"healthy":        healthy,
@@ -550,7 +550,25 @@ func (h *Handler) status(w http.ResponseWriter, r *http.Request) {
 		// sticky_paid_hits 粘性命中收费号且池里有免费/未知号的累计次数
 		// （ADR-004 遗留轻量版）。纯观测，不自动换号。
 		"sticky_paid_hits": h.cfg.Pool.StickyPaidHits(),
-	})
+	}
+
+	// task_metrics F5 度量基线（REQ-f5-metric-counter）：把首调用上下文与总 token 从
+	// unknown 变成 observation。仅当观测到至少一个会话的 usage 时才加入响应——否则
+	// 整体省略该键（unknown，不输出 0、不输出 false，与本项目「字段缺失=未知」纪律一致）。
+	// first_call_prompt_tokens 仅在该会话确实观测到首轮 prompt_tokens 时输出，否则省略。
+	if tmView, ok := upstream.TaskMetrics.Snapshot(); ok {
+		tm := map[string]any{
+			"tasks":             tmView.Tasks,
+			"task_total_tokens": int64(tmView.TaskTotalTokens),
+			"task_turns":        tmView.TaskTurns,
+		}
+		if tmView.FirstCallKnown {
+			tm["first_call_prompt_tokens"] = int64(tmView.FirstCallPromptTokens)
+		}
+		body["task_metrics"] = tm
+	}
+
+	writeJSON(w, http.StatusOK, body)
 }
 
 // latencySnapshot 返回延迟分位数快照；未启用观测（Latency=nil）时返回 nil。

@@ -1,6 +1,6 @@
 # REQ：F5 度量计数器（消解「首调用上下文」与「总 token」unknown）
 
-> **状态：DRAFT v0（2026-10-20）。L2（需动 `internal/` 或新增统计端点）。**
+> **状态：IMPLEMENTED（2026-10-21）。L2 落地完成；原 DRAFT 的「先评审再写代码」已由用户授权一次性实现。**
 > **关联**：`REQ-harness-engineering-2026-10-19.md` §五 F5；`docs/agent-eval/baseline-2026-10-19.md`
 > （当前 2/5 组，第 1、2 组均把「首调用上下文（总量）」「总 token」记成 unknown）。
 >
@@ -103,3 +103,36 @@ HarnessTax 的核心结论（成本主源是首调用上下文、影响可达 5�
 - 会话 metrics 的内存 TTL 取多少（建议 1h，覆盖一次任务 + 余量）？
 - provider 不返回 usage 时，是否值得为本仓特有上游（CodeBuddy）补一个本地估算兜底，还是直接 unknown？
 - 是否需要把 `task_total_tokens` 也写进 `state.json`（持久化）以便跨重启累计？本期倾向**不写**。
+
+---
+
+## 七、实现记录（2026-10-21）
+
+用户授权「一次性做完」，故跳过原 DRAFT 的评审环节直接落地。§六 三个待决议按以下拍板实现：
+
+- **TTL = 1h**：采纳 REQ 建议值，覆盖一次任务 + 余量（`internal/upstream/taskmetrics.go` 的 `ttl`）。
+- **provider 不返回 usage → 直接 unknown**：不补本地估算兜底（CJK÷1.5 估算本期不做）。缺失即不调用
+  `Record`，`/status` 对应字段整体省略，符合「未覆盖=未知，不是没有」纪律（R10：缺失是观测缺口，不记 0）。
+- **不持久化**：纯内存，不写 `state.json`（跨重启累计不是本期目标）。
+
+### 落点
+
+| 文件 | 改动 |
+|---|---|
+| `internal/upstream/taskmetrics.go`（新增） | 会话级采集器 `TaskMetrics`：按会话 ID 聚合首调用上下文（`prompt_tokens`）与总 token（`total_tokens` 求和）、轮次；TTL 清理 goroutine（带 `Stop()` 回收路径，R9）；`observeUsage` 包装上游流，透传同时解析 SSE `data:` / 单条 JSON 里的 `usage`，Close 时记录最终 usage（避免增量 usage 重复累加）。 |
+| `internal/upstream/client.go` | `ChatStreamContext` 成功返回处用 `observeUsage` 包装流（采集点落在 `internal/upstream`，满足 R6）。 |
+| `internal/server/handler.go` | `/status` 在 `HasData` 时输出 `task_metrics`（`tasks` / `task_total_tokens` / `task_turns`，首调用上下文另按 `FirstCallKnown` 省略）；无数据整体省略该段（unknown，不输出 null / 0 / false）。 |
+| `internal/upstream/taskmetrics_test.go`（新增） | 采集器单元 + 包装器透传/采集测试。 |
+| `internal/server/handler_taskmetrics_test.go`（新增） | `/status` 省略与透出验收。 |
+
+### 验收对照（REQ §四 Given-When-Then）
+
+- 多轮任务 → `task_total_tokens`=各轮之和、`first_call_prompt_tokens`=首轮 prompt、**非 0、非省略**：✅ 测试覆盖。
+- provider 不含 usage → 字段省略、不记 0、不报错退出：✅（不调用 Record → 整体省略）。
+- 随服务运行无 goroutine 泄漏、会话 metrics 有 TTL 清理：✅（`Stop()` 回收路径 + 10min 清理 ticker）。
+- `check-boundaries` 无新增违规：✅（`taskmetrics.go` 仅依赖 stdlib；`server→upstream` 本就在 allow 表）。
+
+### 范围与明确不做（维持 REQ §五）
+
+阈值告警、可视化大盘、持久化、按账号/模型成本分摊、本地 tokenizer 精确计数：均**未做**。本地估算兜底也未做（待决议项，本期选 unknown）。
+
