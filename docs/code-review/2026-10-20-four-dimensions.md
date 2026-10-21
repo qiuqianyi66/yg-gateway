@@ -121,4 +121,9 @@
    有专职 `race` job（`go test -race ./...`，ubuntu runner 自带 gcc，专为「Windows 本地无 gcc」
    设计）。推送 `00aa737` 的运行 `39558740374` 中 race job **绿**（2m3s）——两段式落盘通过竞态
    检测器。本地仍跑不了（无 gcc），但证据已从「代码审查推断」升级为「检测器实证」。
-3. 首调用上下文总量与总 token 仍 **unknown**（无计数器），F5 账本只记了可测的常驻治理层——见 `docs/agent-eval/baseline-2026-10-19.md`。
+3. ~~首调用上下文总量与总 token 仍 **unknown**（无计数器）~~ → **2026-10-21 采集点上线消解**
+   （`d4bf9b2` F5 度量计数器）：`/status` 透出 `task_metrics`（`tasks` / `task_total_tokens` /
+   `task_turns`）。语义按四态分层：provider 返回 `usage` 时，`prompt_tokens`（首调用上下文）=
+   observation、`total_tokens` 求和 = derivation；**provider 未返回 usage 时保持 unknown**
+   （观测缺口，不伪装成 0）。账本 `docs/agent-eval/baseline-2026-10-19.md` 的取数回填归账本
+   对话（F5 账本补齐已交付）。
