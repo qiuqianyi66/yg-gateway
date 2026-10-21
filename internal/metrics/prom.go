@@ -79,6 +79,29 @@ func (p *Prometheus) Histogram(name string, h *Histogram, labels ...string) *Pro
 	return p
 }
 
+// HistogramInt 把 AttemptsHistogram（整数分桶：上游尝试次数）暴露成
+// `_bucket{le="n"}` + `_sum` + `_count`（F-305 重试放大率）。
+//
+// 与毫秒直方图的区别：le 是整数次数上界（"1"/"2"/.../"8"），语义是
+// 「尝试次数 ≤ n」而不是「耗时 ≤ n ms」；最后一桶同样是 "+Inf"。
+func (p *Prometheus) HistogramInt(name string, h *AttemptsHistogram, labels ...string) *Prometheus {
+	if h == nil {
+		return p
+	}
+	var cum int64
+	for i := 0; i < attemptsBucketCount; i++ {
+		cum += h.buckets[i].Load()
+		if i == attemptsBucketCount-1 {
+			p.sample(name+"_bucket", formatInt(cum), append(labels, `le="+Inf"`)...)
+			continue
+		}
+		p.sample(name+"_bucket", formatInt(cum), append(labels, fmt.Sprintf(`le="%d"`, attemptsBounds[i]))...)
+	}
+	p.sample(name+"_sum", formatFloat(float64(h.Sum())), labels...)
+	p.sample(name+"_count", formatInt(h.Count()), labels...)
+	return p
+}
+
 // WriteTo 把已构造的文本写入 w。
 func (p *Prometheus) WriteTo(w io.Writer) (int64, error) {
 	n, err := io.WriteString(w, p.sb.String())

@@ -92,6 +92,30 @@ func (h *Handler) metricsHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// ---- 重试放大率（F-305）：单请求上游尝试次数分布 ----
+	// 读法：_count = 打到过上游的请求数；_sum/_count = 这些请求的平均放大率。
+	// 整请求口径的放大率均值 = upstream_attempts_total / requests_total{outcome="completed"}
+	// （0 次尝试的网关本地拒绝请求作 0 计入分母，故分母比本直方图 _count 大）。
+	if h.cfg.Attempts != nil {
+		p.Help(metricNamePrefix+"upstream_attempts_per_request", "Upstream attempts per completed user request that reached upstream (retry amplification). le=1 bucket = no account-rotation retry; le>1 = retried/failover happened. Mean amplification = upstream_attempts_total / requests_total{outcome=\"completed\"}.").
+			Type(metricNamePrefix+"upstream_attempts_per_request", "histogram")
+		p.HistogramInt(metricNamePrefix+"upstream_attempts_per_request", h.cfg.Attempts.Global())
+		for model, hs := range h.cfg.Attempts.ModelSnapshot() {
+			label := `model="` + escapeLabel(model) + `"`
+			p.HistogramInt(metricNamePrefix+"upstream_attempts_per_request", hs, label)
+		}
+		p.Help(metricNamePrefix+"upstream_attempts_total", "Total upstream attempts across all user requests (numerator of the amplification ratio).").
+			Type(metricNamePrefix+"upstream_attempts_total", "counter")
+		p.Counter(metricNamePrefix+"upstream_attempts_total", h.cfg.Attempts.Total())
+	}
+
+	// ---- 慢请求（F-305）：端到端耗时超阈值的显式计数信号 ----
+	if h.cfg.SlowRequests != nil {
+		p.Help(metricNamePrefix+"slow_requests_total", "Completed requests whose end-to-end duration exceeded the configured slow threshold (observational counter; no request-path impact).").
+			Type(metricNamePrefix+"slow_requests_total", "counter")
+		p.Counter(metricNamePrefix+"slow_requests_total", h.cfg.SlowRequests.Value())
+	}
+
 	// ---- 上游错误分类计数 ----
 	if h.cfg.ErrKinds != nil {
 		p.Help(metricNamePrefix+"upstream_errors_total", "Upstream errors by classification kind.").

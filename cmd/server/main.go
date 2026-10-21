@@ -307,6 +307,11 @@ func main() {
 	// 开始吐"）；错误分类则把既有 Classify 的 13 种 ErrKind 导出成时序指标。
 	ttfbReg := metrics.NewRegistry()
 	errKinds := metrics.NewKindCounters()
+	// 重试放大率直方图与慢请求计数器（F-305）：同源自实现，进程级单例。
+	// 放大率回答「每个用户请求触发了几次上游调用」；慢请求是端到端超阈值的
+	// 显式告警信号——两者都是纯观测，不改写请求路径。
+	attemptsStats := metrics.NewAttemptsStats()
+	slowReqs := metrics.NewCounter()
 
 	// 未知条目注册表（AGENTS.md「Unknown 消解纪律」）：把「某号某模型成本未知」
 	// 这类可消解的事实变成一等公民实体——登记时写明还需要什么，实测 credit 时
@@ -383,6 +388,9 @@ func main() {
 		Latency:              latencyReg,
 		TTFB:                 ttfbReg,
 		ErrKinds:             errKinds,
+		Attempts:             attemptsStats,
+		SlowRequests:         slowReqs,
+		SlowRequestThreshold: time.Duration(cfg.Observability.SlowRequestThresholdSeconds) * time.Second,
 		RequestLog:           requestLog,
 		PromptMode:           cfg.Prompt.Mode,
 		PromptText:           cfg.PromptText,

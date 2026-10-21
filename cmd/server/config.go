@@ -128,6 +128,17 @@ type Config struct {
 		RequestClientInfo bool `json:"request_client_info"`
 	} `json:"logging"`
 
+	// Observability 可观测性阈值（F-305）。纯观测计数，不改写请求路径。
+	Observability struct {
+		// SlowRequestThresholdSeconds 端到端慢请求阈值（秒）：超过它的完成请求
+		// +1 到 yg_gateway_slow_requests_total。缺省 120；<=0 回落默认 120。
+		//
+		// 取值理由：延迟直方图（internal/metrics）桶顶就在 120s——正常长生成再长
+		// 也很少越过这个量级；越过的正是「用户等得反常」的尾部分布，该信号要抓的
+		// 就是它。与 header_timeout（60s）刻意错开：正常长生成不被误报为慢。
+		SlowRequestThresholdSeconds int `json:"slow_request_threshold_seconds"`
+	} `json:"observability"`
+
 	Usage struct {
 		// CreditCNYRate 积分兑人民币汇率：1 积分 = 多少元。
 		// 0 = 不折算（前端不显示 ¥ 列）。默认 0.01（1 积分 ≈ ¥0.01）。
@@ -429,6 +440,8 @@ func Default() *Config {
 	c.Logging.RequestArchiveEnabled = true
 	c.Logging.RequestRetentionDays = 7
 	c.Logging.RequestArchiveMaxMB = 100
+	// 慢请求阈值默认 120s（取值理由见 observability 字段注释）。
+	c.Observability.SlowRequestThresholdSeconds = 120
 	// 积分兑人民币默认汇率 1 积分 ≈ ¥0.01（纯展示层，不改选号）。
 	c.Usage.CreditCNYRate = 0.01
 	// 缺省 true 靠显式赋值实现（同 Schedule 开关）：JSON 里键缺席时字段保留此值，

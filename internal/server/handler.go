@@ -90,6 +90,19 @@ type Config struct {
 	// 挂上计数器后可在 /metrics 直接回答「最近是限流多了还是 WAF 多了」。
 	ErrKinds *metrics.KindCounters
 
+	// Attempts 重试放大率观测（F-305；可选；nil = 不观测）。
+	// 每个用户请求收口（chatCompletions defer）时记录其上游尝试次数分布：
+	// 1 = 无换号重试，>1 = 发生换号重试/失败转移。成功/失败/轮转耗尽全结局恰好记一次。
+	Attempts *metrics.AttemptsStats
+
+	// SlowRequests 慢请求计数器（F-305；可选；nil = 不计数）。
+	// 与 SlowRequestThreshold 配合：端到端耗时超过阈值的完成请求 +1。
+	SlowRequests *metrics.Counter
+
+	// SlowRequestThreshold 慢请求阈值（端到端耗时）；<=0 = 关闭（旧配置零回归）。
+	// 纯观测计数，不改写请求路径；不依赖后台 goroutine（R9，只在收口 defer 比较一次）。
+	SlowRequestThreshold time.Duration
+
 	// RequestLog 请求指标与脱敏 JSONL 归档（可选；nil = 不记录）。
 	RequestLog *reqlog.Recorder
 
@@ -932,6 +945,11 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	}
 	st := prep.st
 	defer st.done()
+	// F-305 可观测性收口：重试放大率直方图 + 慢请求计数。defer 恰好执行一次，
+	// 覆盖成功/失败/轮转耗尽/fallback 全结局；中途不泄漏、不重复（见 retry_metrics.go）。
+	// 用 prep.bareModel 而非下方解构的局部变量：defer 参数在 defer 语句处即求值，
+	// 而解构行在后面。
+	defer h.observeRequestEnd(st, prep.bareModel)
 	// 过渡期解构：让主函数其余部分保持原有局部变量名，把「抽出阶段函数」与
 	// 「改变量引用方式」拆成两次独立改动——每次只动一件事，快照测试失败时
 	// 才能精确定位是哪一步引入的。
