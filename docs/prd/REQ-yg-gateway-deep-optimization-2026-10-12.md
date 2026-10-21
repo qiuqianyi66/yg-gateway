@@ -39,9 +39,9 @@ research: 本轮三份调研（安全审计 / 前端效果 / 后端与路由）
 
 | F-编号 | 需求 | 优先级 |
 |---|---|---|
-| F-101 | **凭证 ACL 常态加固**：新建凭证后自动收紧（或面板显式提示重跑 `lock-auths.ps1`） | P0 |
+| F-101 | **凭证 ACL 常态加固**：新建凭证后自动收紧（或面板显式提示重跑 `lock-auths.ps1`）——✅ 已落地（commit `01d76c4`，`internal/auth/lockdown.go` + `auth.go` 挂点 + `lockdown_test.go`，ADR-012） | P0 |
 | F-102 | 补齐安全审计发现的高危项（待审计结论） | P0 |
-| F-103 | 依赖漏洞门禁：`govulncheck` 进 CI 硬门禁 | P1 |
+| F-103 | 依赖漏洞门禁：`govulncheck` 进 CI 硬门禁——✅ 已落地（commit `962fdc8` 起 test job 即含 govulncheck 步骤、PR/push main 必跑、无 continue-on-error；现随 `9c68947` 合并在 `.github/workflows/release.yml` 的 test job） | P1 |
 
 **F-101 验收（Given-When-Then）**
 - Given 面板新增一个账号后 / When 检查 `auths/*.json` 的 ACL / Then 仅当前用户 + `SYSTEM` 有权限，**不含** `BUILTIN\Users` 或 `Authenticated Users`
@@ -57,10 +57,10 @@ research: 本轮三份调研（安全审计 / 前端效果 / 后端与路由）
 
 | F-编号 | 需求 | 优先级 |
 |---|---|---|
-| F-201 | **停止打断式全量重绘**：5s 轮询不应重置 hover/tooltip/焦点态 | P1 |
+| F-201 | **停止打断式全量重绘**：5s 轮询不应重置 hover/tooltip/焦点态——✅ 已落地（commit `5ecfe71`，`accRenderSig`/`accountsSig` 数据签名短路 + 表内有焦点时跳过本轮渲染） | P1 |
 | F-202 | 补齐高频运维能力（待前端调研结论）：导出、慢请求/失败聚焦、批量操作等 | P2 |
 | F-203 | 窄屏细节：`.nav .sig` 在 ≤760px 溢出侧栏 | P2 |
-| F-204 | **错误态就地重试**：失败视图在错误区内提供重试按钮，不要求滚回顶部 | P2 |
+| F-204 | **错误态就地重试**：失败视图在错误区内提供重试按钮，不要求滚回顶部——✅ 已落地（commit `acc7c0b`，`loadErrorHTML`/`bindRetry`，用量页 `app.js:3674`、积分构成页 `app.js:4202`，测试 `internal/panel/frontend_ux_test.go`） | P2 |
 
 **F-204 验收**
 - Given 用量页读取失败 / When 查看错误区 / Then 错误区内**就地**有「重试」按钮，点击即重新拉取
@@ -80,13 +80,15 @@ research: 本轮三份调研（安全审计 / 前端效果 / 后端与路由）
 
 | F-编号 | 需求 | 优先级 |
 |---|---|---|
-| F-301 | **热路径去重**：单个请求体的全文档 `json.Unmarshal` 从 7~8 次降到 2~3 次 | P0 |
-| F-302 | **热路径降锁**：去掉每次尝试的 `Pool.Status(uid)` 重锁调用 | P0 |
-| F-303 | **reqlog 环形缓冲**：消除每请求 100 条 Event 的 O(n) 拷贝 | P0 |
-| F-304 | 404/405 返回 OpenAI 错误信封而非 text/plain 页面 | P1 |
-| F-305 | 可观测性补齐：重试放大率、慢请求追踪 | P1 |
-| F-306 | 断路器 half-open（**需 ADR**） | P1 |
-| F-307 | 全局准入控制 / 在途上限 429（**需 ADR**） | P2 |
+| F-301 | **热路径去重**：单个请求体的全文档 `json.Unmarshal` 从 7~8 次降到 2~3 次——✅ 已落地（首pass `73911e4`；RequestView 单次解析 `981b0a1`，`internal/session/requestview.go` + `requestview_test.go`） | P0 |
+| F-302 | **热路径降锁**：去掉每次尝试的 `Pool.Status(uid)` 重锁调用——✅ 已落地（commit `73911e4`，改为 `Pool.RealmOf(uid)` 单字段查询，不再全池 RLock + 构造整个 Status） | P0 |
+| F-303 | **reqlog 环形缓冲**：消除每请求 100 条 Event 的 O(n) 拷贝——✅ 已落地（commit `73911e4`，`recent [recentLimit]Event` + `recentHead` 写入位，无切片整体拷贝，`reqlog_test.go`） | P0 |
+| F-304 | 404/405 返回 OpenAI 错误信封而非 text/plain 页面——✅ 已落地（兜底注册与 `notFound` 在 commit `73911e4`；牙齿测试 `notfound_test.go` 在 commit `600fc48`） | P1 |
+| F-305 | 可观测性补齐：重试放大率、慢请求追踪（落地状态待回填——另一 shard 实现中） | P1 |
+| F-306 | 断路器 half-open——✅ 已落地（commit `9489e98`，`internal/pool/breaker_halfopen_test.go`；ADR 职责由 **ADR-003 D-400** 覆盖，含 Given-When-Then 与回滚，无需新建 ADR） | P1 |
+| F-307 | 全局准入控制 / 在途上限 429——✅ 已落地（commit `9489e98`，`internal/server/admission_test.go`、`internal/pool/globaladmission_test.go`；ADR 职责由 **ADR-003 D-401** 覆盖） | P2 |
+
+> **落地状态汇总（2026-10-21 回填）**：以上每行注记均经 `git show <sha>` / `git log -S/-G` 独立实证（非转述）。映射：F-101→`01d76c4`；F-103→`962fdc8`（现 release.yml test job）；F-201→`5ecfe71`；F-204→`acc7c0b`；F-301→`73911e4`+`981b0a1`；F-302→`73911e4`；F-303→`73911e4`；F-304→`73911e4`（生产兜底）+`600fc48`（牙齿测试）；F-306/F-307→`9489e98`（ADR-003 D-400/D-401）。F-305 留空待另一 shard 完成后补提交号。
 
 **F-301 验收**
 - Given 一个典型聊天请求（多轮 messages + tools） / When 处理 / Then 全文档 JSON 解析次数 ≤3（可用计数断言或基准回归）
@@ -133,11 +135,15 @@ research: 本轮三份调研（安全审计 / 前端效果 / 后端与路由）
 | B/op | 292,622 | 113,618 | **省 61%** |
 | allocs/op | 782 | 52 | **少 93%** |
 
+> 落地状态（2026-10-21 回填）：此节旧问题已解决——首pass去重见 `73911e4`，RequestView 单次解析落地见 `981b0a1`（`internal/session/requestview.go`，配套 `requestview_test.go`、`hotpath_bench_test.go`）。原取证表格保留备查，行号为落地前快照。
+
 ### 最该先动的三处（已核对行号属实）
 
 1. **`reqlog.go:193`** `r.recent = append([]Event{e}, r.recent...)` —— 每请求新建并整体拷贝 100 条 Event。
 2. **`handler.go:838`** `if a, ok := h.cfg.Pool.Status(uid); ok && a.Realm != ""` —— 仅为取 realm，却走全池 `RLock` + `statusOf` 完整构造（含两次 sort）。
 3. **`handler.go:764`** `reqHasImage := hasImagePart(body)` —— 无条件调用，但只在 `hintContext`（错误路径）被用到。
+
+> 落地状态（2026-10-21 回填）：①②已在 commit `73911e4` 消除（reqlog 环形缓冲 `recentHead`；realm 改 `Pool.RealmOf(uid)`）；③本轮未见对应改动记录，状态 **unknown**（未核到落地证据，不等于未做）。
 
 ### 已确认"做得好、不要动"（避免优化破坏既有正确性）
 
@@ -159,14 +165,14 @@ research: 本轮三份调研（安全审计 / 前端效果 / 后端与路由）
 | # | 缺陷 | 位置 | 方案 |
 |---|---|---|---|
 | 1 | 切视图静默丢弃未保存的配置改动 | `app.js:352` | `cfgDirty` 标志 + 确认拦截 + `#cfgNote` 显示「● 未保存」 |
-| 2 | 启动时 overview 失败 = 全页静默空白 | `app.js:1603`/`524` | `booted` 标志；首屏失败插持久化错误条（复用 Key 页 `.key-load-error` 范式） |
+| 2 | 启动时 overview 失败 = 全页静默空白 | `app.js:1603`/`524` | `booted` 标志；首屏失败插持久化错误条（复用 Key 页 `.key-load-error` 范式）——✅ 已落地（commit `acc7c0b`，首屏未拿到数据时表内插持久化错误条 + 就地重试，`app.js:866-876`，`.load-error` 范式） |
 | 3 | 浏览器返回键/手改 hash 不工作 | `app.js:361` | 加 `hashchange` 监听，导航改 `location.hash` |
-| 4 | Esc 只关两个 Key 弹窗，其余四个关不掉 | `app.js:1340-1345` | 统一 `VEILS` 列表，Esc 从后往前关当前 `.on` |
+| 4 | Esc 只关两个 Key 弹窗，其余四个关不掉 | `app.js:1340-1345` | 统一 `VEILS` 列表，Esc 从后往前关当前 `.on`——✅ 已落地（commit `5ecfe71`，`VEIL_CLOSERS` 注册表 + Esc 从后往前关，`app.js:2157-2190`） |
 | 5 | **5s 全量 `innerHTML` 重绘打断交互** | `app.js:1605`/`382` | 数据签名短路 + `activeElement` 在表内时跳过 |
 | 7 | 窄屏 topbar 与任务队列行被裁掉 | `index.html:139`/`97` | `.topbar{flex-wrap}`；`#qcList` 包 `.tbl-wrap` |
 | 8 | 「刷新」按钮实际是打上游刷余额 | `app.js:1584` | 拆成纯刷新 + 独立「刷新余额」（带确认） |
 | 9 | 批量/长任务无进度无汇总（`console.log`） | `app.js:1688` | 结果渲染进 `#taskState`，复用 `.qprog` 进度条 |
-| 10 | 切视图不回顶 | `app.js:345` | `go()` 加 `scrollTo({top:0})`（初始那次跳过） |
+| 10 | 切视图不回顶 | `app.js:345` | `go()` 加 `scrollTo({top:0})`（初始那次跳过）——✅ 已落地（commit `5ecfe71`，`skipGuard` 首跳跳过的 `window.scrollTo({top:0})`，`app.js:568`） |
 
 ### P1（无障碍与状态管理）
 
@@ -181,7 +187,7 @@ research: 本轮三份调研（安全审计 / 前端效果 / 后端与路由）
 | 17 | 配置页读取失败只有 3.6s toast | 顶部持久化错误块 + 失败时 disable 保存 |
 | 18 | `change` 监听挂 window → 任何控件改动都重写主题图标 | 改 `matchMedia` 监听 |
 | 19 | 轮询无 `AbortController`，慢响应覆盖新响应 | 各 loader 持 controller，新一轮 abort |
-| 20 | 页面隐藏仍轮询 | `visibilitychange` 暂停/恢复 |
+| 20 | 页面隐藏仍轮询 | `visibilitychange` 暂停/恢复——✅ 已落地（commit `7c1601f`，`app.js:2522`） |
 | 21 | 死代码（`.srow` 等 19 行 CSS、重复行） | 清理 |
 
 ### 新功能（按 ROI）
