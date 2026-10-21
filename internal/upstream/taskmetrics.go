@@ -235,6 +235,7 @@ func (r *usageObservingReader) Close() error {
 	}
 	if r.lastUsage != nil {
 		TaskMetrics.Record(r.convID, r.lastUsage)
+		r.lastUsage = nil // 幂等：代理/传输层可能重复 Close，重复计数会让 total_tokens 翻倍
 	}
 	return r.inner.Close()
 }

@@ -120,3 +120,27 @@ func TestObserveUsageEmptyConv(t *testing.T) {
 		t.Error("空 convID 不应记录")
 	}
 }
+
+// TestObserveUsageCloseIdempotent 验证重复 Close 不重复计数（代理/传输层可能
+// 对上游 body 多次 Close）。
+func TestObserveUsageCloseIdempotent(t *testing.T) {
+	TaskMetrics.Reset()
+	sse := "data: {\"usage\":{\"prompt_tokens\":10,\"total_tokens\":20}}\n"
+	rc := observeUsage(io.NopCloser(strings.NewReader(sse)), "idem")
+	if _, err := io.ReadAll(rc); err != nil {
+		t.Fatal(err)
+	}
+	if err := rc.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := rc.Close(); err != nil { // 第二次 Close 不应再记录
+		t.Fatal(err)
+	}
+	v, ok := TaskMetrics.Snapshot()
+	if !ok {
+		t.Fatal("应记录到 usage")
+	}
+	if v.TaskTotalTokens != 20 || v.TaskTurns != 1 {
+		t.Errorf("重复 Close 导致重复计数: %+v", v)
+	}
+}
