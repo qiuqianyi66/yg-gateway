@@ -96,15 +96,16 @@ func (p *Pool) startFlusher() {
 		for {
 			select {
 			case <-t.C:
+				// P2 两段式：持锁只做「快照收集」（snapshotForSaveLocked 内含静默期
+				// 兜底清理，ADR-005 D-500——即使无脏数据也周期性清理过期模型级台账，
+				// 之前由 pick 热路径承担，移出后不能漏掉），序列化与磁盘 IO 在锁外由
+				// saveMu 串行化。别图省事在这里持锁 saveLocked。
 				p.mu.Lock()
-				// 静默期兜底清理（ADR-005 D-500）：即使无脏数据（没有 saveLocked），
-				// 也周期性清理过期模型级台账——之前由 pick 热路径承担，移出后不能
-				// 让「无流量时段」成为内存滞留窗口。
-				p.pruneAllLocked(time.Now())
-				if p.dirty.Swap(false) {
-					p.saveLocked()
-				}
+				job, save := p.snapshotForSaveLocked()
 				p.mu.Unlock()
+				if save {
+					p.saveUnlocked(job)
+				}
 			case <-stopCh:
 				return
 			}
@@ -128,12 +129,14 @@ func (p *Pool) pruneAllLocked(now time.Time) {
 }
 
 // Flush 同步把内存状态落盘（幂等：无变更不写盘）。供进程退出前调用。
+// 两段式：持锁收集快照 → 解锁 → 锁外落盘（P2，退出路径也不进序列化临界区）。
 func (p *Pool) Flush() {
 	p.mu.Lock()
-	if p.dirty.Swap(false) {
-		p.saveLocked()
-	}
+	job, save := p.snapshotForSaveLocked()
 	p.mu.Unlock()
+	if save {
+		p.saveUnlocked(job)
+	}
 }
 
 // Add 加入账号；已存在则保留原状态、更新凭证（upsert 单账号，不影响其他账号）。
@@ -263,18 +266,39 @@ func (p *Pool) applySnapshotLocked(s snapshot) {
 	p.byUID = map[string]*entry{}
 	p.applyAccountsLocked(s.Accounts)
 }
-func (p *Pool) saveLocked() {
-	// 过期模型级台账清理移入落盘点（ADR-005 D-500）：pick 改读锁后不能在热路径
-	// 删 map。落盘本就持写锁并全池遍历，prune 顺路完成内存卫生（时间节流
-	// pruneInterval 10s/entry，读路径按 TTL 跳过过期项，晚删零正确性影响）。
-	// 覆盖路径：flusher（dirty）、Flush、Remove、SyncToDir。无 stateFp 的池
-	// （测试/嵌入式）不落盘也不清理——其生命周期短且模型名集合有界，见 ADR-005。
+
+// saveJob 一次「锁外落盘」任务：状态快照 + 落盘时才读的依赖（store）。
+// store 必须在持 p.mu 的收集点一并捕获——SetStore 在 p.mu 下写 p.store，若让
+// saveUnlocked 自己去读，就变成「无锁读 vs 持锁写」的理论数据竞争（-race 可证）；
+// 快照收集点同锁，天然建立 happens-before。
+type saveJob struct {
+	sf    stateFile
+	store StoreSnapshotter
+}
+
+// snapshotForSaveLocked 持锁收集一次落盘快照：先 prune（静默期兜底清理，ADR-005
+// D-500——即使无脏数据也要做），再原子抢占 dirty，最后收集 stateFile 与 store。
+// 返回 ok=false = 无需落盘（无脏数据或无 stateFp）。调用方必须已持有 p.mu 写锁。
+//
+// 与 saveUnlocked 配对构成「持锁收集 + 锁外落盘」两段式：把 JSON 序列化与磁盘 IO
+// 移出选号临界区（P2）。stateOverviewLocked 产出的是全新 stateFile（值拷贝、无 map
+// 别名，tokenUsage 为值类型），因此锁外序列化不会与并发选号竞争。
+func (p *Pool) snapshotForSaveLocked() (saveJob, bool) {
 	p.pruneAllLocked(time.Now())
-	if p.stateFp == "" {
-		return
+	if p.stateFp == "" || !p.dirty.Swap(false) {
+		return saveJob{}, false
 	}
-	sf := p.stateOverviewLocked()
-	raw, err := json.MarshalIndent(sf, "", "  ")
+	return saveJob{sf: p.stateOverviewLocked(), store: p.store}, true
+}
+
+// saveUnlocked 序列化 + 原子写 + Redis 镜像。**调用方不得持有 p.mu**（这是 P2 修复的
+// 要点：重活不放热路径）；并发安全性由 saveMu 保证，多调用方可同时进入。
+// 除参数 job 外只碰 saveMu 保护的 persistFails 与构造后不可变的 stateFp。
+func (p *Pool) saveUnlocked(job saveJob) {
+	p.saveMu.Lock()
+	defer p.saveMu.Unlock()
+
+	raw, err := json.MarshalIndent(job.sf, "", "  ")
 	if err != nil {
 		p.notePersistFail(err)
 		return
@@ -299,11 +323,22 @@ func (p *Pool) saveLocked() {
 		p.persistFails = 0
 	}
 	// 同步镜像一份快照到 Redis（fire-and-forget），与本地 state.json 并存作恢复备份。
-	if p.store != nil {
-		snapRaw, err := json.Marshal(snapshot{stateFile: sf, SavedAt: time.Now()})
+	if job.store != nil {
+		snapRaw, err := json.Marshal(snapshot{stateFile: job.sf, SavedAt: time.Now()})
 		if err == nil {
-			p.store.SaveState(snapRaw)
+			job.store.SaveState(snapRaw)
 		}
+	}
+}
+
+// saveLocked 持锁保存的便捷入口：= snapshotForSaveLocked + saveUnlocked。
+//
+// **只用于低频/管理路径与测试**（当前仅 syncLocked）。它仍在调用方的 p.mu 内完成
+// 序列化与写盘——热路径（flusher 每 5s / Flush / Remove）一律走两段式，
+// 别图省事调这里：那正是 P2 要消掉的「持 p.mu 做全量序列化」。
+func (p *Pool) saveLocked() {
+	if job, ok := p.snapshotForSaveLocked(); ok {
+		p.saveUnlocked(job)
 	}
 }
 

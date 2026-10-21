@@ -102,9 +102,15 @@ type Pool struct {
 	// globalInFlight 全局在途原子计数（ADR-003 D-401）：Acquire 成功 +1、Release -1，
 	// 严格配对。与每账号 inFlight 并存（后者是 per-account 上限，本字段是全局上限）。
 	globalInFlight atomic.Int64
-	// persistFails 本地 state.json 连续落盘失败计数（仅 saveLocked 在持锁下读写，无需 atomic）。
+	// persistFails 本地 state.json 连续落盘失败计数。只被 saveUnlocked 读写，
+	// 由 saveMu（而非 p.mu）保护——落盘重活已移出选号临界区，见 persist.go。
 	// 用于落盘失败的日志节流：首败/每 N 次提醒/恢复各打一条，避免磁盘满时刷屏。
 	persistFails int
+	// saveMu 只串行化「锁外落盘」这一段（序列化 → 写文件 → Redis 镜像），**不阻塞选号**。
+	// 为什么必须有它（P2 修复的副作用）：重活移出 p.mu 后，flusher / Flush / Remove
+	// 可能并发落盘，而它们共用同一个 `<stateFp>.tmp`；不互斥就会交错写坏 state.json。
+	// 这把锁的持有者从不持有 p.mu，故锁序单向、无死锁面。
+	saveMu sync.Mutex
 	// pickSeq 单调递增的选号序号：每次 pick 选中账号时自增并记到 entry.usedSeq，
 	// 为 LRU 兜底/防惊群提供与 time.Now() 精度无关的严格全序（Windows ~0.5ms 精度下
 	// lastUsed 墙钟会全等）。atomic（ADR-005 D-500）：pick 改读锁后由读锁路径
@@ -556,6 +562,9 @@ func (p *Pool) syncLocked(auths []*auth.Auth, allowDelete bool) {
 		}
 	}
 	if changed {
+		// 保留持锁 saveLocked：本路径每次启动只跑一次（main.go:128-130），非热路径；
+		// 且 ADR-010 明确要求「删 + 落盘」在同一把锁内完成、中间没有可崩溃窗口——
+		// 两段式会在「已删内存、未落盘」之间露出一个崩溃窗口，语义上更差。
 		p.saveLocked()
 	}
 }
@@ -563,16 +572,22 @@ func (p *Pool) syncLocked(auths []*auth.Auth, allowDelete bool) {
 // Remove 从池中移除账号并立即落盘（管理面板用）。返回被移除账号的凭证
 // （含 FilePath，供调用方删除 auth 文件）；uid 不存在返回 nil。
 // 在途请求的 Release 对已删条目是 no-op，无需等待。
+// P2 两段式：持锁删除 + 收集快照 → 解锁 → 锁外落盘；e.a 在删除后不再有
+// 并发访问面（byUID 已无此条目，Release 对缺失条目 no-op），故解锁后读取安全。
 func (p *Pool) Remove(uid string) *auth.Auth {
 	p.mu.Lock()
-	defer p.mu.Unlock()
 	e, ok := p.byUID[uid]
 	if !ok {
+		p.mu.Unlock()
 		return nil
 	}
 	delete(p.byUID, uid)
 	p.dirty.Store(true)
-	p.saveLocked()
+	job, save := p.snapshotForSaveLocked()
+	p.mu.Unlock()
+	if save {
+		p.saveUnlocked(job)
+	}
 	return e.a
 }
 
