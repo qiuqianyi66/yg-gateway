@@ -10,6 +10,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 
@@ -269,14 +270,40 @@ func allowHeader(methods map[string]bool) string {
 	return strings.Join(out, ", ")
 }
 
+// reflectableCORSOrigin 判定 Origin 是否可回显：仅 https 源放行。
+// 浏览器自己发来的 Origin 已是规范化串（scheme://host[:port]，无 path/userinfo），
+// 这里只校验 scheme 与 host 非空；回显值用原始串，浏览器会拿它与自身 Origin 精确
+// 比对， smuggling 空间为零。null 源（沙箱 iframe / file:// / data:）与 http 源
+// 一律拒绝——来源不可验证的调用方没有理由拿到本机网关的跨域读权限。
+func reflectableCORSOrigin(origin string) (string, bool) {
+	u, err := url.Parse(origin)
+	if err != nil || u.Scheme != "https" || u.Host == "" {
+		return "", false
+	}
+	return origin, true
+}
+
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// CORS：本机网关仅供本机客户端与浏览器内聊天网页调用。
 	// 浏览器从 https 聊天网页 fetch http://127.0.0.1:7863 会触发 preflight，
 	// 不写 CORS 头会被浏览器拦。回显 Origin（带 Authorization 头时 `*` 不被接受）。
+	//
+	// 只回显 **https 源**（四维度审查 [P3] 收紧）：合法调用方就是「公网 https 页
+	// 经 Private-Network-Access 调本机网关」（见 821a296 的设计初衷）；http 源与
+	// null 源（沙箱 iframe / file:// / data:）来源不可验证，不回显即被浏览器拦下。
+	// 面板自身全部走相对路径（app.js fetch('/panel/api/...')），同源不受影响。
 	if origin := r.Header.Get("Origin"); origin != "" {
-		w.Header().Set("Access-Control-Allow-Origin", origin)
-		w.Header().Add("Vary", "Origin")
-		w.Header().Set("Access-Control-Allow-Credentials", "true")
+		if reflect, ok := reflectableCORSOrigin(origin); ok {
+			w.Header().Set("Access-Control-Allow-Origin", reflect)
+			w.Header().Add("Vary", "Origin")
+			// 保留 Allow-Credentials：全仓无 cookie（鉴权是 Bearer 头），该头没有
+			// 可骑乘的环境凭证；删掉它反而会打断 credentials:'include' 的调用方。
+			w.Header().Set("Access-Control-Allow-Credentials", "true")
+		} else {
+			// 不回显的后果是浏览器拦下跨域读——留痕便于排障：合法调用方只会是
+			// https 源，这里出现日志说明有 http 源在调，需人工确认是否新场景。
+			log.Printf("WARN: [cors] 拒绝回显非 https Origin: %s", origin)
+		}
 	}
 	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
 	w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Request-Id")
