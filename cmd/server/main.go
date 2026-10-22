@@ -11,6 +11,7 @@ import (
 	"io"
 	"io/fs"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -771,6 +772,7 @@ func buildAuthSnapshot(c *Config) livecfg.Snapshot {
 			RPM:               k.RPM,
 			MonthlyTokenQuota: k.MonthlyTokenQuota,
 			Group:             k.Group,
+			AllowedCIDRs:      parseKeyCIDRs(k.AllowedCIDRs),
 		})
 	}
 	snap := livecfg.BuildSnapshot(c.APIKey, keys)
@@ -779,6 +781,38 @@ func buildAuthSnapshot(c *Config) livecfg.Snapshot {
 	snap.RecordClientInfo = c.Logging.RequestClientInfo
 	snap.ModelAliases = c.ModelAliases
 	return snap
+}
+
+// parseKeyCIDRs 把配置态的 IP/CIDR 字符串转成运行时 *net.IPNet 列表（R-108）。
+// 非法条目在 normalizeAPIKeys 阶段已 fail fast，正常路径不会走到这里；这里做防御性
+// 跳过（不静默吞错——跳过的是「已校验通过」的清单，异常即返回空名单=不限，与
+// 启动期已拒绝配置的语义不冲突）。裸 IP 按 /32 收进 CIDR。
+func parseKeyCIDRs(specs []string) []*net.IPNet {
+	if len(specs) == 0 {
+		return nil
+	}
+	out := make([]*net.IPNet, 0, len(specs))
+	for _, s := range specs {
+		if _, ipnet, err := net.ParseCIDR(s); err == nil {
+			out = append(out, ipnet)
+			continue
+		}
+		if ip := net.ParseIP(s); ip != nil {
+			out = append(out, &net.IPNet{IP: ip, Mask: fullMask(ip)})
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// fullMask 按 IP 族返回全量掩码（IPv4 /32，IPv6 /128），用于裸 IP 收为单主机 CIDR。
+func fullMask(ip net.IP) net.IPMask {
+	if ip.To4() != nil {
+		return net.CIDRMask(32, 32)
+	}
+	return net.CIDRMask(128, 128)
 }
 
 // restartRequiredFields 返回本次改动中无法热生效、需要重启进程的字段名。

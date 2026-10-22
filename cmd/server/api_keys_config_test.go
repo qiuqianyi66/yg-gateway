@@ -1,6 +1,7 @@
 package main
 
 import (
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -206,6 +207,60 @@ func TestAPIKeysDuplicateKeyFailsFast(t *testing.T) {
 	body2 := `{"api_key":"sk-dup", "api_keys":[` + apiKeyEntry("k1", "sk-dup", "", "", `["m1"]`) + `]}`
 	if _, err := loadWith(body2, t); err == nil {
 		t.Fatal("单 api_key 与多 Key 使用同一密钥值应 fail fast")
+	}
+}
+
+// TestAPIKeyInvalidCIDRFailsFast R-108：非法 allowed_cidrs 启动 fail fast（禁止静默忽略）。
+func TestAPIKeyInvalidCIDRFailsFast(t *testing.T) {
+	body := `{"api_keys":[{` +
+		`"id":"k1","key":"sk-a","allowed_cidrs":["10.0.0.0/8","not-a-cidr"]}]}`
+	if _, err := ParseConfig([]byte(body)); err == nil {
+		t.Fatal("非法 allowed_cidrs 条目应 fail fast")
+	}
+}
+
+// TestAPIKeyCIDRAcceptedAndTrimmed R-108：合法 CIDR + 裸 IP + 空串条目（剔除）正常落库。
+func TestAPIKeyCIDRAcceptedAndTrimmed(t *testing.T) {
+	body := `{"api_keys":[{` +
+		`"id":"k1","key":"sk-a","allowed_cidrs":[" 10.0.0.0/8 ","1.2.3.4",""]}]}`
+	c, err := ParseConfig([]byte(body))
+	if err != nil {
+		t.Fatalf("合法 CIDR/裸 IP 应放行，got %v", err)
+	}
+	got := c.APIKeys[0].AllowedCIDRs
+	// 空串剔除；剩余两条 trim 后落库。
+	if len(got) != 2 || got[0] != "10.0.0.0/8" || got[1] != "1.2.3.4" {
+		t.Fatalf("CIDR 应 trim 并剔空串，got %#v", got)
+	}
+}
+
+// TestParseKeyCIDRs R-108：配置态字符串 → 运行时 *net.IPNet 的转换（buildAuthSnapshot 用）。
+func TestParseKeyCIDRs(t *testing.T) {
+	// nil / 空 → nil（不限）
+	if got := parseKeyCIDRs(nil); got != nil {
+		t.Fatalf("nil 输入应返回 nil，got %#v", got)
+	}
+	// CIDR 与裸 IP 混合；裸 IP 收为 /32 单主机。
+	got := parseKeyCIDRs([]string{"10.0.0.0/8", "1.2.3.4"})
+	if len(got) != 2 {
+		t.Fatalf("应解析出 2 条，got %#v", got)
+	}
+	if !got[0].Contains(net.ParseIP("10.9.9.9")) || got[0].Contains(net.ParseIP("11.0.0.1")) {
+		t.Fatalf("10.0.0.0/8 判定错：%v", got[0])
+	}
+	if !got[1].Contains(net.ParseIP("1.2.3.4")) || got[1].Contains(net.ParseIP("1.2.3.5")) {
+		t.Fatalf("裸 IP 1.2.3.4 应收为 /32，判定错：%v", got[1])
+	}
+}
+
+// TestAPIKeyCIDRMissingUnrestricted R-108：省略 allowed_cidrs = nil（不限，向后兼容）。
+func TestAPIKeyCIDRMissingUnrestricted(t *testing.T) {
+	c, err := loadWith(`{"api_keys":[`+apiKeyEntry("k1", "sk-a", "", "", "")+`]}`, t)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.APIKeys[0].AllowedCIDRs != nil {
+		t.Fatalf("allowed_cidrs 省略应 nil（不限），got %#v", c.APIKeys[0].AllowedCIDRs)
 	}
 }
 

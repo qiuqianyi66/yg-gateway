@@ -354,6 +354,15 @@ func (h *Handler) withAuth(next http.HandlerFunc) http.HandlerFunc {
 			writeOpenAIError(w, http.StatusUnauthorized, "invalid_api_key", "missing or invalid API key")
 			return
 		}
+		// R-108 Key 级来源 IP 白名单：鉴权后、计费/限流前执行。空名单 = 不限（向后兼容，
+		// 恒放行）；非空 fail-closed。真实来源 IP 复用 trusted_proxy 的受信代理 XFF
+		// 判定提取（防伪造），不重复实现。403 + ip_not_allowed，与 model/realm 约束
+		// （400）区分：这是网络来源拒绝，不是请求格式错误。
+		if key != nil && !key.IPAllowed(extractClientIP(h.cfg.TrustedProxy, r)) {
+			writeOpenAIError(w, http.StatusForbidden, "ip_not_allowed",
+				"该密钥不允许从当前来源 IP 访问")
+			return
+		}
 		// Per-key RPM 限流（P0-3）：在鉴权后、业务前检查。未配置 rpm=0 的 key 恒放行。
 		// 超限返 429 + Retry-After，与上游 429 语义一致（客户端自带退避）。
 		if !h.keyRPM.allow(key) {

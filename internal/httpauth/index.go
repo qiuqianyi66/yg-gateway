@@ -3,6 +3,7 @@ package httpauth
 import (
 	"crypto/sha256"
 	"crypto/subtle"
+	"net"
 	"net/http"
 	"strings"
 )
@@ -28,6 +29,40 @@ type Key struct {
 	// Group 账号池分组标签（P1-B）。空 = 不限池（全部账号可选）；
 	// 非空 = 选号只从同 Group 账号里挑，实现 key 与账号组绑定隔离。
 	Group string
+	// AllowedCIDRs 该 Key 允许的来源 IP/CIDR 白名单（R-108）。
+	// nil/空 = 不限（向后兼容，不是「未配置即拒绝」）；非空 = fail-closed：
+	// 来源 IP 不在名单内即拒绝。名单在 config normalize 阶段已逐条解析校验，
+	// 运行时只做 Contains 判定，不再容错。
+	AllowedCIDRs []*net.IPNet
+}
+
+// IPAllowed 报告来源 IP 是否在该 Key 的白名单内（R-108）。
+//
+// 四态语义：AllowedCIDRs 为空（nil 或 len 0）= 不限，恒 true——省略字段是
+// 「不限制来源」，不是「未配置即拒绝」。非空时 fail-closed：ipStr 解析失败或
+// 不命中任一条 CIDR → false。
+//
+// ipStr 可为 "IP" 或 "IP:port"（从 RemoteAddr / extractClientIP 直接取，
+// 无需调用方手工剥端口）。真实来源 IP 的提取（受信代理 XFF 判定）由 server 层
+// 复用 trusted_proxy.go 完成，本方法只做纯 IP→CIDR 匹配。
+func (k *Key) IPAllowed(ipStr string) bool {
+	if len(k.AllowedCIDRs) == 0 {
+		return true
+	}
+	host := strings.TrimSpace(ipStr)
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return false
+	}
+	for _, cidr := range k.AllowedCIDRs {
+		if cidr != nil && cidr.Contains(ip) {
+			return true
+		}
+	}
+	return false
 }
 
 // prefixLen 摘要前缀长度（hex 字符数）。对齐 workbuddy-manager 的 12 位前缀，
