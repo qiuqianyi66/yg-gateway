@@ -102,21 +102,26 @@ func (r *Recorder) foldHourlyOlderThan(cutoff time.Time) {
 			dst = &cp
 			r.buckets[m.to] = dst
 		} else {
-			dst.Req += src.Req
-			dst.Err += src.Err
-			dst.PT += src.PT
-			dst.CT += src.CT
-			dst.TT += src.TT
-			dst.LatMs += src.LatMs
-			dst.LatN += src.LatN
-			dst.TPS += src.TPS
-			dst.TPSN += src.TPSN
-			dst.CR += src.CR
-			dst.CRN += src.CRN
-			dst.CRT += src.CRT
-			dst.CH += src.CH
-			dst.CM += src.CM
+			// COW（R-205）：拷出副本合并再换指针，不改已发布对象（快照读者透过指针读）。
+			cp := *dst
+			cp.Req += src.Req
+			cp.Err += src.Err
+			cp.PT += src.PT
+			cp.CT += src.CT
+			cp.TT += src.TT
+			cp.LatMs += src.LatMs
+			cp.LatN += src.LatN
+			cp.TPS += src.TPS
+			cp.TPSN += src.TPSN
+			cp.CR += src.CR
+			cp.CRN += src.CRN
+			cp.CRT += src.CRT
+			cp.CH += src.CH
+			cp.CM += src.CM
+			dst = &cp
+			r.buckets[m.to] = dst
 		}
+		r.walDirty[m.to] = struct{}{}
 		delete(r.buckets, m.from)
 	}
 	r.dirty = true
@@ -161,20 +166,24 @@ func (r *Recorder) dropOldestDailyUntil(target int) {
 			ab = &bucket{Scope: ancientDayScope} // 维度全空，只进 totals
 			r.buckets[abKey] = ab
 		}
-		ab.Req += src.Req
-		ab.Err += src.Err
-		ab.PT += src.PT
-		ab.CT += src.CT
-		ab.TT += src.TT
-		ab.LatMs += src.LatMs
-		ab.LatN += src.LatN
-		ab.TPS += src.TPS
-		ab.TPSN += src.TPSN
-		ab.CR += src.CR
-		ab.CRN += src.CRN
-		ab.CRT += src.CRT
-		ab.CH += src.CH
-		ab.CM += src.CM
+		// COW（R-205）：拷出副本合并再换指针。
+		cp := *ab
+		cp.Req += src.Req
+		cp.Err += src.Err
+		cp.PT += src.PT
+		cp.CT += src.CT
+		cp.TT += src.TT
+		cp.LatMs += src.LatMs
+		cp.LatN += src.LatN
+		cp.TPS += src.TPS
+		cp.TPSN += src.TPSN
+		cp.CR += src.CR
+		cp.CRN += src.CRN
+		cp.CRT += src.CRT
+		cp.CH += src.CH
+		cp.CM += src.CM
+		r.buckets[abKey] = &cp
+		r.walDirty[abKey] = struct{}{}
 		delete(r.buckets, d.key)
 	}
 	r.dirty = true

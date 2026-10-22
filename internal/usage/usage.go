@@ -139,6 +139,12 @@ type Recorder struct {
 	dirty   bool
 	started time.Time
 
+	// 增量落库（R-205）：自上次基线快照以来发生变化的桶键 / monthly 键。
+	// 日常 flush 只把这些追加进 WAL；基线快照（force / 阈值）写完后清空。
+	walDirty   map[string]struct{}
+	walMonthly map[string]struct{}
+	walCount   int // WAL 自上次基线以来累计写入的记录数（达阈值触发基线重写）
+
 	// loadErr 加载期错误（见 LoadErr/ADR-009）。只在构造期写、之后只读。
 	loadErr error
 
@@ -157,12 +163,14 @@ func bucketKey(scope, realm, uid, model, rate, keyID string) string {
 // New 创建记录器。path 为空时禁用落盘（纯内存，测试用）。
 func New(path string) *Recorder {
 	r := &Recorder{
-		path:    path,
-		buckets: make(map[string]*bucket),
-		monthly: make(map[string]int64),
-		started: time.Now(),
-		stop:    make(chan struct{}),
-		done:    make(chan struct{}),
+		path:       path,
+		buckets:    make(map[string]*bucket),
+		monthly:    make(map[string]int64),
+		walDirty:   make(map[string]struct{}),
+		walMonthly: make(map[string]struct{}),
+		started:    time.Now(),
+		stop:       make(chan struct{}),
+		done:       make(chan struct{}),
 	}
 	if path != "" {
 		if err := r.load(); err != nil {
@@ -260,11 +268,17 @@ func (r *Recorder) Add(now time.Time, realm, uid, model string, d Delta, ok bool
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
+	// COW 发布（R-205 读路径优化）：不原地改已发布的桶对象，而是拷出副本改完再换指针。
+	// 理由：SnapshotWindow 现在锁内只取桶指针切片（廉价），锁外透过指针读桶——已发布桶
+	// 对象一旦被原地改就会与聚合循环数据竞争。发布即不可变，快照读到的就是一个一致时点。
 	b := r.buckets[key]
-	if b == nil {
-		b = &bucket{Scope: scope, Realm: realm, UID: uid, Model: model, Rate: d.ModelRate, Key: d.KeyID}
-		r.buckets[key] = b
+	var nb bucket
+	if b != nil {
+		nb = *b
+	} else {
+		nb = bucket{Scope: scope, Realm: realm, UID: uid, Model: model, Rate: d.ModelRate, Key: d.KeyID}
 	}
+	b = &nb
 	b.Req++
 	if !ok {
 		b.Err++
@@ -313,9 +327,13 @@ func (r *Recorder) Add(now time.Time, realm, uid, model string, d Delta, ok bool
 			mt = d.PromptTokens + d.CompletionTokens
 		}
 		if mt > 0 {
-			r.monthly[now.Format("2006-01")+"|"+d.KeyID] += mt
+			mk := now.Format("2006-01") + "|" + d.KeyID
+			r.monthly[mk] += mt
+			r.walMonthly[mk] = struct{}{}
 		}
 	}
+	r.buckets[key] = b // COW 发布（替换指针，旧对象留给快照读者）
+	r.walDirty[key] = struct{}{}
 	r.dirty = true
 }
 
@@ -356,45 +374,48 @@ func (r *Recorder) MonthlySnapshot() map[string]int64 {
 
 func (r *Recorder) load() error {
 	raw, err := os.ReadFile(r.path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	// 基线存在才做版本门 + 桶恢复；基线缺失（首次运行 / 只写过 WAL）直接进 WAL 回放。
+	if err == nil {
+		var f file
+		if err := json.Unmarshal(raw, &f); err != nil {
+			return err
 		}
-		return err
-	}
-	var f file
-	if err := json.Unmarshal(raw, &f); err != nil {
-		return err
-	}
-	// 版本闸门（ADR-009）：文件比程序新 → **拒绝启动**。
-	// 典型场景：换版后回滚到旧二进制，而旧程序读新文件会按零值丢字段（静默、不可逆）。
-	// 版本更旧或缺失（0）→ 正常加载；首次落盘时由 save 补写当前版本，
-	// 并在补写前留一份 `<path>.pre-upgrade-v<N>.bak`（迁移前备份）。
-	if f.Version > fileVersion {
-		return fmt.Errorf("usage.json 版本 %d 比本程序支持的 %d 更新（典型是回滚到旧版）；"+
-			"旧程序读新文件会静默丢字段，因此拒绝启动。请用新版本程序，或把 %s 换成升级前的备份",
-			f.Version, fileVersion, r.path)
-	}
-	if f.Version > 0 && f.Version < fileVersion {
-		bak := fmt.Sprintf("%s.pre-upgrade-v%d.bak", r.path, f.Version)
-		if _, statErr := os.Stat(bak); os.IsNotExist(statErr) {
-			if cpErr := os.WriteFile(bak, raw, 0o600); cpErr != nil {
-				log.Printf("[usage] 升级前备份失败（继续，但请注意）: %v", cpErr)
-			} else {
-				log.Printf("[usage] 检测到旧版本 %d < %d，已备份为 %s", f.Version, fileVersion, bak)
+		// 版本闸门（ADR-009）：文件比程序新 → **拒绝启动**。
+		// 典型场景：换版后回滚到旧二进制，而旧程序读新文件会按零值丢字段（静默、不可逆）。
+		// 版本更旧或缺失（0）→ 正常加载；首次落盘时由 save 补写当前版本，
+		// 并在补写前留一份 `<path>.pre-upgrade-v<N>.bak`（迁移前备份）。
+		if f.Version > fileVersion {
+			return fmt.Errorf("usage.json 版本 %d 比本程序支持的 %d 更新（典型是回滚到旧版）；"+
+				"旧程序读新文件会静默丢字段，因此拒绝启动。请用新版本程序，或把 %s 换成升级前的备份",
+				f.Version, fileVersion, r.path)
+		}
+		if f.Version > 0 && f.Version < fileVersion {
+			bak := fmt.Sprintf("%s.pre-upgrade-v%d.bak", r.path, f.Version)
+			if _, statErr := os.Stat(bak); os.IsNotExist(statErr) {
+				if cpErr := os.WriteFile(bak, raw, 0o600); cpErr != nil {
+					log.Printf("[usage] 升级前备份失败（继续，但请注意）: %v", cpErr)
+				} else {
+					log.Printf("[usage] 检测到旧版本 %d < %d，已备份为 %s", f.Version, fileVersion, bak)
+				}
+			}
+		}
+		for i := range f.Buckets {
+			b := f.Buckets[i]
+			r.buckets[bucketKey(b.Scope, b.Realm, b.UID, b.Model, b.Rate, b.Key)] = &b
+		}
+		// P1-A：恢复 per-key 月累计（旧版本无该字段 → nil map，零值）。
+		if f.Monthly != nil {
+			for k, v := range f.Monthly {
+				r.monthly[k] = v
 			}
 		}
 	}
-	for i := range f.Buckets {
-		b := f.Buckets[i]
-		r.buckets[bucketKey(b.Scope, b.Realm, b.UID, b.Model, b.Rate, b.Key)] = &b
-	}
-	// P1-A：恢复 per-key 月累计（旧版本无该字段 → nil map，零值）。
-	if f.Monthly != nil {
-		for k, v := range f.Monthly {
-			r.monthly[k] = v
-		}
-	}
+	// R-205：回放增量 WAL（基线上次落盘后、又积累的脏桶/月累计；基线缺失时 WAL 即唯一来源）。
+	// 逐字段取大合并。
+	replayWAL(walPathOf(r.path), r.buckets, r.monthly)
 	log.Printf("[usage] 已恢复 %d 个用量桶（%s）", len(r.buckets), r.path)
 	return nil
 }
@@ -408,36 +429,66 @@ func (r *Recorder) flush(force bool) {
 		r.mu.Unlock()
 		return
 	}
-	snap := file{Version: fileVersion, Saved: time.Now().Format(time.RFC3339), Buckets: make([]bucket, 0, len(r.buckets))}
-	for _, b := range r.buckets {
-		snap.Buckets = append(snap.Buckets, *b)
-	}
-	// P1-A：复制 monthly map（避免写快照期间持锁读并发 map）。
-	if len(r.monthly) > 0 {
-		snap.Monthly = make(map[string]int64, len(r.monthly))
-		for k, v := range r.monthly {
-			snap.Monthly[k] = v
+	// 增量落库（R-205）：本轮只把脏桶/脏月累计追加进 WAL（小），不再每次全量序列化。
+	var recs []walRecord
+	for k := range r.walDirty {
+		if b := r.buckets[k]; b != nil {
+			cp := *b
+			recs = append(recs, walRecord{B: &cp})
 		}
 	}
+	for k := range r.walMonthly {
+		recs = append(recs, walRecord{M: k, V: r.monthly[k]})
+	}
+	// 是否重写完整基线（force=Stop/Save，或 WAL 累计超阈值——防止长跑 WAL 无限增长）。
+	needBase := force || r.walCount >= walCheckpointAfter
+	var snap *file
+	if needBase {
+		snap = &file{Version: fileVersion, Saved: time.Now().Format(time.RFC3339),
+			Buckets: make([]bucket, 0, len(r.buckets))}
+		for _, b := range r.buckets {
+			snap.Buckets = append(snap.Buckets, *b)
+		}
+		if len(r.monthly) > 0 {
+			snap.Monthly = make(map[string]int64, len(r.monthly))
+			for k, v := range r.monthly {
+				snap.Monthly[k] = v
+			}
+		}
+	}
+	r.walDirty = make(map[string]struct{})
+	r.walMonthly = make(map[string]struct{})
+	r.walCount += len(recs)
 	r.dirty = false
 	r.mu.Unlock()
 
-	raw, err := json.Marshal(snap)
-	if err != nil {
-		log.Printf("[usage] 序列化失败: %v", err)
-		return
-	}
-	if err := os.MkdirAll(filepath.Dir(r.path), 0o755); err != nil {
-		log.Printf("[usage] 建目录失败: %v", err)
-		return
-	}
-	tmp := r.path + ".tmp"
-	if err := os.WriteFile(tmp, raw, 0o600); err != nil {
-		log.Printf("[usage] 写临时文件失败: %v", err)
-		return
-	}
-	if err := os.Rename(tmp, r.path); err != nil {
-		log.Printf("[usage] 原子替换失败: %v", err)
+	// 锁外追加 WAL（append-only，小）。
+	appendWAL(walPathOf(r.path), recs)
+
+	// 基线快照：tmp+rename 原子替换（崩溃安全），写完截断 WAL——此后基线已含 WAL 全部内容。
+	if snap != nil {
+		raw, err := json.Marshal(snap)
+		if err != nil {
+			log.Printf("[usage] 序列化失败: %v", err)
+			return
+		}
+		if err := os.MkdirAll(filepath.Dir(r.path), 0o755); err != nil {
+			log.Printf("[usage] 建目录失败: %v", err)
+			return
+		}
+		tmp := r.path + ".tmp"
+		if err := os.WriteFile(tmp, raw, 0o600); err != nil {
+			log.Printf("[usage] 写临时文件失败: %v", err)
+			return
+		}
+		if err := os.Rename(tmp, r.path); err != nil {
+			log.Printf("[usage] 原子替换失败: %v", err)
+			return
+		}
+		truncateWAL(walPathOf(r.path))
+		r.mu.Lock()
+		r.walCount = 0
+		r.mu.Unlock()
 	}
 }
 
@@ -671,10 +722,13 @@ func (r *Recorder) SnapshotWindow(w Window, nicks map[string]string, keyNames ma
 	explicit := !w.From.IsZero() || !w.To.IsZero()
 	windowed := !from.IsZero() || !to.IsZero()
 
+	// R-205 读路径优化：锁内只拷桶**指针**（~8B/桶，不再整桶深拷贝 ~90B/桶）。
+	// 正确性靠 COW 发布（Add/Rollup 改桶时换指针，不改已发布对象）——快照透过指针
+	// 读到的是一个一致时点，无数据竞争。大桶场景锁持有时间从 O(N×桶体) 降到 O(N×指针)。
 	r.mu.Lock()
-	bs := make([]bucket, 0, len(r.buckets))
+	views := make([]*bucket, 0, len(r.buckets))
 	for _, b := range r.buckets {
-		bs = append(bs, *b)
+		views = append(views, b)
 	}
 	r.mu.Unlock()
 
@@ -695,8 +749,8 @@ func (r *Recorder) SnapshotWindow(w Window, nicks map[string]string, keyNames ma
 	// 即时间序（同前缀内同格式排序；"d:" 恒早于 "h:"——日桶只来自 90 天前的小时折叠）。
 	since := ""
 	matched := 0
-	for i := range bs {
-		b := &bs[i]
+	for i := range views {
+		b := views[i]
 		// 合成远古桶（ancientDayScope，维度全空）：只进"全部历史"的 totals，绝不进
 		// 维度/时序/窗口聚合，也不污染"数据起点" since（ADR-011）。窗口口径下它字典序
 		// 极老、本就不在任何真实窗口内，故直接跳过——避免 Years-ago 的聚合堆到图表
