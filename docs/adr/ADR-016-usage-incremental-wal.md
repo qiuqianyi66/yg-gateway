@@ -69,3 +69,16 @@
 `git revert` 本提交即回到「全量深拷贝 + 全量重写」旧行为。旧二进制不读 WAL 侧车文件，
 残留的 `usage.wal.jsonl` 会被旧程序忽略（下次旧版 force flush 重写基线后它仍在，但无害——
 升级回来时回放取大，不会把旧值拉低）。数据零丢失。
+
+## 六、修订记录（2026-10-22）
+
+本 ADR §三登记的两条妥协已消除/被取代，不新增 ADR 编号（同主题增量修订）：
+
+1. **§三第 3 条（折叠源桶复活窗口）已消除**：WAL 新增 delete 记录（`walRecord.D`）。
+   折叠把源键并入目标桶时，源键写入 `walDeletes`，flush 时**先 delete、后 upsert** 同批追加；
+   回放按 WAL 内顺序执行 delete（`delete(buckets, D)`），不用 merge-max 套删除。
+   折叠-崩溃-重启场景源桶不再复活。同键同批 delete+upsert（折叠后又被新流量重建）时此序
+   天然正确（先删后建）。
+2. **§三第 4 条（不改 config.go）已被取代**：`walCheckpointAfter` 从包常量改为**装配期配置**
+   `config.usage.wal_checkpoint_after`（`<=0` 回落默认 20000，零回归）。`usage.NewWithCheckpoint`
+   注入；`New(path)` 保留为默认阈值兼容构造。装配期（启动读一次，改后重启生效；不进 livecfg）。

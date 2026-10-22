@@ -141,9 +141,11 @@ type Recorder struct {
 
 	// 增量落库（R-205）：自上次基线快照以来发生变化的桶键 / monthly 键。
 	// 日常 flush 只把这些追加进 WAL；基线快照（force / 阈值）写完后清空。
-	walDirty   map[string]struct{}
-	walMonthly map[string]struct{}
-	walCount   int // WAL 自上次基线以来累计写入的记录数（达阈值触发基线重写）
+	walDirty           map[string]struct{}
+	walMonthly         map[string]struct{}
+	walDeletes         map[string]struct{} // 折叠后被删除的源桶键（R-205 v2：delete op）
+	walCount           int                 // WAL 自上次基线以来累计写入的记录数（达阈值触发基线重写）
+	walCheckpointAfter int                 // 基线重写阈值（装配期配置；<=0 回落默认 walCheckpointAfterDefault）
 
 	// loadErr 加载期错误（见 LoadErr/ADR-009）。只在构造期写、之后只读。
 	loadErr error
@@ -160,17 +162,25 @@ func bucketKey(scope, realm, uid, model, rate, keyID string) string {
 	return scope + "|" + realm + "|" + uid + "|" + model + "|" + rate + "|" + keyID
 }
 
-// New 创建记录器。path 为空时禁用落盘（纯内存，测试用）。
-func New(path string) *Recorder {
+// New 创建记录器（默认阈值，<=0 自动回落 20000）。path 为空时禁用落盘（纯内存，测试用）。
+func New(path string) *Recorder { return NewWithCheckpoint(path, 0) }
+
+// NewWithCheckpoint 装配期可指定 WAL 基线重写阈值（记录数）；<=0 回落默认 20000。
+func NewWithCheckpoint(path string, walCheckpointAfter int) *Recorder {
+	if walCheckpointAfter <= 0 {
+		walCheckpointAfter = walCheckpointAfterDefault
+	}
 	r := &Recorder{
-		path:       path,
-		buckets:    make(map[string]*bucket),
-		monthly:    make(map[string]int64),
-		walDirty:   make(map[string]struct{}),
-		walMonthly: make(map[string]struct{}),
-		started:    time.Now(),
-		stop:       make(chan struct{}),
-		done:       make(chan struct{}),
+		path:               path,
+		buckets:            make(map[string]*bucket),
+		monthly:            make(map[string]int64),
+		walDirty:           make(map[string]struct{}),
+		walMonthly:         make(map[string]struct{}),
+		walDeletes:         make(map[string]struct{}),
+		walCheckpointAfter: walCheckpointAfter,
+		started:            time.Now(),
+		stop:               make(chan struct{}),
+		done:               make(chan struct{}),
 	}
 	if path != "" {
 		if err := r.load(); err != nil {
@@ -429,8 +439,13 @@ func (r *Recorder) flush(force bool) {
 		r.mu.Unlock()
 		return
 	}
-	// 增量落库（R-205）：本轮只把脏桶/脏月累计追加进 WAL（小），不再每次全量序列化。
+	// 增量落库（R-205）：本轮只把删除记录（先）+ 脏桶/脏月累计（后）追加进 WAL。
+	// 顺序硬约束：delete 先行——折叠源键删除后，同批若又被新流量重建（upsert 同键），
+	// 回放时「先删后建」语义正确。
 	var recs []walRecord
+	for k := range r.walDeletes {
+		recs = append(recs, walRecord{D: k})
+	}
 	for k := range r.walDirty {
 		if b := r.buckets[k]; b != nil {
 			cp := *b
@@ -441,7 +456,7 @@ func (r *Recorder) flush(force bool) {
 		recs = append(recs, walRecord{M: k, V: r.monthly[k]})
 	}
 	// 是否重写完整基线（force=Stop/Save，或 WAL 累计超阈值——防止长跑 WAL 无限增长）。
-	needBase := force || r.walCount >= walCheckpointAfter
+	needBase := force || r.walCount >= r.walCheckpointAfter
 	var snap *file
 	if needBase {
 		snap = &file{Version: fileVersion, Saved: time.Now().Format(time.RFC3339),
@@ -458,6 +473,7 @@ func (r *Recorder) flush(force bool) {
 	}
 	r.walDirty = make(map[string]struct{})
 	r.walMonthly = make(map[string]struct{})
+	r.walDeletes = make(map[string]struct{})
 	r.walCount += len(recs)
 	r.dirty = false
 	r.mu.Unlock()

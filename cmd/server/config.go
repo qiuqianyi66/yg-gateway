@@ -169,13 +169,11 @@ type Config struct {
 		// 0 = 不折算（前端不显示 ¥ 列）。默认 0.01（1 积分 ≈ ¥0.01）。
 		// 纯展示层配置：不改选号/计费，只在面板用量页把积分旁折成人民币。
 		CreditCNYRate float64 `json:"credit_cny_rate"`
-
-		// Pricing 模型 OpenRouter 美元参考价（$/1M tokens），key 为裸模型名
-		// （不含 cn:/global: 前缀）。用于在面板用量页折算"这些 token 按公开价买
-		// 要花多少美元"（白嫖感知）。纯展示层，不参与选号/计费。
-		// 内置默认表覆盖常见 CodeBuddy 模型族；此处可覆盖/补充。
-		// 未知模型不在表中 → 不折算美元（前端不显示 $ 数，不伪造）。
-		Pricing map[string]ModelPrice `json:"pricing,omitempty"`
+		// Pricing 模型 OpenRouter 美元参考价（$/1M tokens），key 为裸模型名（不含 cn:/global: 前缀）。
+		// 折算面板"这些 token 按公开价买要花多少美元"；纯展示，不参与选号/计费。
+		// 未知模型不在表中 → 不折算（不伪造 $ 数）。
+		Pricing            map[string]ModelPrice `json:"pricing,omitempty"`
+		WalCheckpointAfter int                   `json:"wal_checkpoint_after"` // WAL 记录达 N 条重写基线并截断；装配期，<=0 回落 20000
 	} `json:"usage"`
 
 	Server struct {

@@ -324,7 +324,7 @@ func main() {
 	// 用量记录器：与 state 文件同目录，随 state_file 配置一起搬移。
 	// datapath 由 state 文件路径推出，避免再加一个配置项。
 	usagePath := usagePathFor(cfg.StateFile)
-	rec, err := newUsageRecorder(usagePath)
+	rec, err := newUsageRecorder(usagePath, cfg.Usage.WalCheckpointAfter)
 	// ADR-009：用量台账是选号与成本控制的输入，加载失败不能「从零开始」继续跑
 	// （历史上只打日志，等于静默丢掉全部台账）。版本比程序新（典型是回滚到旧版）
 	// 与文件损坏都在这里变成**拒绝启动**，让人看见而不是让数据被无声污染。
@@ -988,8 +988,9 @@ func newPool(stateFile string) (*pool.Pool, error) {
 }
 
 // newUsageRecorder 同上，针对 usage.json 台账（ADR-009）。
-func newUsageRecorder(path string) (*usage.Recorder, error) {
-	rec := usage.New(path)
+// walCheckpointAfter 装配期传入（<=0 由 usage 包回落默认 20000）。
+func newUsageRecorder(path string, walCheckpointAfter int) (*usage.Recorder, error) {
+	rec := usage.NewWithCheckpoint(path, walCheckpointAfter)
 	if err := rec.LoadErr(); err != nil {
 		return rec, err
 	}

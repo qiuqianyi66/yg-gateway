@@ -20,13 +20,19 @@ import (
 // 旧基线 + WAL 未截断部分都还在，重启时「加载基线 → 回放 WAL」即可完整恢复。
 // 回放合并规则：计数字段单调非减，按**逐字段取大**合并（见 mergeBucketMax）——这同时消解了
 // 「旧版回滚后写基线、再升级 WAL 回放覆盖」的时序回退（max 不退化）。
+//
+// 记录顺序权威（折叠-崩溃-重启场景）：同一条 WAL 内**顺序回放**，delete 记录（D）先于
+// 同批 upsert。折叠把源桶并进目标桶后，源键被 delete 记录标记——即使崩溃落在「折叠后、
+// 下次基线上线前」，回放也会先删源键、再写目标桶，源桶不再被旧 upsert 记录「复活」
+// （R-205 v2 修订消除了 ADR-016 §三的复活窗口妥协）。同键同批 delete+upsert（折叠后又被
+// 新流量重建）时此序天然正确：先删后建。
 
 // walFileVersion WAL 格式版本。首行写入，旧程序不认则忽略（不影响主文件加载）。
 const walFileVersion = 1
 
-// walCheckpointAfter 累计多少条 WAL 记录后强制重写一次完整基线（截断 WAL）。
-// 日常 flush 只追加；只有基线会把全量桶重写——阈值防止长跑时 WAL 无限增长。
-const walCheckpointAfter = 20000
+// walCheckpointAfterDefault 默认基线重写阈值（记录数）。
+// 装配期可由 config.usage.wal_checkpoint_after 覆盖（<=0 回落此默认）。
+const walCheckpointAfterDefault = 20000
 
 // walPath 由主文件路径推出 WAL 路径（usage.json → usage.wal.jsonl，同目录）。
 func walPathOf(mainPath string) string {
@@ -36,11 +42,12 @@ func walPathOf(mainPath string) string {
 	return strings.TrimSuffix(mainPath, ".json") + ".wal.jsonl"
 }
 
-// walRecord 一条 WAL 记录（二选一：桶 upsert 或月累计 upsert）。
+// walRecord 一条 WAL 记录（三选一：桶 upsert / 月累计 upsert / 桶 delete）。
 type walRecord struct {
 	B *bucket `json:"b,omitempty"` // 桶全量当前值（按 key upsert）
 	M string  `json:"m,omitempty"` // monthly 键（"YYYY-MM|keyID"）
 	V int64   `json:"v,omitempty"` // monthly 值
+	D string  `json:"d,omitempty"` // 删除桶键（折叠后源键；与 B/M 互斥）
 }
 
 // appendWAL 把一批记录追加进 WAL 文件（调用方持锁；写盘失败仅记日志——观测层，
@@ -109,6 +116,10 @@ func replayWAL(path string, buckets map[string]*bucket, monthly map[string]int64
 			k := bucketKey(rec.B.Scope, rec.B.Realm, rec.B.UID, rec.B.Model, rec.B.Rate, rec.B.Key)
 			mergeBucketMax(buckets, k, rec.B)
 			n++
+		} else if rec.D != "" {
+			// delete 记录：顺序权威——先删，同批后续 upsert 可重建同键。
+			// 不用 merge-max 套 delete（删除是确定性操作，不是取大）。
+			delete(buckets, rec.D)
 		} else if rec.M != "" {
 			if v, ok := monthly[rec.M]; !ok || rec.V > v {
 				monthly[rec.M] = rec.V

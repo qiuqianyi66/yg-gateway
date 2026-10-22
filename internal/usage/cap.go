@@ -123,6 +123,7 @@ func (r *Recorder) foldHourlyOlderThan(cutoff time.Time) {
 		}
 		r.walDirty[m.to] = struct{}{}
 		delete(r.buckets, m.from)
+		r.walDeletes[m.from] = struct{}{} // 源键删记录：崩溃重启回放不再复活（R-205 v2）
 	}
 	r.dirty = true
 	log.Printf("[usage] 折叠 %d 个小时桶为日桶（容量保护）", len(moves))
@@ -185,6 +186,7 @@ func (r *Recorder) dropOldestDailyUntil(target int) {
 		r.buckets[abKey] = &cp
 		r.walDirty[abKey] = struct{}{}
 		delete(r.buckets, d.key)
+		r.walDeletes[d.key] = struct{}{} // 源键删记录：崩溃重启回放不再复活（R-205 v2）
 	}
 	r.dirty = true
 }

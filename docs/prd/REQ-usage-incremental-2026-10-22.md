@@ -96,3 +96,45 @@
 ## 五、回滚
 
 见 `.harness/changes/2026-10-22-usage-incremental/rollback.md`。
+
+---
+
+## 六、v2 修订（2026-10-22）：两点遗留消除
+
+v1 落地后 summary 留了两个「未完成」节，本次闭环。原正文不动，只追加。
+
+### 遗留① WAL delete op（消除折叠-崩溃-重启的源桶复活窗口）
+
+原妥协（ADR-016 §三）：折叠把源桶并进目标桶后只写目标 upsert、源键无删除记录；若崩溃落在
+「折叠后、下次基线上线前」，旧 upsert 记录会把源桶回放复活（短暂重复计数，下次基线自愈）。
+
+**Given-When-Then**：
+
+- G：基线有源桶 A（h:10）+ 目标桶 B（d:10）；折叠把 A 并进 B
+- W：本轮 flush 写入 WAL = 先 delete(A)、后 upsert(B)
+- T：崩溃重启回放后，A **不再复活**、B 合并值正确
+- G：折叠后 A 键又被新流量重建（同批既有 delete(A) 又有 upsert(A)）
+- W：顺序回放（delete 先行）
+- T：A 被重建为新值（先删后建，不残留旧值）
+- G：merge-max（旧 upsert）与 delete 同键共存
+- W：顺序回放
+- T：delete 是确定性终态（不用 merge-max 套 delete）
+
+### 遗留② walCheckpointAfter 装配期配置化
+
+原妥协：阈值是包常量 20000（wal.go:29），config.go 当时并行禁碰。
+
+**Given-When-Then**：
+
+- G：config.json 无 `usage.wal_checkpoint_after`
+- W：启动
+- T：阈值回落默认 20000（缺省零回归）
+- G：配置 `<=0`
+- W：启动
+- T：回落默认 20000
+- G：配置显式正数 N
+- W：累计 WAL 记录达 N 后 flush
+- T：触发完整基线重写并截断 WAL
+
+**装配期**：启动读一次，改后重启生效；不进 livecfg 热快照；面板无 UI 编辑。
+

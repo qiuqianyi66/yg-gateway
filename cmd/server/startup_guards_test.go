@@ -44,7 +44,7 @@ func TestNewUsageRecorderRejectsNewerVersion(t *testing.T) {
 		if err := os.WriteFile(p, []byte(`{"version":999,"buckets":[]}`), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		rec, err := newUsageRecorder(p)
+		rec, err := newUsageRecorder(p, 0)
 		if err == nil {
 			t.Fatal("版本更新的 usage.json 必须让启动失败（旧程序读新文件会静默丢字段）")
 		}
@@ -58,7 +58,7 @@ func TestNewUsageRecorderRejectsNewerVersion(t *testing.T) {
 		if err := os.WriteFile(p, []byte(`{"version":6,"buckets":[]}`), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		rec, err := newUsageRecorder(p)
+		rec, err := newUsageRecorder(p, 0)
 		if err != nil {
 			t.Fatalf("当前版本应可加载，got %v", err)
 		}
