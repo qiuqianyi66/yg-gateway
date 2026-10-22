@@ -111,3 +111,18 @@ func TestExtractClientIPNilRequest(t *testing.T) {
 		t.Fatalf("extractClientIP(nil,nil) = %q want empty", got)
 	}
 }
+
+// TestTrustedProxyMatcherBracketedIPv6 裸 IPv6 字面量（"[::1]" 无端口形态）
+// 必须能配置并命中——SplitHostPort 对无端口 [::1] 失败，host 带方括号，
+// ParseIP 不接受括号形态，必须先 Trim "[]"。
+func TestTrustedProxyMatcherBracketedIPv6(t *testing.T) {
+	m := NewTrustedProxyMatcher("[::1]")
+	if m == nil {
+		t.Fatal("bracketed [::1] 应注册为受信代理，got nil")
+	}
+	for _, src := range []string{"[::1]", "[::1]:8080", "::1"} {
+		if !m.Match(src) {
+			t.Errorf("Match(%q) = false, want true（裸 IPv6 字面量应命中受信代理）", src)
+		}
+	}
+}

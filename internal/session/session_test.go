@@ -53,6 +53,28 @@ func routerWith(store redisstore.Store, avail []string, ttl time.Duration) *Rout
 	})
 }
 
+// TestTouchDoesNotResurrectUnbound S-1：快路径 RLock 读出绑定后、touch 拿写锁前，
+// 绑定可能已被并发 Unbind 删除。touch 必须在写锁内 re-check——条目已不存在或已改绑
+// 别的 uid 时直接放弃，不得盲写复活一个刚被删除的绑定。
+func TestTouchDoesNotResurrectUnbound(t *testing.T) {
+	st := newCountingStore()
+	r := routerWith(st, []string{"uidA"}, time.Minute)
+
+	r.Bind("k", "uidA")
+	if got := r.Count(); got != 1 {
+		t.Fatalf("Bind 后 Count=%d, want 1", got)
+	}
+	r.Unbind("k")
+	if got := r.Count(); got != 0 {
+		t.Fatalf("Unbind 后 Count=%d, want 0", got)
+	}
+	// 模拟竞态：Unbind 之后才迟到的 touch。re-check 应发现条目已不存在，放弃写回。
+	r.touch("k", "uidA", time.Now())
+	if got := r.Count(); got != 0 {
+		t.Fatalf("Unbind 后迟到 touch 复活了绑定（Count=%d），应 re-check 后放弃", got)
+	}
+}
+
 func TestWeightedVirtualCandidatesBiasNewSessions(t *testing.T) {
 	st := newCountingStore()
 	// 一个普通账号 1 个虚拟实例，一个快过期账号 3 个虚拟实例。

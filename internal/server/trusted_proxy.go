@@ -45,7 +45,7 @@ func NewTrustedProxyMatcher(spec string) *TrustedProxyMatcher {
 			}
 			continue
 		}
-		if ip := net.ParseIP(part); ip != nil {
+		if ip := parseHostIP(part); ip != nil {
 			m.ips[ip.String()] = struct{}{}
 		}
 	}
@@ -53,6 +53,15 @@ func NewTrustedProxyMatcher(spec string) *TrustedProxyMatcher {
 		return nil
 	}
 	return m
+}
+
+// parseHostIP 把 "IP"、"[::1]" 或 "IP:port" 的 host 形态解析为 net.IP。
+// 裸 IPv6 字面量（"[::1]" 无端口形态）经 SplitHostPort 会失败、host 原样保留方括号，
+// net.ParseIP 不接受带括号形态——必须先 Trim "[]"，否则 ::1 受信代理永不命中。
+func parseHostIP(s string) net.IP {
+	s = strings.TrimSpace(s)
+	s = strings.Trim(s, "[]")
+	return net.ParseIP(s)
 }
 
 // Match 报告 src 是否命中受信任代理集合。
@@ -65,7 +74,7 @@ func (m *TrustedProxyMatcher) Match(src string) bool {
 	if h, _, err := net.SplitHostPort(src); err == nil {
 		host = h
 	}
-	ip := net.ParseIP(strings.TrimSpace(host))
+	ip := parseHostIP(host)
 	if ip == nil {
 		return false
 	}

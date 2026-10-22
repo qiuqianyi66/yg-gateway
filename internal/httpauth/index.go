@@ -3,6 +3,7 @@ package httpauth
 import (
 	"crypto/sha256"
 	"crypto/subtle"
+	"log"
 	"net"
 	"net/http"
 	"strings"
@@ -177,6 +178,10 @@ func Authenticate(r *http.Request, index *Index, singleKey string) (*Key, bool) 
 		// index 未命中：兜底单 Key（若调用方漏纳单 Key 到索引）。正常路径 index
 		// 已含单 Key，这里只在异常装配下触发一次额外的 VerifyBearer（零分配）。
 		if singleKey != "" && VerifyBearer(r, singleKey) {
+			// 兜底命中（index 未命中却校验过 singleKey）= 调用方漏把 singleKey 纳入索引。
+			// 此处合成的 Key 只带 ID/Digest，不携带 Models/RPM/AllowedCIDRs/MonthlyTokenQuota
+			// 约束——这是装配异常路径，打 WARN 让人看见，而不是静默放行一把无约束的 Key。
+			log.Printf("[httpauth] WARN: singleKey 兜底路径命中（index 未命中却校验通过）——合成 Key 未携带约束（Models/RPM/AllowedCIDRs/MonthlyTokenQuota 全零值），请检查装配是否漏把 singleKey 纳入索引（buildAuthSnapshot）")
 			return &Key{ID: SingleKeyID, Digest: digest(singleKey)}, true
 		}
 		return nil, false

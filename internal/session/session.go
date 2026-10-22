@@ -146,7 +146,13 @@ func (r *Router) Resolve(key string) (string, bool) {
 // 可用性校验，会话会被钉在一个"对当前模型不可用"的号上反复失败。
 func (r *Router) ResolveForModel(key, model string) (string, bool) {
 	now := time.Now()
-	available := r.availableSet(model)
+	// 一次取可用 uid slice，同时派生 set——避免下方慢路径再次调 availableSlice
+	// （availableSet 内部已经调一次 availableSlice，原先每个慢路径请求调两遍）。
+	uids := r.availableSlice(model)
+	available := make(map[string]bool, len(uids))
+	for _, u := range uids {
+		available[u] = true
+	}
 
 	// ── Fast path: RLock 快查 ──────────────────────────────
 	r.mu.RLock()
@@ -173,7 +179,6 @@ func (r *Router) ResolveForModel(key, model string) (string, bool) {
 		delete(r.entries, key) // 失效：清掉再分配
 	}
 
-	uids := r.availableSlice(model)
 	if len(uids) == 0 {
 		return "", false
 	}
@@ -205,8 +210,16 @@ func (r *Router) ResolveForModel(key, model string) (string, bool) {
 }
 
 // touch 滚动 lastActive 并异步镜像（只在快路径命中时写最后一次）。
+// 写锁内 re-check：快路径 RLock 读出 e 后、本函数拿写锁前，该绑定可能已被并发
+// Unbind 删除或被慢路径改绑到别的 uid——此时盲写会「复活」一个刚被删除的绑定。
+// 只有当前条目仍是同一个 uid 才滚动，否则直接放弃（下次请求重新分配）。
 func (r *Router) touch(key, uid string, now time.Time) {
 	r.mu.Lock()
+	cur, ok := r.entries[key]
+	if !ok || cur.uid != uid {
+		r.mu.Unlock()
+		return
+	}
 	r.entries[key] = entry{uid: uid, lastActive: now}
 	r.mu.Unlock()
 	r.cfg.Store.SetBind(key, uid, r.cfg.TTL)
@@ -282,16 +295,6 @@ func (r *Router) gcOnce(now time.Time) int {
 		r.cfg.Store.DelBind(key)
 	}
 	return len(expiredKeys)
-}
-
-// availableSet 把 AvailableForModel(model) 的有序列表转集合（快路径命中校验用）。
-func (r *Router) availableSet(model string) map[string]bool {
-	uids := r.availableSlice(model)
-	set := make(map[string]bool, len(uids))
-	for _, u := range uids {
-		set[u] = true
-	}
-	return set
 }
 
 // availableSlice 安全调用 AvailableForModel；未注入时回落 Available（nil 视空池）。

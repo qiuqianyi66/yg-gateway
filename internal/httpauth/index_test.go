@@ -1,8 +1,11 @@
 package httpauth
 
 import (
+	"bytes"
+	"log"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -183,5 +186,24 @@ func TestAuthenticateFallbackSingleKey(t *testing.T) {
 	got, ok := Authenticate(keyReq("Bearer sk-single"), idx, "sk-single")
 	if !ok || got == nil || got.ID != "single" {
 		t.Fatalf("漏纳单 Key 时应兜底命中 single，got %+v ok=%v", got, ok)
+	}
+}
+
+// TestAuthenticateFallbackLogsWarn 兜底合成 Key 不携带约束（Models/RPM/AllowedCIDRs
+// 全零值）= 装配异常路径，必须打 WARN 让人看见，而不是静默放行无约束 Key。
+func TestAuthenticateFallbackLogsWarn(t *testing.T) {
+	idx := BuildIndex([]Key{{ID: "k1", Digest: digest("sk-multi")}})
+	prev := log.Writer()
+	defer log.SetOutput(prev)
+	buf := &bytes.Buffer{}
+	log.SetOutput(buf)
+
+	got, ok := Authenticate(keyReq("Bearer sk-single"), idx, "sk-single")
+	if !ok || got == nil || got.ID != "single" {
+		t.Fatalf("兜底应命中 single，got %+v ok=%v", got, ok)
+	}
+	if !strings.Contains(buf.String(), "WARN") ||
+		!strings.Contains(buf.String(), "singleKey 兜底路径") {
+		t.Fatalf("兜底路径应打 WARN（提示检查装配），got 日志：%q", buf.String())
 	}
 }
