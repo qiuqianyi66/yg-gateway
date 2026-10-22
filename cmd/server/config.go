@@ -92,6 +92,9 @@ type Config struct {
 	//
 	// 触发条件：选号走完所有账号仍未拿到可用号（acct==nil 出循环）。
 	// 只对 Models 白名单里列出的模型生效（避免把 CodeBuddy 专属模型发到备用源 404）。
+	//
+	// R-107：endpoints 配置后按序级联（列表顺序即优先级）；未配置时回退单端点
+	// （base_url/api_key/models/timeout_seconds），旧配置文件零回归。
 	Fallback struct {
 		// Enabled 是否启用备用级联。
 		Enabled bool `json:"enabled"`
@@ -104,7 +107,23 @@ type Config struct {
 		Models []string `json:"models"`
 		// TimeoutSeconds 备用源请求超时。<=0 回落 120。
 		TimeoutSeconds int `json:"timeout_seconds"`
+		// Endpoints 多端点级联列表（R-107）：配置后按顺序逐个尝试，
+		// 第一个覆盖该模型且转发成功的端点终结请求。空 = 回退单端点旧配置。
+		Endpoints []FallbackEndpointConfig `json:"endpoints"`
 	} `json:"fallback"`
+
+	// Drift 上游协议漂移观测（R-102，P1）：周期探测模型目录端点，播种响应形状
+	// 基线后比对——发现目录条数腰斩/探测连续失败即判漂移并记 WARN。
+	// 纯观测层：不改写出站报文，不阻塞主链路。
+	Drift struct {
+		// Enabled 是否启用漂移观测。默认 false（零回归）。
+		Enabled bool `json:"enabled"`
+		// IntervalSeconds 探测周期。<=0 回落 1800（30 分钟）。
+		IntervalSeconds int `json:"interval_seconds"`
+		// SnapshotPath 协议快照文件路径。空 = 与 state 文件同目录
+		// （protocol-snapshot.json，跟随 state_file 迁移，与 usage.json 同规则）。
+		SnapshotPath string `json:"snapshot_path"`
+	} `json:"drift"`
 
 	Panel struct {
 		// PackageDetailLimit 积分构成页单账号默认展示的最近到期包数；<=0 回落 5。
@@ -405,6 +424,14 @@ type Config struct {
 	// MaxBodyBytesEffective 解析后的 body 上限（F-001）：nil（未配置）回落默认 64MB，
 	// 显式 0 = 不限（0 传给 handler 表示关闭 MaxBytesReader）。
 	MaxBodyBytesEffective int64 `json:"-"`
+}
+
+// FallbackEndpointConfig 级联列表中的单个备用端点（R-107）。
+type FallbackEndpointConfig struct {
+	BaseURL        string   `json:"base_url"`
+	APIKey         string   `json:"api_key"`
+	Models         []string `json:"models"`
+	TimeoutSeconds int      `json:"timeout_seconds"`
 }
 
 // APIKeyConfig 一把多 Key 的配置形态（ADR-001 §三）。

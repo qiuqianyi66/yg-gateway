@@ -10,6 +10,12 @@ import (
 	"yg-gateway/internal/usage"
 )
 
+func singleEndpoint(url, key string) *FallbackConfig {
+	return &FallbackConfig{Endpoints: []FallbackEndpoint{
+		{BaseURL: url, APIKey: key, Models: map[string]bool{"glm-5.3": true}},
+	}}
+}
+
 func TestFallbackForwardDisabled(t *testing.T) {
 	h := &Handler{cfg: Config{}} // Fallback=nil
 	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{}`))
@@ -21,12 +27,12 @@ func TestFallbackForwardDisabled(t *testing.T) {
 
 func TestFallbackForwardEmptyConfig(t *testing.T) {
 	h := &Handler{cfg: Config{
-		Fallback: &FallbackConfig{BaseURL: "", APIKey: ""},
+		Fallback: &FallbackConfig{Endpoints: []FallbackEndpoint{}},
 	}}
 	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{}`))
 	w := httptest.NewRecorder()
 	if h.fallbackForward(w, req, []byte(`{}`), "glm-5.3") {
-		t.Fatal("BaseURL/APIKey 空应返回 false")
+		t.Fatal("Endpoints 空应返回 false")
 	}
 }
 
@@ -46,7 +52,7 @@ func TestFallbackForwardJSON(t *testing.T) {
 
 	rec := usage.New("")
 	h := &Handler{cfg: Config{
-		Fallback: &FallbackConfig{BaseURL: srv.URL, APIKey: "sk-test"},
+		Fallback: singleEndpoint(srv.URL, "sk-test"),
 		Usage:    rec,
 	}}
 	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{}`))
@@ -76,7 +82,7 @@ func TestFallbackForwardStream(t *testing.T) {
 	defer srv.Close()
 
 	h := &Handler{cfg: Config{
-		Fallback: &FallbackConfig{BaseURL: srv.URL, APIKey: "sk-test"},
+		Fallback: singleEndpoint(srv.URL, "sk-test"),
 	}}
 	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{}`))
 	w := httptest.NewRecorder()
@@ -116,7 +122,7 @@ func TestFallbackForwardStreamTruncated(t *testing.T) {
 	defer srv.Close()
 
 	h := &Handler{cfg: Config{
-		Fallback: &FallbackConfig{BaseURL: srv.URL, APIKey: "sk-test"},
+		Fallback: singleEndpoint(srv.URL, "sk-test"),
 	}}
 	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{}`))
 	w := httptest.NewRecorder()
@@ -140,7 +146,7 @@ func TestFallbackForwardStreamFlushes(t *testing.T) {
 	defer srv.Close()
 
 	h := &Handler{cfg: Config{
-		Fallback: &FallbackConfig{BaseURL: srv.URL, APIKey: "sk-test"},
+		Fallback: singleEndpoint(srv.URL, "sk-test"),
 	}}
 	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{}`))
 	w := httptest.NewRecorder()
@@ -162,7 +168,7 @@ func TestFallbackForwardUpstreamError(t *testing.T) {
 	defer srv.Close()
 
 	h := &Handler{cfg: Config{
-		Fallback: &FallbackConfig{BaseURL: srv.URL, APIKey: "wrong"},
+		Fallback: singleEndpoint(srv.URL, "wrong"),
 	}}
 	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{}`))
 	w := httptest.NewRecorder()
@@ -172,5 +178,67 @@ func TestFallbackForwardUpstreamError(t *testing.T) {
 	}
 	if w.Code != 401 {
 		t.Fatalf("status=%d, want 401（透传）", w.Code)
+	}
+}
+
+// TestFallbackCascadeOrder 多端点按序级联：第一个端点连接失败 → 落到第二个成功端点。
+// R-107 牙齿：把级联循环改成只用第一个端点 → 本测试 FAIL。
+func TestFallbackCascadeOrder(t *testing.T) {
+	hit := ""
+	// 端点 1：直接连不上（端口关）。
+	dead := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hit = "dead"
+	}))
+	dead.Close() // 立刻关死 → 连接被拒
+
+	// 端点 2：正常 200。
+	good := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hit = "good"
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[]}`))
+	}))
+	defer good.Close()
+
+	h := &Handler{cfg: Config{Fallback: &FallbackConfig{Endpoints: []FallbackEndpoint{
+		{BaseURL: dead.URL, APIKey: "k1", Models: map[string]bool{"glm-5.3": true}},
+		{BaseURL: good.URL, APIKey: "k2", Models: map[string]bool{"glm-5.3": true}},
+	}}}}
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{}`))
+	w := httptest.NewRecorder()
+	if !h.fallbackForward(w, req, []byte(`{}`), "glm-5.3") {
+		t.Fatal("端点 2 应接住级联，返回 true")
+	}
+	if hit != "good" {
+		t.Fatalf("级联命中端点=%q want good", hit)
+	}
+}
+
+// TestFallbackCascadeSkipsNonCovering 模型不在某端点白名单时跳过该端点。
+func TestFallbackCascadeSkipsNonCovering(t *testing.T) {
+	hit := ""
+	good := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hit = "good"
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer good.Close()
+
+	h := &Handler{cfg: Config{Fallback: &FallbackConfig{Endpoints: []FallbackEndpoint{
+		// 端点 1 白名单不含 glm-5.3 → 必须跳过。
+		{BaseURL: good.URL, APIKey: "k1", Models: map[string]bool{"other-model": true}},
+		{BaseURL: good.URL, APIKey: "k2", Models: map[string]bool{"glm-5.3": true}},
+	}}}}
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{}`))
+	w := httptest.NewRecorder()
+	if !h.fallbackForward(w, req, []byte(`{}`), "glm-5.3") {
+		t.Fatal("覆盖该模型的端点应接住")
+	}
+	if hit != "good" {
+		t.Fatalf("应落到端点 2（good），got hit=%q", hit)
+	}
+	if !h.cfg.Fallback.Covers("glm-5.3") {
+		t.Fatal("Covers 应识别端点 2 的白名单")
+	}
+	if h.cfg.Fallback.Covers("nope") {
+		t.Fatal("Covers(nope) 应为 false")
 	}
 }

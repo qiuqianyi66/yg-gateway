@@ -59,21 +59,56 @@ func stateSibling(stateFile, name string) string {
 	return filepath.Join(dir, name)
 }
 
-// buildFallbackConfig 组装备用上游级联配置（P2）。未启用时返回 nil。
-func buildFallbackConfig(cfg *Config) *server.FallbackConfig {
-	if !cfg.Fallback.Enabled || cfg.Fallback.BaseURL == "" || cfg.Fallback.APIKey == "" {
+// buildDriftMonitor 装配协议漂移观测器（R-102）。未启用返回 nil（/status 省略键）。
+// 快照损坏仅记 WARN 并继续（观测层是旁路，不拖死主链路）。
+func buildDriftMonitor(cfg *Config) *upstream.DriftMonitor {
+	if !cfg.Drift.Enabled {
 		return nil
 	}
-	models := make(map[string]bool, len(cfg.Fallback.Models))
-	for _, m := range cfg.Fallback.Models {
-		models[m] = true
+	snapPath := cfg.Drift.SnapshotPath
+	if snapPath == "" {
+		snapPath = stateSibling(cfg.StateFile, "protocol-snapshot.json")
 	}
-	return &server.FallbackConfig{
-		BaseURL:        cfg.Fallback.BaseURL,
-		APIKey:         cfg.Fallback.APIKey,
-		Models:         models,
-		TimeoutSeconds: cfg.Fallback.TimeoutSeconds,
+	mon := upstream.NewDriftMonitor(snapPath)
+	if err := mon.Load(); err != nil {
+		log.Printf("WARN: [drift] snapshot %s unreadable, reseeding: %v", snapPath, err)
 	}
+	return mon
+}
+
+// buildFallbackConfig 组装备用上游级联配置（P2/R-107）。未启用时返回 nil。
+// 配置优先级：endpoints 列表（多端点级联）→ 单端点旧字段（向后兼容）。
+func buildFallbackConfig(cfg *Config) *server.FallbackConfig {
+	if !cfg.Fallback.Enabled {
+		return nil
+	}
+	buildEndpoint := func(baseURL, apiKey string, models []string, timeout int) (server.FallbackEndpoint, bool) {
+		if baseURL == "" || apiKey == "" {
+			return server.FallbackEndpoint{}, false
+		}
+		mm := make(map[string]bool, len(models))
+		for _, m := range models {
+			mm[m] = true
+		}
+		return server.FallbackEndpoint{BaseURL: baseURL, APIKey: apiKey, Models: mm, TimeoutSeconds: timeout}, true
+	}
+	var eps []server.FallbackEndpoint
+	for i := range cfg.Fallback.Endpoints {
+		if ep, ok := buildEndpoint(cfg.Fallback.Endpoints[i].BaseURL, cfg.Fallback.Endpoints[i].APIKey,
+			cfg.Fallback.Endpoints[i].Models, cfg.Fallback.Endpoints[i].TimeoutSeconds); ok {
+			eps = append(eps, ep)
+		}
+	}
+	// 未配列表：回退单端点旧字段（旧配置文件零回归）。
+	if len(eps) == 0 {
+		if ep, ok := buildEndpoint(cfg.Fallback.BaseURL, cfg.Fallback.APIKey, cfg.Fallback.Models, cfg.Fallback.TimeoutSeconds); ok {
+			eps = []server.FallbackEndpoint{ep}
+		}
+	}
+	if len(eps) == 0 {
+		return nil
+	}
+	return &server.FallbackConfig{Endpoints: eps}
 }
 
 func main() {
@@ -372,6 +407,10 @@ func main() {
 	log.SetOutput(io.MultiWriter(os.Stderr, pn.Logs()))
 	server.SetChatLogOutput(io.MultiWriter(os.Stdout, pn.Logs()))
 
+	// 协议漂移观测（R-102，P1）：启用时从快照文件恢复基线（缺失 = unknown），
+	// /status 暴露状态；探测 goroutine 在校验循环外启动（下方）。
+	driftMon := buildDriftMonitor(cfg)
+
 	h := server.NewHandler(server.Config{
 		Pool:     p,
 		Upstream: up,
@@ -419,6 +458,8 @@ func main() {
 		}),
 		// 备用上游级联（P2）：enabled=false 或 base_url 空 = 不启用（零回归）。
 		Fallback: buildFallbackConfig(cfg),
+		// 协议漂移观测（R-102）：未启用 = nil（/status 省略该键 = 外层 unknown）。
+		Drift: driftMon,
 	})
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -433,6 +474,16 @@ func main() {
 	// 模型归零；倍率表当时尚未建立）。
 	// 异步执行：不阻塞监听启动；失败仅记日志（下一轮懒触发或本轮重试仍可补上）。
 	go warmModelRates(ctx, up, p)
+
+	// 协议漂移周期探测（R-102）：按间隔探模型目录端点形状，喂给观测器。
+	// ctx 取消即退出（R9 回收路径）；探测失败不阻塞主链路。
+	if driftMon != nil {
+		interval := time.Duration(cfg.Drift.IntervalSeconds) * time.Second
+		if interval <= 0 {
+			interval = 1800 * time.Second
+		}
+		go runDriftProbe(ctx, up, p, driftMon, interval)
+	}
 
 	srv := &http.Server{
 		Addr:              cfg.Listen,
@@ -513,6 +564,52 @@ func warmModelRates(ctx context.Context, up *upstream.Client, p *pool.Pool) {
 					log.Printf("[upstream] warm model rates: global ok (%d models)", len(infos))
 				}
 			}
+		}
+	}
+}
+
+// driftCatalogFetch 拉模型目录条数（可测接缝：测试替换为假实现，免真上游）。
+var driftCatalogFetch = func(c *upstream.Client, a *auth.Auth) (int, error) {
+	infos, err := c.FetchModels(a)
+	return len(infos), err
+}
+
+// driftProbeOnce 执行一次目录探测并喂给观测器（不含调度；空池/无号 = 跳过，不算失败）。
+func driftProbeOnce(up *upstream.Client, p *pool.Pool, mon *upstream.DriftMonitor) {
+	uids := p.AvailableUIDsForRealm("cn")
+	if len(uids) == 0 {
+		return
+	}
+	a := p.AuthByUID(uids[0])
+	if a == nil {
+		return
+	}
+	n, err := driftCatalogFetch(up, a)
+	mon.ObserveCatalog(n, err == nil)
+	if err := mon.Save(); err != nil {
+		log.Printf("WARN: [drift] snapshot save: %v", err)
+	}
+}
+
+// runDriftProbe 协议漂移周期探测（R-102）：用池里一个可用号拉模型目录，把目录条数
+// 与成败喂给漂移观测器。纯观测层：探测失败只影响观测状态，不动选号、不罚号。
+// ctx 取消立即退出（R9）；首轮立即执行（启动后尽快播种/发现漂移），之后按间隔轮询。
+func runDriftProbe(ctx context.Context, up *upstream.Client, p *pool.Pool, mon *upstream.DriftMonitor, interval time.Duration) {
+	probe := func() {
+		if ctx.Err() != nil {
+			return
+		}
+		driftProbeOnce(up, p, mon)
+	}
+	probe()
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			probe()
 		}
 	}
 }
