@@ -297,12 +297,23 @@
 
 | 分支 | 编号 | 优先级 | 状态 | 合入 commit | changes |
 |---|---|---|---|---|---|
-| `panel-features` | R-101/R-106 | P0/P2 | 待执行 | — | — |
-| `debt-split-client` | R-201 | P2 | 待执行 | — | — |
-| `debt-split-handler` | R-202 | P2 | 待执行 | — | — |
-| `debt-split-autotask` | R-203 | P2 | 待执行 | — | — |
-| `protocol-drift` | R-102/R-107 | P1/P2 | 待执行 | — | — |
-| `usage-incremental` | R-205 | P2 | 待执行 | — | — |
-| `key-ip-whitelist` | R-108 | P2 | 待执行 | — | — |
+| `panel-features` | R-101/R-106 | P0/P2 | ✅ 已合入（2026-10-22） | `581b2d5`（分支提交 `e269633`） | `2026-10-22-f101-panel-notice/`、`2026-10-22-openrouter-savings-display/` |
+| `debt-split-client` | R-201 | P2 | ✅ 已合入（2026-10-22） | `2738a3a`（分支提交 `b85ea96`） | `2026-10-22-split-client/` |
+| `debt-split-handler` | R-202 | P2 | ✅ 已合入（2026-10-22，首个，快进） | `955790f` | `2026-10-22-split-handler/` |
+| `debt-split-autotask` | R-203 | P2 | ✅ 已合入（2026-10-22） | `eb9bb05`（分支提交 `137b711`） | `2026-10-22-split-autotask/` |
+| `protocol-drift` | R-102/R-107 | P1/P2 | ✅ 已合入（2026-10-22） | `f0ecf44`（分支提交 `009f724`） | `2026-10-22-protocol-drift/`、`2026-10-22-multiupstream-template/` |
+| `usage-incremental` | R-205 | P2 | ✅ 已合入（2026-10-22） | `16063ef`（分支提交 `0dd9f02`） | `2026-10-22-usage-incremental/` |
+| `key-ip-whitelist` | R-108 | P2 | ✅ 已合入（2026-10-22） | `e30b40d`（分支提交 `5f222a2`） | `2026-10-22-key-ip-whitelist/` |
+
+**ADR 编号定案**（两分支独立起号曾撞 `ADR-013`，已修正，提交 `183910c`）：
+`ADR-013`=key-ip-whitelist、`ADR-014`=protocol-drift-observer、`ADR-015`=fallback-cascade、
+`ADR-016`=usage-incremental-wal；终态 `docs/adr/` 001-016 连续无重号（check-harness 复核通过）。
+
+**合入后总体验证**（main `2e249af`）：
+- pre-commit 10/10 全绿（含主仓真实边界检查；worktree 内 6/7 分支的 check-boundaries 因
+  `.git` 指针文件环境不兼容按 §8 记环境失败、已由主仓复核）
+- 深度棘轮 `-Update` 收紧：maxFileLines 2058→**1089**、oversizeFiles 4→**2**、minCoverage 72.5→**73.3%**
+- 治理自检 ERRORS:[]（ADR 16 篇无重号、REQ 29 篇合规、73 个 changes 目录 summary 齐备）
+- 7 分支全部 0 冲突合入；合入顺序实际为：R-202（快进）→ client → autotask → panel → key-ip → protocol-drift → usage
 
 > 本表由组织层（本次并行执行的组织者）在合入时回填，作为对账清单。
