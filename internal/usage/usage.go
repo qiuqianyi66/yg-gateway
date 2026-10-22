@@ -471,17 +471,32 @@ func (r *Recorder) flush(force bool) {
 			}
 		}
 	}
-	r.walDirty = make(map[string]struct{})
-	r.walMonthly = make(map[string]struct{})
-	r.walDeletes = make(map[string]struct{})
-	r.walCount += len(recs)
-	r.dirty = false
 	r.mu.Unlock()
 
-	// 锁外追加 WAL（append-only，小）。
-	appendWAL(walPathOf(r.path), recs)
+	// 锁外追加 WAL（append-only，小）。仅成功才消费本轮脏键：失败保留集合，
+	// 下轮 flush 自动重发（recs 由集合重算，upsert 全值覆盖 / delete 幂等，无副作用）。
+	// walCount 同样只在成功后推进——失败批不得把基线重写阈值往前顶（否则永远重发不完）。
+	walErr := appendWAL(walPathOf(r.path), recs)
+	r.mu.Lock()
+	if walErr == nil {
+		for i := range recs {
+			switch {
+			case recs[i].B != nil:
+				k := bucketKey(recs[i].B.Scope, recs[i].B.Realm, recs[i].B.UID, recs[i].B.Model, recs[i].B.Rate, recs[i].B.Key)
+				delete(r.walDirty, k)
+			case recs[i].D != "":
+				delete(r.walDeletes, recs[i].D)
+			default:
+				delete(r.walMonthly, recs[i].M)
+			}
+		}
+		r.walCount += len(recs)
+		r.dirty = len(r.walDirty) > 0 || len(r.walMonthly) > 0 || len(r.walDeletes) > 0
+	}
+	r.mu.Unlock()
 
-	// 基线快照：tmp+rename 原子替换（崩溃安全），写完截断 WAL——此后基线已含 WAL 全部内容。
+	// 基线快照：tmp+rename 原子替换。即使本轮 WAL 追加失败也照常写基线——
+	// 基线从活内存全量重建，本身就是失败批的自愈终点（覆盖 WAL 失败可能丢的记录）。
 	if snap != nil {
 		raw, err := json.Marshal(snap)
 		if err != nil {
@@ -504,6 +519,12 @@ func (r *Recorder) flush(force bool) {
 		truncateWAL(walPathOf(r.path))
 		r.mu.Lock()
 		r.walCount = 0
+		// 基线已含活内存全部状态：清空残留脏键（含 WAL 失败时未消费的集合——
+		// 重发只会写进一个马上被截断的 WAL，冗余且无收益）。
+		r.walDirty = make(map[string]struct{})
+		r.walMonthly = make(map[string]struct{})
+		r.walDeletes = make(map[string]struct{})
+		r.dirty = false
 		r.mu.Unlock()
 	}
 }

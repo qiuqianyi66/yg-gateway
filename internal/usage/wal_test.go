@@ -250,3 +250,59 @@ func TestCheckpointDefaultFallback(t *testing.T) {
 		t.Fatalf("默认回落后 walCheckpointAfter=%d，期望 %d", r.walCheckpointAfter, walCheckpointAfterDefault)
 	}
 }
+
+// ---- P2-1：WAL 追加失败 → 脏键保留 + walCount 不推进 + 下轮自动重发 ----
+
+// 牙齿（2026-10-22 体检修复）：旧实现在 appendWAL 之前就清空脏键集合，失败批永久丢失
+// 且注释谎称「下轮补写」。本测试钉住：失败保留、不推进阈值；修复冲突条件后重发成功。
+func TestFlushRetainsDirtyAndRetriesOnWALFailure(t *testing.T) {
+	dir := t.TempDir()
+	// 冲突物：与「WAL 所在目录」同名的一个文件——appendWAL 的 MkdirAll 必然失败。
+	// Recorder.path = dir/subfile/usage.json → walPathOf = dir/subfile/usage.wal.jsonl，
+	// 其 dirname = dir/subfile（现有文件）→ MkdirAll 报「不是目录」。
+	sub := filepath.Join(dir, "subfile")
+	if err := os.WriteFile(sub, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r := NewWithCheckpoint(filepath.Join(dir, "subfile", "usage.json"), 100)
+	r.Add(time.Now(), "cn", "u1", "m", Delta{PromptTokens: 1, HasPromptTokens: true, TotalTokens: 1, HasTotal: true}, true)
+	r.flush(false)
+
+	r.mu.Lock()
+	nDirty := len(r.walDirty)
+	wc := r.walCount
+	dirtyFlag := r.dirty
+	r.mu.Unlock()
+	if nDirty != 1 {
+		t.Fatalf("WAL 失败应保留脏键：walDirty=%d，期望 1", nDirty)
+	}
+	if wc != 0 {
+		t.Fatalf("失败批不得推进 walCount：walCount=%d，期望 0", wc)
+	}
+	if !dirtyFlag {
+		t.Fatalf("失败后 dirty 应保持 true（下轮仍需 flush）")
+	}
+
+	// 消除失败条件：删除同名文件，下轮 flush 自动重发（upsert 全值覆盖，幂等）。
+	if err := os.Remove(sub); err != nil {
+		t.Fatal(err)
+	}
+	r.flush(false)
+	r.mu.Lock()
+	nDirty = len(r.walDirty)
+	wc = r.walCount
+	r.mu.Unlock()
+	if nDirty != 0 {
+		t.Fatalf("重发成功后脏键应被消费：walDirty=%d，期望 0", nDirty)
+	}
+	if wc != 1 {
+		t.Fatalf("成功重发后 walCount 应=1，got %d", wc)
+	}
+	raw, err := os.ReadFile(walPathOf(filepath.Join(dir, "subfile", "usage.json")))
+	if err != nil {
+		t.Fatalf("WAL 文件应有重发记录: %v", err)
+	}
+	if !strings.Contains(string(raw), "u1") {
+		t.Fatalf("WAL 内容应含 u1: %q", string(raw))
+	}
+}

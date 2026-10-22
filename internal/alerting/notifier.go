@@ -22,6 +22,8 @@ import (
 	"net/http"
 	"sync"
 	"time"
+
+	"yg-gateway/internal/logfmt"
 )
 
 // Config Notifier 配置。零值 = 全部关闭（WebhookURL 空 = 不发）。
@@ -94,6 +96,10 @@ func (n *Notifier) NotifyAccountDown(kind, uid, nick, reason string) {
 }
 
 // send 做去重检查并异步 POST。
+// 去重键用完整 uid（内部，防 8 位前缀碰撞吞事件）；**外发 body 的 account_uid 截断为
+// 前 8 位**（R2 日志脱敏口径：logfmt.UID8，webhook 下游可能被转存/转发，完整 uid 不外流）。
+// 失败路径（网络错误 / non-2xx）删除去重登记——下一次同事件触发即可重试，避免
+// 「登记了却从没发出去，整个去重窗口静默」；成功才保留登记。
 func (n *Notifier) send(ev Event) {
 	key := ev.Type + ":" + ev.AccountUID
 	n.mu.Lock()
@@ -104,16 +110,24 @@ func (n *Notifier) send(ev Event) {
 	n.last[key] = time.Now()
 	n.mu.Unlock()
 
-	body, _ := json.Marshal(ev)
+	bodyEv := ev
+	bodyEv.AccountUID = logfmt.UID8(ev.AccountUID)
+	body, _ := json.Marshal(bodyEv)
 	go func() {
 		resp, err := n.cli.Post(n.cfg.WebhookURL, "application/json", bytes.NewReader(body))
 		if err != nil {
 			log.Printf("WARN: [alerting] webhook post failed: %v", err)
+			n.mu.Lock()
+			delete(n.last, key)
+			n.mu.Unlock()
 			return
 		}
 		resp.Body.Close()
 		if resp.StatusCode >= 300 {
 			log.Printf("WARN: [alerting] webhook non-2xx: %s", resp.Status)
+			n.mu.Lock()
+			delete(n.last, key)
+			n.mu.Unlock()
 		}
 	}()
 }

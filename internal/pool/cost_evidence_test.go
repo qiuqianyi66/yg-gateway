@@ -152,3 +152,34 @@ func TestEwmaDisabledNoProvenance(t *testing.T) {
 		t.Errorf("EWMA 未开启时不该输出 provenance，got %+v", st.EwmaProvenance)
 	}
 }
+
+// TestStatusCoolingIncludesDegrade P2-4：连败降权（degradeUntil）期间 /status 的
+// Cooling 必须为 true 且 CoolKind="degrade"——此前漏算第三截止，降权号在面板上
+// 显示"不冷却"，与 healthy() 三截止或门的实际口径不一致。
+//
+// 牙齿：把 state.go 的 degradeUntil 从 Cooling 或门拿掉 → 本测试 FAIL。
+func TestStatusCoolingIncludesDegrade(t *testing.T) {
+	p := New("")
+	p.Add(&auth.Auth{UID: "u1", AccessToken: "at", ExpiresAt: 9999999999})
+	for i := 0; i < defaultDegradeThreshold; i++ {
+		p.NoteFailures("u1")
+	}
+
+	st := statusOf(t, p, "u1")
+	if !st.Cooling {
+		t.Fatalf("degrade 期内 Cooling 应=true（此前漏算 degradeUntil）")
+	}
+	if st.CoolKind != "degrade" {
+		t.Errorf("CoolKind=%q want \"degrade\"", st.CoolKind)
+	}
+	if st.CoolRemaining <= 0 {
+		t.Errorf("CoolRemaining=%d 应>0", st.CoolRemaining)
+	}
+
+	// NoteSuccess 清降权后 Cooling 应回落 false。
+	p.NoteSuccess("u1")
+	st = statusOf(t, p, "u1")
+	if st.Cooling {
+		t.Errorf("NoteSuccess 清降权后 Cooling 应=false, got %+v", st)
+	}
+}

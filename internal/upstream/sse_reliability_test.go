@@ -160,6 +160,25 @@ func TestAggregateTotalTooLarge(t *testing.T) {
 	}
 }
 
+// TestAggregateReasoningAndArgsCountedInBudget P2-2 补丁：聚合上限必须同时覆盖
+// reasoning_content 与 tool_calls arguments——此前只量 content.Len()，一个不吐
+// content 的纯推理畸形流可以把网关内存吃到 16MiB 以上不报警。
+//
+// 牙齿：把 trackedAggregateBytes 改回只量 content → 本测试 FAIL（流被读完不报错）。
+func TestAggregateReasoningAndArgsCountedInBudget(t *testing.T) {
+	const per = 4096
+	chunk := strings.Repeat("r", per-96) // 每帧 reasoning_content 约 4KB
+	frames := maxAggregateBytes/(per-96) + 16
+	var sb strings.Builder
+	for i := 0; i < frames; i++ {
+		sb.WriteString("data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"" + chunk + "\"}}]}\n\n")
+	}
+	_, err := Aggregate(strings.NewReader(sb.String()))
+	if !IsFrameTooLarge(err) {
+		t.Fatalf("纯 reasoning 流超上限应报 errFrameTooLarge, got %v", err)
+	}
+}
+
 // TestStreamHintKeepAlivePings 开启心跳后，静默流中会收到 `: ping` 注释帧（F-706）。
 //
 // 牙齿：把心跳 goroutine 去掉 → 本测试 FAIL（等不到 ping）。

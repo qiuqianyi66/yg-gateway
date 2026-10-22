@@ -260,6 +260,10 @@ func (u *Upstash) LoadBinds() map[string]string {
 		}
 		out[strings.TrimPrefix(key, bindPrefix)] = v
 	}
+	if err := iter.Err(); err != nil {
+		// SCAN 中途出错返回部分映射：如实 WARN（R10 不静默），启动恢复不阻断。
+		log.Printf("WARN: [redisstore] LoadBinds scan error (partial result): %v", err)
+	}
 	return out
 }
 

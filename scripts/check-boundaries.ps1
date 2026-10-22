@@ -58,9 +58,11 @@ $allow = @{
     # 纯叶子：无 internal 依赖
     'usage'      = @()
     'reqlog'     = @()
-    'alerting'   = @()
     'metrics'    = @()
     'logfmt'     = @()
+    # 告警外发：webhook body 需按 R2 口径截断完整 UID → 依赖 logfmt（纯脱敏 helper 叶子包）。
+    # 2026-10-22 体检 C-2 引入，-Fix 实测生成；无反向依赖风险。
+    'alerting'   = @('logfmt')
     'httpauth'   = @()
     'prompt'     = @()
     'redisstore' = @()

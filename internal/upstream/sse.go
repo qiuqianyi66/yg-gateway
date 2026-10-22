@@ -124,6 +124,21 @@ func Aggregate(r io.Reader) (map[string]any, error) {
 		// 供缺 index 时按 id 归位既有调用（见 mergeToolCallsChunk 注释）。
 		idIndex = map[string]int{}
 	)
+	// trackedAggregateBytes 计入聚合上限的流内体量：content + reasoning + 全部
+	// tool_calls arguments 拼接总长。此前只量 content——推理链（reasoning_content）
+	// 与工具参数（function.arguments 逐片拼接）是另两条无界增长路径，F-705 的 16MiB
+	// 上限必须对三者同时成立，否则一个不吐 content 的畸形流可以把网关吃满。
+	trackedAggregateBytes := func() int64 {
+		n := int64(content.Len()) + int64(reasoning.Len())
+		for _, tc := range toolCalls {
+			if fn, ok := tc["function"].(map[string]any); ok {
+				if args, ok := fn["arguments"].(string); ok {
+					n += int64(len(args))
+				}
+			}
+		}
+		return n
+	}
 	// appendContent 是「已取到正文」（gotAnyContent latch）的唯一写入点：delta 与
 	// message 两路 content 都必须经此并入，规约只有一份（issue #142）——
 	//   S1 空串不算「已取到正文」、不占 latch 名额：OpenAI 风格 role-only 首帧
@@ -225,7 +240,7 @@ func Aggregate(r io.Reader) (map[string]any, error) {
 				return nil, err
 			}
 		}
-		if int64(content.Len()) > maxAggregateBytes {
+		if trackedAggregateBytes() > maxAggregateBytes {
 			return nil, errFrameTooLarge
 		}
 		line = strings.TrimRight(line, "\r\n")

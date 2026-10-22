@@ -616,7 +616,10 @@ func (p *Pool) statusOf(uid string, e *entry) Status {
 		CreditsExpiring:          e.creditsExpiring,
 		CreditsEarliestExpiry:    e.creditsEarliestExpiry,
 		CreditsEarliestRemaining: e.creditsEarliestRemaining,
-		Cooling:                  now.Before(e.until) || now.Before(e.breakerUntil),
+		// Cooling 三截止或门：until（软/硬冷却）、breakerUntil（熔断）、degradeUntil（连败降权）。
+		// degradeUntil 此前漏算——账号在降权期内 /status 显示"不冷却"，与面板观感和
+		// healthy() 实际口径（entry.go:427 三截止任一未到期即不可选）不一致。
+		Cooling:                  now.Before(e.until) || now.Before(e.breakerUntil) || now.Before(e.degradeUntil),
 		Reason:                   e.reason,
 		Disabled:                 e.disabled,
 		Paused:                   e.paused,
@@ -683,6 +686,12 @@ func (p *Pool) statusOf(uid string, e *entry) Status {
 			if r := int64(time.Until(e.breakerUntil).Seconds() + 0.999); r > remaining {
 				remaining = r
 				st.CoolKind = "breaker"
+			}
+		}
+		if now.Before(e.degradeUntil) {
+			if r := int64(time.Until(e.degradeUntil).Seconds() + 0.999); r > remaining {
+				remaining = r
+				st.CoolKind = "degrade"
 			}
 		}
 		st.CoolRemaining = remaining

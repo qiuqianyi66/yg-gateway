@@ -558,6 +558,54 @@ func TestFRSLoadBindsEmptyScanReturnsEmptyMap(t *testing.T) {
 	frsNoCmd(t, s, "GET")
 }
 
+// TestFRSLoadBindsScanMidErrorReturnsPartial F-01：SCAN 中途出错（首页正常、次页报错）
+// 必须返回**部分映射**且不 panic / 不阻断启动恢复；iter.Err() 由 LoadBinds 末尾判
+// WARN（日志在此测试不抓，行为断言落在「部分结果仍可用」）。
+//
+// 牙齿：把 LoadBinds 末尾的 iter.Err() 检查去掉（退回 R10 静默吞）→ 本测试仍过；
+// 该检查是 R10 纪律项，由 review 兜底。本测试钉住的是「出错后不中断、不 panic」契约。
+func TestFRSLoadBindsScanMidErrorReturnsPartial(t *testing.T) {
+	s := frsStart(t, func(args []string) string {
+		if len(args) == 0 {
+			return frsErr("empty command")
+		}
+		switch strings.ToUpper(args[0]) {
+		case "SCAN":
+			if args[1] == "0" {
+				// 首页正常：带游标 5 + 一个键。
+				return frsArray(frsBulk("5"), frsArray(frsBulk("yg-gateway:bind:aaa")))
+			}
+			// 次页（游标 5）报错：连接中途断开。
+			return frsErr("connection reset mid-scan")
+		case "GET":
+			return frsBulk("u1")
+		}
+		return frsDefaultScript(args)
+	})
+	u := frsUpstash(t, s)
+
+	got := u.LoadBinds() // 不得 panic / 死锁
+	if len(got) != 1 || got["aaa"] != "u1" {
+		t.Fatalf("SCAN 中途出错应返回部分映射（首页已读到的键保留）, got %v", got)
+	}
+}
+
+// TestFRSLoadBindsScanImmediateErrorReturnsEmpty SCAN 开局即错 → 空映射、不 panic。
+func TestFRSLoadBindsScanImmediateErrorReturnsEmpty(t *testing.T) {
+	s := frsStart(t, func(args []string) string {
+		if len(args) > 0 && strings.ToUpper(args[0]) == "SCAN" {
+			return frsErr("master is down")
+		}
+		return frsDefaultScript(args)
+	})
+	u := frsUpstash(t, s)
+
+	got := u.LoadBinds()
+	if len(got) != 0 {
+		t.Fatalf("SCAN 开局即错时映射应为空, got %v", got)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // 关停语义：goWrite / Close / closeClient
 // ---------------------------------------------------------------------------

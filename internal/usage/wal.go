@@ -16,7 +16,8 @@ import (
 // 两段：日常 flush 只把**本轮脏桶**追加进 JSONL（append，小）；完整 usage.json 基线快照
 // 只在 Stop / Save / WAL 超过阈值时重写一次（写完截断 WAL）。
 //
-// 崩溃安全：WAL 追加即落盘（durable）；基线快照仍走 tmp+rename 原子替换。崩溃在任意时刻：
+// 崩溃安全：WAL 追加 flush 到 OS——进程崩溃可恢复；掉电 durability 不保证（无 fsync）。
+// 基线快照仍走 tmp+rename 原子替换。崩溃在任意时刻：
 // 旧基线 + WAL 未截断部分都还在，重启时「加载基线 → 回放 WAL」即可完整恢复。
 // 回放合并规则：计数字段单调非减，按**逐字段取大**合并（见 mergeBucketMax）——这同时消解了
 // 「旧版回滚后写基线、再升级 WAL 回放覆盖」的时序回退（max 不退化）。
@@ -50,36 +51,52 @@ type walRecord struct {
 	D string  `json:"d,omitempty"` // 删除桶键（折叠后源键；与 B/M 互斥）
 }
 
-// appendWAL 把一批记录追加进 WAL 文件（调用方持锁；写盘失败仅记日志——观测层，
-// 不阻断 Add；下一轮 flush 会补写同一批脏键）。
-func appendWAL(path string, recs []walRecord) {
+// appendWAL 把一批记录追加进 WAL 文件，返回 error（nil = 本批全部成功落盘）。
+// 失败语义（2026-10-22 修订）：调用方 flush 仅在成功时才消费本轮脏键集合；失败保留，
+// 下轮 flush 自动重发——recs 由集合重算，upsert 按桶全值覆盖、delete 幂等，重发无副作用；
+// 半途已写入的半截记录在重启回放时按 max 合并/先删后建，不重复计数。观测层，不阻断 Add。
+func appendWAL(path string, recs []walRecord) error {
 	if len(recs) == 0 {
-		return
+		return nil
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		log.Printf("[usage] WAL 建目录失败: %v", err)
-		return
+		return err
 	}
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
 		log.Printf("[usage] WAL 打开失败: %v", err)
-		return
+		return err
 	}
 	bw := bufio.NewWriter(f)
 	for i := range recs {
 		line, err := json.Marshal(&recs[i])
 		if err != nil {
-			continue
+			f.Close()
+			log.Printf("[usage] WAL 记录序列化失败: %v", err)
+			return err
 		}
-		bw.Write(line)
-		bw.WriteByte('\n')
+		if _, err := bw.Write(line); err != nil {
+			f.Close()
+			log.Printf("[usage] WAL 写入失败: %v", err)
+			return err
+		}
+		if err := bw.WriteByte('\n'); err != nil {
+			f.Close()
+			log.Printf("[usage] WAL 写入失败: %v", err)
+			return err
+		}
 	}
 	if err := bw.Flush(); err != nil {
+		f.Close()
 		log.Printf("[usage] WAL 刷写失败: %v", err)
+		return err
 	}
 	if err := f.Close(); err != nil {
 		log.Printf("[usage] WAL 关闭失败: %v", err)
+		return err
 	}
+	return nil
 }
 
 // truncateWAL 清空 WAL（基线快照写完后调用——此后基线已包含 WAL 全部内容）。
