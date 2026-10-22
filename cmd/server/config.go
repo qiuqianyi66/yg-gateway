@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -426,8 +427,13 @@ type APIKeyConfig struct {
 	// 已用量由 usage.Recorder 按 KeyID 累计（持久化跨重启），超限拒新请求。
 	MonthlyTokenQuota int64 `json:"monthly_token_quota"`
 	// Group 账号池分组标签（P1-B）：该 Key 只能用同 Group 的账号。空 = 不限池。
-	Group   string `json:"group"`
-	Enabled *bool  `json:"enabled"` // 启停开关：nil/true=启用；false=禁用（不进鉴权索引，但保留在 config 里）
+	Group string `json:"group"`
+	// AllowedCIDRs 该 Key 允许的来源 IP/CIDR 白名单（R-108）。
+	// 省略/nil = 不限（向后兼容，不是「未配置即拒绝」）；非空 = fail-closed，
+	// 来源 IP 不在名单内即拒。非法 CIDR 在 normalize 阶段 fail fast（禁止静默忽略）。
+	// 真实来源 IP 由 server 层复用受信代理 XFF 判定提取，本字段只声明允许范围。
+	AllowedCIDRs []string `json:"allowed_cidrs,omitempty"`
+	Enabled      *bool    `json:"enabled"` // 启停开关：nil/true=启用；false=禁用（不进鉴权索引，但保留在 config 里）
 }
 
 // Default 默认配置。
@@ -993,6 +999,25 @@ func (c *Config) normalizeAPIKeys() error {
 		seenKey[key] = id
 		if r := strings.ToLower(strings.TrimSpace(k.Realm)); r != "" && r != "cn" && r != "global" {
 			return fmt.Errorf("api_keys[%s]: realm %q 不是合法值（cn / global / 空）", id, k.Realm)
+		}
+		// R-108: 逐条校验来源 IP/CIDR 白名单。非法即 fail fast（对齐 realm 校验语义，
+		// 禁止静默忽略——配错名单却当成「不限」放行会绕过预期的网络隔离）。
+		// 空串条目视为未填写，剔除（与「空 key 条目忽略」同宽松度）；裸 IP 按 /32 接受。
+		// 四态纪律：输入 nil（键省略）保持 nil = 不限，不转成空切片（与 Models 的三态
+		// 区分一致地表达「省略 = 不配置」）。
+		if k.AllowedCIDRs != nil {
+			cidrs := make([]string, 0, len(k.AllowedCIDRs))
+			for i, raw := range k.AllowedCIDRs {
+				c := strings.TrimSpace(raw)
+				if c == "" {
+					continue
+				}
+				if _, _, err := net.ParseCIDR(c); err != nil && net.ParseIP(c) == nil {
+					return fmt.Errorf("api_keys[%s].allowed_cidrs[%d]: %q 不是合法 IP/CIDR", id, i, raw)
+				}
+				cidrs = append(cidrs, c)
+			}
+			k.AllowedCIDRs = cidrs
 		}
 		k.ID = id
 		k.Key = key
