@@ -143,7 +143,12 @@ research: 本轮三份调研（安全审计 / 前端效果 / 后端与路由）
 2. **`handler.go:838`** `if a, ok := h.cfg.Pool.Status(uid); ok && a.Realm != ""` —— 仅为取 realm，却走全池 `RLock` + `statusOf` 完整构造（含两次 sort）。
 3. **`handler.go:764`** `reqHasImage := hasImagePart(body)` —— 无条件调用，但只在 `hintContext`（错误路径）被用到。
 
-> 落地状态（2026-10-21 回填）：①②已在 commit `73911e4` 消除（reqlog 环形缓冲 `recentHead`；realm 改 `Pool.RealmOf(uid)`）；③本轮未见对应改动记录，状态 **unknown**（未核到落地证据，不等于未做）。
+> 落地状态（2026-10-22 复核回填）：①②③均已在 commit `73911e4` 消除——①reqlog 环形缓冲
+> `recentHead`；②realm 改 `Pool.RealmOf(uid)`（去全池 RLock + statusOf）；③带图探测改惰性
+> `imageProbe` 闭包（成功路径不解析，仅错误 hint 首次求值并缓存），后由 `ee0cd92` 方法化为
+> `chatRun.hasImage()`（`internal/server/chatrun.go:82-99`：`imageDone` 缓存，视图可用走
+> `hasImageView` 共用 messages 子树、否则回落 `hasImagePart`）。原 unknown 已消解为 observation
+> （`git log -S` 实证）。
 
 ### 已确认"做得好、不要动"（避免优化破坏既有正确性）
 
