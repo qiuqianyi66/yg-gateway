@@ -951,6 +951,9 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
           <button class="xs" id="btnBalanceAll" title="逐账号向上游查询余额并写回积分快照（重量级操作，会打上游）">刷新余额</button>
         </header>
         <div class="acc-grid" id="accBody"></div>
+        <div class="pad" style="padding-top:0">
+          <div class="hint" id="aclNoticeStatic">凭证文件（auths/*.json）由服务写回后自动收紧 ACL（仅当前用户 + SYSTEM）；收紧失败日志仅记 WARN 不阻断，可手动运行 <code>lock-auths.ps1</code>。</div>
+        </div>
       </div>
 
       <div class="box">
@@ -1100,6 +1103,7 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
           <button class="xs" id="btnUsage">刷新</button>
         </header>
         <div class="kpis" id="usStats"></div>
+        <div class="hint" id="savingsLine" style="margin:8px 14px 0" title="OpenRouter 公开参考价折算（inference），非上游账单实测">美元折算为估算值（inference），非上游账单实测；无模型定价时显示「未估算」。</div>
         <div class="pad">
           <div class="uschart">
             <div class="uschart-hd">
@@ -1719,6 +1723,7 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
         <div id="importDone" class="state ok" hidden></div>
         <div id="importErr" class="state err" hidden></div>
       </div>
+      <div class="hint" style="margin-top:10px">新增/导入的凭证落盘后由服务自动收紧 ACL（仅当前用户 + SYSTEM）；收紧失败仅记日志，可手动运行 <code>lock-auths.ps1</code> 复核。</div>
     </div>
     <footer>
       <span class="grow"></span>
@@ -1820,5 +1825,7 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
 </style>
 
 <script src="app.js"></script>
+<script src="acl_notice.js"></script>
+<script src="savings_note.js"></script>
 </body>
 </html>
