@@ -187,6 +187,19 @@ func (p *Panel) loginPoll(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"done": false, "message": "waiting for login"})
 		return
 	}
+	// check-and-delete 原子占位：拿到 token 即独占 state。并发 poll（双 Tab / 手点刷新）
+	// 时后来者在锁内看到 state 已被删 → 404，不会双双走完落盘 + Pool.Add + 签到
+	// （原 known 检查在 loginMu 外，两次并发 poll 会双双通过检查各自跑完）。
+	p.loginMu.Lock()
+	_, known = p.logins[state]
+	if known {
+		delete(p.logins, state)
+	}
+	p.loginMu.Unlock()
+	if !known {
+		writeErr(w, http.StatusNotFound, "unknown or expired state（请重新发起添加账号）")
+		return
+	}
 
 	// 完成：取 uid/nickname（失败不阻塞，仅缺展示名）。
 	var acct struct {
@@ -276,9 +289,7 @@ func (p *Panel) loginPoll(w http.ResponseWriter, r *http.Request) {
 		p.cfg.Pool.ReenableIfCredits(acct.UID, rm, tt)
 	}
 
-	p.loginMu.Lock()
-	delete(p.logins, state)
-	p.loginMu.Unlock()
+	// state 已在拿到 token 时 check-and-delete 独占（上方），此处无需再删。
 	log.Printf("panel: 新账号已热加载 uid=%s nickname=%q realm=%s（免重启生效）", acct.UID, acct.Nickname, sess.realm)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"done":            true,

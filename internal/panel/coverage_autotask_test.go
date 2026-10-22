@@ -685,11 +685,12 @@ func TestPanelAutoTaskProgressText(t *testing.T) {
 	}
 }
 
-// 截断：短串原样、长串截到 n 字节并带省略号（避免上游长响应原样透给前端）。
+// 截断：短串原样、长串截到 n 字节上限（C-5 起复用 logfmt.Truncate：切点落多字节
+// 字符中间时回退 rune 边界，不带省略号；n<=0 返回空串）。
 func TestPanelAutoTaskTruncateStr(t *testing.T) {
 	caEqStr(t, truncateStr("short", 10), "short", "短串应原样返回")
 	caEqStr(t, truncateStr("0123456789", 10), "0123456789", "等长应原样返回")
-	caEqStr(t, truncateStr("0123456789abc", 10), "0123456789…", "超长应截断并加省略号")
+	caEqStr(t, truncateStr("0123456789abc", 10), "0123456789", "超长应截到 n 字节上限")
 	caEqStr(t, truncateStr("", 4), "", "空串原样")
 }
 

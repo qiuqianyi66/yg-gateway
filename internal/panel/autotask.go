@@ -312,11 +312,10 @@ func taskProgressText(t *upstream.Task) string {
 }
 
 // truncateStr 截断错误文本（避免把上游长响应原样透给前端）。
+// 复用 logfmt.Truncate：切点落在多字节字符中间时回退 rune 边界（中文上游错误
+// 响应按字节切会出半截序列非法 UTF-8）；n<=0 返回空串。
 func truncateStr(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	return s[:n] + "…"
+	return logfmt.Truncate(s, n)
 }
 
 // runAutoAll 对单账号依次执行所有可自动化任务，返回逐项结果。

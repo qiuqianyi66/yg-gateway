@@ -465,6 +465,12 @@ func latestArchiveForDay(dir, day string) string {
 	return best
 }
 
+// archiveDay 从归档文件名取日期段（"requests-2026-10-22[.N].jsonl" → "2026-10-22"）。
+// 调用处已用 HasPrefix/HasSuffix 守卫，切片偏移固定安全。
+func archiveDay(name string) string {
+	return name[len("requests-") : len("requests-")+len("2006-01-02")]
+}
+
 func nextArchivePath(dir, day string) string {
 	base := filepath.Join(dir, "requests-"+day)
 	path := base + ".jsonl"
@@ -562,6 +568,17 @@ func (w *archiveWriter) read(limit int, filter Filter) ([]Event, error) {
 	if err != nil {
 		return nil, err
 	}
+	// 文件级粗筛：归档文件名日期段 = 事件落盘日（writeEvent 按 e.Time 命名）。
+	// day < fromDay → 该文件全部事件时间早于 From；day > toDay → 全部晚于 To。
+	// 只跳过整文件读盘，行内 match 逻辑不动——结果集与逐文件全读完全一致。
+	// （此前 From/To 只在行内过滤生效，一次面板查询要 parse 整个归档目录。）
+	fromDay, toDay := "", ""
+	if !filter.From.IsZero() {
+		fromDay = filter.From.Format("2006-01-02")
+	}
+	if !filter.To.IsZero() {
+		toDay = filter.To.Format("2006-01-02")
+	}
 	// 文件读取顺序无关紧要：结果一律按事件时间排序。不能依赖归档文件的 mtime 还原时间
 	// 顺序——同一秒内连续轮转写出的多个文件 mtime 经常完全相同（Linux 文件时间戳粒度粗），
 	// os.ReadDir 的字典序又会把装着最早事件的基准文件 requests-<day>.jsonl 排在
@@ -571,6 +588,12 @@ func (w *archiveWriter) read(limit int, filter Filter) ([]Event, error) {
 		name := entry.Name()
 		if entry.IsDir() || !strings.HasPrefix(name, "requests-") || !strings.HasSuffix(name, ".jsonl") {
 			continue
+		}
+		if fromDay != "" && archiveDay(name) < fromDay {
+			continue // 整文件事件都早于 From，不读
+		}
+		if toDay != "" && archiveDay(name) > toDay {
+			continue // 整文件事件都晚于 To，不读
 		}
 		rows, err := readFile(filepath.Join(w.cfg.Dir, name), filter)
 		if err != nil {

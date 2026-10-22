@@ -350,3 +350,49 @@ func TestArchiveDefaultLimitAndMaxCap(t *testing.T) {
 		t.Fatalf("limit=100000 应夹到 %d, got %d", defaultReadMax, len(rows))
 	}
 }
+
+// TestReadArchiveDayRangeCoarseFilter 文件级粗筛（C-3）：跨三个自然日写事件后，
+// From/To 落在中间一天 → 结果集与逐文件全读完全一致。粗筛只按文件名日期段跳过
+// 整文件（< fromDay 或 > toDay），行内匹配逻辑不动——结果不许有任何差别。
+func TestReadArchiveDayRangeCoarseFilter(t *testing.T) {
+	dir := t.TempDir()
+	r := New(Config{Enabled: true, Dir: dir, MaxBytes: 1 << 20, RetentionDays: 30})
+	// 跨三个自然日：e0(day A)、e1(day B)、e2(day C)，避开边界小时。
+	base := time.Now().Add(-72 * time.Hour).Truncate(24 * time.Hour).Add(12 * time.Hour)
+	events := []Event{
+		{Time: base, RequestID: "day-a", Model: "m", Status: 200, OK: true, Outcome: OutcomeSuccess},
+		{Time: base.Add(24 * time.Hour), RequestID: "day-b", Model: "m", Status: 200, OK: true, Outcome: OutcomeSuccess},
+		{Time: base.Add(48 * time.Hour), RequestID: "day-c", Model: "m", Status: 200, OK: true, Outcome: OutcomeSuccess},
+	}
+	for _, e := range events {
+		r.Record(e)
+	}
+	r.Close()
+
+	// From=To=day B 的时间点：A 整文件 < fromDay 跳过，C 整文件 > toDay 跳过，只命中 B。
+	rows, err := r.ReadArchive(10, Filter{From: base.Add(24 * time.Hour), To: base.Add(24 * time.Hour)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].RequestID != "day-b" {
+		t.Fatalf("闭区间中点命中 = %+v, want [day-b]", rows)
+	}
+
+	// 仅 From=day B：A 被整文件跳过；C 的文件日 > fromDay 不跳，保留。
+	rows, err = r.ReadArchive(10, Filter{From: base.Add(24 * time.Hour)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 2 || rows[0].RequestID != "day-c" || rows[1].RequestID != "day-b" {
+		t.Fatalf("仅 From = %+v, want [day-c day-b]", rows)
+	}
+
+	// 仅 To=day B：C 被整文件跳过；A 的文件日 < toDay 不跳，保留。
+	rows, err = r.ReadArchive(10, Filter{To: base.Add(24 * time.Hour)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 2 || rows[0].RequestID != "day-b" || rows[1].RequestID != "day-a" {
+		t.Fatalf("仅 To = %+v, want [day-b day-a]", rows)
+	}
+}
