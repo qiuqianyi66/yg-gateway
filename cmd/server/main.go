@@ -646,8 +646,12 @@ func buildUSDPriceMap(in map[string]ModelPrice) map[string]usage.USDPrice {
 //   - pool.* → pool.SetBreaker/SetMaxInFlight/SetSoftRateMax/SetWeights/SetCostExploreInterval/SetPreferExpiring/SetCreditFloor/SetEwma
 //   - schedule.* → scheduler.Reconfigure/SetBalanceInterval/SetExpiringSoonWindow
 //
-// 需重启（涉及监听地址、HTTP client 超时、auth_dir 等装配期依赖）：
-//   - listen / auth_dir / state_file / upstream.* / upstash.* / session_sticky.*（TTL 类）
+// 需重启（监听地址、HTTP client 超时、auth_dir、告警器等装配期依赖）：完整清单
+// 以 restartRequiredFields 函数体为唯一真相，此处仅摘要——新增装配期字段必须两处同步，
+// 漏一处就是「面板显示已保存但不生效」的 R11 违例。摘要：
+//   - listen / auth_dir / state_file / upstash / upstream.timeout_* / upstream.user_agent
+//   - session_sticky.* / logging.request_archive_* / server.read_timeout / server.max_body_bytes
+//   - security.trusted_proxy / security.read_only_rate_limit / alerting.*
 //
 // 落盘用"先写 tmp 再 rename"原子替换，且优先保留磁盘上的原始 JSON 结构（只改
 // 面板表单覆盖到的键），避免把用户手写的注释性字段/未知键洗掉——这里直接整体
@@ -660,7 +664,9 @@ func saveConfig(raw []byte, path string, live *livecfg.Holder, p *pool.Pool, up 
 	}
 	var cur, incoming map[string]any
 	if err := json.Unmarshal(oldRaw, &cur); err != nil {
-		cur = map[string]any{}
+		// 磁盘配置已损坏时不许降级成空 map 继续——那样会把用户手写的未知键整体洗掉。
+		// 直接报错让用户先修文件（D-03）。
+		return nil, fmt.Errorf("当前配置文件已损坏（%v），请先修复后再保存", err)
 	}
 	if err := json.Unmarshal(raw, &incoming); err != nil {
 		return nil, fmt.Errorf("parse submitted config: %w", err)
@@ -948,6 +954,10 @@ func restartRequiredFields(c *Config) []string {
 	// 入站边界加固字段在装配期被固化进 handler（body 上限 / 受信任代理匹配器 /
 	// 限流器实例），无法热改。
 	out = append(out, "security.trusted_proxy", "security.read_only_rate_limit")
+	// alerting.* 同样是装配期字段：Notifier 在启动时构造（alerting.New），cfg 之后
+	// 不再读取——面板改完只落盘、不热生效，此前无任何重启提示（D-01，与 issue #102
+	// 附带发现 2 同类：告警是积分打穿的安全网，静默发旧地址比不告警更危险）。
+	out = append(out, "alerting.webhook_url", "alerting.min_credit_threshold", "alerting.consecutive_failures", "alerting.dedup_minutes")
 	return out
 }
 

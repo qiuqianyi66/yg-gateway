@@ -1100,7 +1100,7 @@ const chEnterpriseModelsBody = `{"code":0,"data":{"models":[` +
 const chV3ConfigBody = `{"code":0,"data":{"models":[` +
 	`{"id":"glm-5.2","name":"GLM-5.2","descriptionZh":"智谱旗舰","credits":"0.5","vendor":"zhipu",` +
 	`"tags":["推理"],"maxInputTokens":200000,"maxOutputTokens":8192,"maxAllowedSize":1048576,` +
-	`"isDefault":true,"supportsToolCall":true,"onlyReasoning":true,` +
+	`"isDefault":true,"supportsToolCall":true,"onlyReasoning":true,"supportsReasoning":true,` +
 	`"reasoning":{"effort":"high","summary":"auto","defaultEffort":"high",` +
 	`"supportedEfforts":["high","xhigh"],"canDisableThinking":true}}],` +
 	`"modelPromotions":[{"enabled":true,"priority":100,"modelIds":["glm-5.2"],` +

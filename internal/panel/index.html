@@ -1509,9 +1509,9 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
             <div class="hr"></div>
             <div class="switch"><span class="lb">出站请求指纹脱敏</span>
               <input type="checkbox" name="sanitize_blacklist_fingerprints"></div>
-            <div class="switch"><span class="lb">会话粘性路由</span>
+            <div class="switch"><span class="lb">会话粘性路由 <span class="hint">需重启</span></span>
               <input type="checkbox" name="session_sticky_enabled"></div>
-            <div class="switch"><span class="lb">内容派生会话键</span>
+            <div class="switch"><span class="lb">内容派生会话键 <span class="hint">需重启</span></span>
               <input type="checkbox" name="session_sticky_derive"></div>
             <div class="hint" style="margin-top:4px">关闭后只有客户端显式传 conversation_id / prompt_cache_key 才粘性；
               无会话标识的请求回落加权轮换。防止「固定 system + 短开场」把无关对话误判为同一会话、流量全钉在一个号上。</div>
@@ -1542,10 +1542,10 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
           <div class="pad">
             <label class="fld"><span class="lb">Webhook URL</span>
               <input name="alerting_webhook_url" type="text" placeholder="https://sctapi.ftqq.com/xxx.send 或飞书/TG bot webhook">
-              <span class="hint">账号余额告急 / 被禁用 / 会话失效时 POST JSON 到该地址；留空 = 不告警</span></label>
+              <span class="hint">账号余额告急 / 被禁用 / 会话失效时 POST JSON 到该地址；留空 = 不告警；改动需重启进程生效</span></label>
             <label class="fld"><span class="lb">余额告急阈值（积分）</span>
               <input name="alerting_min_credit_threshold" type="number" min="0" placeholder="0 = 关闭">
-              <span class="hint">账号积分低于该值时发告警；0 = 关闭该触发</span></label>
+              <span class="hint">账号积分低于该值时发告警；0 = 关闭该触发；改动需重启进程生效</span></label>
           </div>
         </div>
 

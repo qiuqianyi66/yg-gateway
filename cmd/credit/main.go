@@ -61,6 +61,16 @@ type authFile struct {
 	} `json:"account"`
 }
 
+// loadAuthFile 读单个 auth 文件。损坏/不可读时返回 broken=true，由调用方补一条
+// Error 行——不许静默跳过（否则总行数对不上目录文件数，D-04）。
+func loadAuthFile(path string) (af authFile, broken bool) {
+	raw, err := os.ReadFile(path)
+	if err != nil || json.Unmarshal(raw, &af) != nil {
+		return authFile{}, true
+	}
+	return af, false
+}
+
 type accountResult struct {
 	UID      string `json:"uid"`
 	Nickname string `json:"nickname"`
@@ -209,9 +219,11 @@ func main() {
 
 	accounts := make([]accountResult, 0, len(files))
 	for _, f := range files {
-		var af authFile
-		raw, err := os.ReadFile(f)
-		if err != nil || json.Unmarshal(raw, &af) != nil {
+		af, broken := loadAuthFile(f)
+		if broken {
+			// 损坏/不可读文件不能静默跳过：否则输出条数与 auths 目录文件数对不上，
+			// 把「配置写错」伪装成「这个账号不存在」（与 cmd/signin 的 LOAD_ERR 同口径）。
+			accounts = append(accounts, accountResult{Error: "unreadable/corrupt: " + filepath.Base(f)})
 			continue
 		}
 		res := accountResult{UID: af.Account.UID, Nickname: af.Account.Nickname}

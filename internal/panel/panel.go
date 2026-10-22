@@ -462,20 +462,19 @@ func (p *Panel) models(w http.ResponseWriter, r *http.Request) {
 // EffortListing（远端权威 ∪ 静态兜底表）——与 /v1/models 同一口径，两侧不再漂移。
 func panelModelEntry(realm string, mi upstream.ModelInfo, remoteEfforts []string, remoteDefault string, httpc *http.Client) map[string]any {
 	entry := map[string]any{
-		"id":                   realm + ":" + mi.ID,
-		"name":                 mi.Name,
-		"default_effort":       mi.DefaultEffort,
-		"supported_efforts":    mi.Efforts,
-		"can_disable_thinking": mi.CanDisableThinking,
-		"credits":              mi.Credits,
-		"description":          mi.Description,
-		"tags":                 mi.Tags,
-		"vendor":               mi.Vendor,
-		"is_default":           mi.IsDefault,
-		"supports_tool_call":   mi.SupportsToolCall,
-		"only_reasoning":       mi.OnlyReasoning,
-		"reasoning_effort":     mi.ReasoningEffort,
-		"reasoning_summary":    mi.ReasoningSummary,
+		"id":                 realm + ":" + mi.ID,
+		"name":               mi.Name,
+		"default_effort":     mi.DefaultEffort,
+		"supported_efforts":  mi.Efforts,
+		"credits":            mi.Credits,
+		"description":        mi.Description,
+		"tags":               mi.Tags,
+		"vendor":             mi.Vendor,
+		"is_default":         mi.IsDefault,
+		"supports_tool_call": mi.SupportsToolCall,
+		"only_reasoning":     mi.OnlyReasoning,
+		"reasoning_effort":   mi.ReasoningEffort,
+		"reasoning_summary":  mi.ReasoningSummary,
 	}
 	// 两个能力字段是**三值**，必须条件透出：nil（上游未声明 = 未知）要**省略**，
 	// 绝不能落成 false——否则前端 `m.supports_images === false` 会把未知模型当成
@@ -485,6 +484,13 @@ func panelModelEntry(realm string, mi upstream.ModelInfo, remoteEfforts []string
 	}
 	if mi.SupportsImages != nil {
 		entry["supports_images"] = *mi.SupportsImages
+	}
+	// can_disable_thinking 与 /v1/models 同口径：仅「推理能力已知 且 思考可关」时才透出
+	// true；其余（推理未知 / 显式不可关）一律省略字段。此前无条件 emit 会把未知落成
+	// false，前端 `!m.can_disable_thinking` 把思考档位未知的模型从 off 档筛选里藏掉
+	// （AGENTS.md：缺失=未知，不是"不支持"）。
+	if mi.SupportsReasoning != nil && mi.CanDisableThinking {
+		entry["can_disable_thinking"] = true
 	}
 	// 限时优惠（modelPromotions）：credits 是牌价，promo_* 是当前生效折扣
 	//（WorkBuddy 客户端显示的就是这个生效价）。前端据此显示「生效价+标签+划线牌价」。

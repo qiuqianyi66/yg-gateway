@@ -1061,7 +1061,7 @@ function mdMatch(m, f) {
   if (f.cap === 'reasoning' && m.supports_reasoning === false) return false;
   if (f.cap === 'default' && !m.is_default) return false;
   if (f.effort === 'off') {
-    if (!m.can_disable_thinking) return false;
+    if (m.can_disable_thinking === false) return false;
   } else if (f.effort && !(m.supported_efforts || []).includes(f.effort)) {
     return false;
   }
@@ -2257,7 +2257,7 @@ async function loadConfig() {
       const el = f.elements[name];
       if (!el) continue;
       const v = dig(cfgLoaded, path);
-      if (el.type === 'checkbox') el.checked = !!v;
+      if (el.type === 'checkbox') el.checked = el.name === 'session_sticky_derive' ? v !== false : !!v;
       else if (Array.isArray(v)) el.value = v.join(', ');
       else el.value = v == null ? '' : v;
     }

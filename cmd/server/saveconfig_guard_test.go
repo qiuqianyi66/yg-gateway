@@ -65,4 +65,56 @@ func TestSaveConfigRejectsBadInputWithoutWriting(t *testing.T) {
 			t.Error("校验失败不得改动原配置文件")
 		}
 	})
+
+	// D-03：磁盘上的配置文件本身已是坏 JSON 时，此前降级成空 map 继续合并——
+	// 一次保存就把用户手写的未知键整体洗掉。必须报错拒绝，且原文件不得被触碰。
+	t.Run("磁盘配置文件已损坏 → 报错且原样保留（不降级空 map 洗掉手写键）", func(t *testing.T) {
+		dir := t.TempDir()
+		broken := filepath.Join(dir, "config.json")
+		if err := os.WriteFile(broken, []byte(`{"api_key":"k", not-a-key`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := saveConfig([]byte(`{"listen":":1"}`), broken, nil, nil, nil, nil); err == nil {
+			t.Fatal("磁盘配置已损坏时必须报错（不得降级空 map 继续合并落盘）")
+		} else if !strings.Contains(err.Error(), "已损坏") {
+			t.Errorf("错误信息应提示配置已损坏，请先修复，got %v", err)
+		}
+		after, err := os.ReadFile(broken)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(after), "not-a-key") {
+			t.Error("损坏的原文件必须原样保留，不得被半截新配置覆盖")
+		}
+		if _, statErr := os.Stat(broken + ".tmp"); !os.IsNotExist(statErr) {
+			t.Error("失败路径不得残留 .tmp 文件")
+		}
+	})
+}
+
+// D-01：alerting.* 是装配期字段（Notifier 启动时构造后不再读取），必须出现在
+// restartRequiredFields 里——否则面板改告警地址「保存成功」却静默发旧地址，
+// 告警是积分打穿的安全网，这与 issue #102 附带发现 2 同类。
+func TestRestartRequiredFieldsIncludesAlerting(t *testing.T) {
+	cfg, err := ParseConfig([]byte(`{"api_key":"k"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := restartRequiredFields(cfg)
+	for _, want := range []string{
+		"alerting.webhook_url",
+		"alerting.min_credit_threshold",
+		"alerting.consecutive_failures",
+		"alerting.dedup_minutes",
+	} {
+		found := false
+		for _, g := range got {
+			if g == want {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("restartRequiredFields 缺 %q（面板改它将无重启提示）；清单=%v", want, got)
+		}
+	}
 }

@@ -438,7 +438,7 @@ process.stdout.write(JSON.stringify({
 		`"vision":["cn:glm-5.2","cn:hy3","cn:auto"],` +
 		`"reasoning":["cn:glm-5.2","cn:hy3","cn:auto"],` +
 		`"isDefault":["cn:auto"],` +
-		`"effortOff":["cn:glm-5.2"],` +
+		`"effortOff":["cn:glm-5.2","global:hy3","cn:auto"],` +
 		`"effortLow":["cn:hy3"],` +
 		`"free":["cn:hy3"],` +
 		`"promo":["cn:glm-5.2","cn:hy3"],` +
@@ -1013,6 +1013,56 @@ process.stdout.write(JSON.stringify([
 	const want = `[true,"",true,"",false,false,"secret"]`
 	if strings.TrimSpace(string(out)) != want {
 		t.Fatalf("collectConfig=%s want %s", strings.TrimSpace(string(out)), want)
+	}
+}
+
+// TestAppJSDeriveCheckboxDefaultOn session_sticky.derive 是 *bool 三态：后端缺省
+// （null/字段缺失）= 派生**开**（config.go normalize：nil = true）。此前回填用
+// 通用 `!!v`，null → unchecked，于是全新安装下面板显示「关」而运行时其实是开——
+// 用户为改任何别的字段点保存，derive 被显式写成 false，派生静默关闭（D-02）。
+//
+// 牙齿：把 loadConfig 里 derive 的特判删掉（退回通用 !!v）→ nullChecked=false，本测试 FAIL。
+func TestAppJSDeriveCheckboxDefaultOn(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node not installed; derive checkbox test skipped")
+	}
+	script := `const fs = require('fs');
+const vm = require('vm');
+const src = fs.readFileSync(process.argv[2], 'utf8');
+const idx = src.indexOf("el.name === 'session_sticky_derive'");
+if (idx < 0) throw new Error('derive 特判未找到（loadConfig 回填逻辑已漂移）');
+const lineStart = src.lastIndexOf('if (el.type === ', idx);
+const line = src.slice(lineStart, src.indexOf('\n', idx));
+const ctx = {};
+vm.createContext(ctx);
+vm.runInContext('this.fill = (el, v) => {' + line + '};', ctx);
+const cb = v => { const el = { type: 'checkbox', name: 'session_sticky_derive' }; ctx.fill(el, v); return el.checked; };
+const other = v => { const el = { type: 'checkbox', name: 'checkin_enabled' }; ctx.fill(el, v); return el.checked; };
+process.stdout.write(JSON.stringify({
+  nullChecked: cb(null),
+  undefinedChecked: cb(undefined),
+  explicitFalse: cb(false),
+  explicitTrue: cb(true),
+  otherNull: other(null),
+}));`
+	f, err := os.CreateTemp(t.TempDir(), "derive-cb-*.cjs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString(script); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	out, err := exec.Command(node, f.Name(), "app.js").Output()
+	if err != nil {
+		t.Fatalf("derive checkbox node test failed: %v\n%s", err, nodeDiag(err, out))
+	}
+	// null/缺失 = 后端默认开 → checked=true；显式 false → 关；显式 true → 开；
+	// 其他复选框不受特判影响（null → unchecked，与原行为一致）。
+	const want = `{"nullChecked":true,"undefinedChecked":true,"explicitFalse":false,"explicitTrue":true,"otherNull":false}`
+	if strings.TrimSpace(string(out)) != want {
+		t.Fatalf("derive checkbox fill=%s want %s", out, want)
 	}
 }
 
