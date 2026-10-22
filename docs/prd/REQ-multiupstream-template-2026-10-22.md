@@ -1,7 +1,7 @@
 # REQ：多上游接入模板（R-107，P2）
 
 > 状态：v1（2026-10-22）。已落地，见 `.harness/changes/2026-10-22-multiupstream-template/summary.md`。
-> ADR：`docs/adr/ADR-014-fallback-cascade.md`。
+> ADR：`docs/adr/ADR-015-fallback-cascade.md`。
 > 本文定位：需求 + 验收。边界纪律——**只做 OpenAI 兼容族接入模板，不做「接所有 provider」**。
 
 ---

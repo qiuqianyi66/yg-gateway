@@ -286,7 +286,7 @@ node --check internal/panel/app.js
 ## 路线图
 
 - 重置密钥时支持自定义新密钥（当前固定自动生成）
-- ~~更多上游接入（除 CodeBuddy 外的一键对接模板）~~ ✅ 已实现：`fallback.endpoints` 列表按序级联（OpenAI 兼容端点接入模板，见 ADR-014）
+- ~~更多上游接入（除 CodeBuddy 外的一键对接模板）~~ ✅ 已实现：`fallback.endpoints` 列表按序级联（OpenAI 兼容端点接入模板，见 ADR-015）
 - 面板多语言 / 主题完善
 
 （完整对比与演进路线见 [docs/COMPETITIVE-ANALYSIS.md](docs/COMPETITIVE-ANALYSIS.md)。）

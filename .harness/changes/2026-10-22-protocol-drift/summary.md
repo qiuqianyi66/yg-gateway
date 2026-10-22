@@ -2,7 +2,7 @@
 
 > 需求：`docs/prd/REQ-protocol-drift-2026-10-22.md`
 > 分级：L3（上游协议观测）
-> ADR：`docs/adr/ADR-013-protocol-drift-observer.md`
+> ADR：`docs/adr/ADR-014-protocol-drift-observer.md`
 
 ---
 

@@ -1,7 +1,7 @@
 # REQ：上游协议漂移观测预案（R-102，P1）
 
 > 状态：v1（2026-10-22）。观测层已落地，见 `.harness/changes/2026-10-22-protocol-drift/summary.md`。
-> ADR：`docs/adr/ADR-013-protocol-drift-observer.md`。
+> ADR：`docs/adr/ADR-014-protocol-drift-observer.md`。
 > 本文定位：需求 + 验收 + 后续判据。只做**观测层**——不改写出站报文（R8 红线）。
 
 ---

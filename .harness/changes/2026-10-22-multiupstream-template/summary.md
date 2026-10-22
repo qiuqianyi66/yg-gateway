@@ -2,7 +2,7 @@
 
 > 需求：`docs/prd/REQ-multiupstream-template-2026-10-22.md`
 > 分级：L2（业务逻辑 / 配置形态）+ L3（provider 接入模板）
-> ADR：`docs/adr/ADR-014-fallback-cascade.md`
+> ADR：`docs/adr/ADR-015-fallback-cascade.md`
 
 ---
 

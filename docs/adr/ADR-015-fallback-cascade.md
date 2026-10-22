@@ -1,4 +1,4 @@
-# ADR-014：fallback 单端点扩为列表级联的配置形态
+# ADR-015：fallback 单端点扩为列表级联的配置形态
 
 - 日期：2026-10-22
 - 关联：R-107（`docs/prd/REQ-multiupstream-template-2026-10-22.md`）
