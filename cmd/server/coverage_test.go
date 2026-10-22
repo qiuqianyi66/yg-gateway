@@ -1031,14 +1031,118 @@ func TestCmdServerBuildFallbackConfig(t *testing.T) {
 	if fb == nil {
 		t.Fatal("三要件齐备时必须启用备用级联")
 	}
-	if fb.BaseURL != "https://api.deepseek.com/v1" || fb.APIKey != "sk-x" || fb.TimeoutSeconds != 33 {
-		t.Fatalf("装配结果不符: %+v", fb)
+	if len(fb.Endpoints) != 1 {
+		t.Fatalf("单端点旧配置应合成 1 个级联端点，got %d", len(fb.Endpoints))
 	}
-	if len(fb.Models) != 2 || !fb.Models["deepseek-chat"] || !fb.Models["deepseek-reasoner"] {
-		t.Fatalf("模型白名单应是去重集合，got %#v", fb.Models)
+	ep := fb.Endpoints[0]
+	if ep.BaseURL != "https://api.deepseek.com/v1" || ep.APIKey != "sk-x" || ep.TimeoutSeconds != 33 {
+		t.Fatalf("装配结果不符: %+v", ep)
 	}
-	if fb.Models["deepseek-v4-pro"] {
+	if len(ep.Models) != 2 || !ep.Models["deepseek-chat"] || !ep.Models["deepseek-reasoner"] {
+		t.Fatalf("模型白名单应是去重集合，got %#v", ep.Models)
+	}
+	if ep.Models["deepseek-v4-pro"] {
 		t.Fatal("未配置的模型不得进白名单（否则 CodeBuddy 专属模型会被转发到备用源 404）")
+	}
+}
+
+// TestCmdServerBuildFallbackEndpointsList（R-107）：endpoints 列表配置优先于
+// 单端点旧字段；列表里空 base/key 的项被跳过；顺序即优先级。
+func TestCmdServerBuildFallbackEndpointsList(t *testing.T) {
+	body := `{"fallback":{"enabled":true,
+		"endpoints":[
+			{"base_url":"https://a.example/v1","api_key":"ka","models":["m1"],"timeout_seconds":11},
+			{"base_url":"","api_key":"kbad","models":["m1"]},
+			{"base_url":"https://b.example/v1","api_key":"kb","models":["m1","m2"]}
+		]}}`
+	c, err := ParseConfig([]byte(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fb := buildFallbackConfig(c)
+	if fb == nil || len(fb.Endpoints) != 2 {
+		t.Fatalf("列表应装配 2 个有效端点（空 base 的项被跳过），got %+v", fb)
+	}
+	if fb.Endpoints[0].BaseURL != "https://a.example/v1" || fb.Endpoints[0].APIKey != "ka" {
+		t.Fatalf("端点 1 装配错: %+v", fb.Endpoints[0])
+	}
+	if fb.Endpoints[0].TimeoutSeconds != 11 || !fb.Endpoints[0].Models["m1"] {
+		t.Fatalf("端点 1 字段错: %+v", fb.Endpoints[0])
+	}
+	if fb.Endpoints[1].BaseURL != "https://b.example/v1" || len(fb.Endpoints[1].Models) != 2 {
+		t.Fatalf("端点 2 装配错: %+v", fb.Endpoints[1])
+	}
+}
+
+// TestCmdServerRunDriftProbeEarlyExit：空池 + 已取消 ctx → 探测不报错、立即退出（R9）。
+func TestCmdServerRunDriftProbeEarlyExit(t *testing.T) {
+	p, err := newPool(filepath.Join(t.TempDir(), "state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	mon := upstream.NewDriftMonitor("")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // 取消后首轮 probe 与 ticker 都立即退出，不挂起
+	runDriftProbe(ctx, nil, p, mon, time.Hour)
+	// 空池观测不到任何东西 → 状态保持 unknown。
+	if got := mon.Status().(map[string]any)["state"]; got != "unknown" {
+		t.Fatalf("空池探测后 state=%v want unknown", got)
+	}
+}
+
+// TestCmdServerBuildDriftMonitor（R-102）：未启用=nil；启用=装配观测器；快照损坏不阻断。
+func TestCmdServerBuildDriftMonitor(t *testing.T) {
+	if mon := buildDriftMonitor(Default()); mon != nil {
+		t.Fatal("默认 drift.enabled=false 应返回 nil")
+	}
+	dir := t.TempDir()
+	c := Default()
+	c.Drift.Enabled = true
+	c.StateFile = filepath.Join(dir, "state.json")
+	mon := buildDriftMonitor(c)
+	if mon == nil {
+		t.Fatal("启用后应返回观测器")
+	}
+	// 快照缺失 = unknown（不报错）。
+	if got := mon.Status().(map[string]any)["state"]; got != "unknown" {
+		t.Fatalf("缺失快照 state=%v want unknown", got)
+	}
+	// 快照损坏：Load 报错 → WARN 但观测器仍返回（不阻断启动），回 unknown 重新播种。
+	bad := Default()
+	bad.Drift.Enabled = true
+	bad.Drift.SnapshotPath = filepath.Join(dir, "bad-snapshot.json")
+	os.WriteFile(bad.Drift.SnapshotPath, []byte("{not json"), 0o644)
+	mon2 := buildDriftMonitor(bad)
+	if mon2 == nil {
+		t.Fatal("快照损坏不应阻断装配")
+	}
+	if got := mon2.Status().(map[string]any)["state"]; got != "unknown" {
+		t.Fatalf("损坏快照 state=%v want unknown（重新播种）", got)
+	}
+}
+
+// TestCmdServerDriftProbeOnceSeeds（R-102）：池里有可用号 + 假 fetch 返回 60 条目录
+// → 观测器播种快照并落盘。
+func TestCmdServerDriftProbeOnceSeeds(t *testing.T) {
+	p, err := newPool(filepath.Join(t.TempDir(), "state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.Add(&auth.Auth{UID: "u1", AccessToken: "at"})
+	// 替换可测接缝：假目录 60 条成功。
+	orig := driftCatalogFetch
+	driftCatalogFetch = func(c *upstream.Client, a *auth.Auth) (int, error) { return 60, nil }
+	defer func() { driftCatalogFetch = orig }()
+
+	snap := filepath.Join(t.TempDir(), "snap.json")
+	mon := upstream.NewDriftMonitor(snap)
+	driftProbeOnce(nil, p, mon)
+	st := mon.Status().(map[string]any)
+	if st["state"] != "ok" {
+		t.Fatalf("成功探测后 state=%v want ok", st["state"])
+	}
+	if _, err := os.Stat(snap); err != nil {
+		t.Fatalf("快照未落盘: %v", err)
 	}
 }
 

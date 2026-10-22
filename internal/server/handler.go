@@ -127,16 +127,36 @@ type Config struct {
 	Alerting *alerting.Notifier
 
 	// Fallback 备用上游级联（P2，可选；nil = 关闭）。
-	// CodeBuddy 选号全失败时，把请求原样转发到独立 OpenAI 兼容端点。
+	// CodeBuddy 选号全失败时，把请求按 endpoints 顺序转发到独立 OpenAI 兼容端点。
 	Fallback *FallbackConfig
+
+	// Drift 协议漂移观测层（P1，可选；nil = 不观测）。
+	// /status 暴露其状态视图；观测 goroutine 在 main 侧启动。
+	Drift *upstream.DriftMonitor
 }
 
-// FallbackConfig 备用上游级联配置（P2）。
-type FallbackConfig struct {
+// FallbackEndpoint 单个 OpenAI 兼容备用端点（R-107 接入模板）。
+type FallbackEndpoint struct {
 	BaseURL        string
 	APIKey         string
 	Models         map[string]bool // 白名单（set）
 	TimeoutSeconds int
+}
+
+// FallbackConfig 备用上游级联配置（P2）。Endpoints 按序级联。
+type FallbackConfig struct {
+	Endpoints []FallbackEndpoint
+}
+
+// Covers 任一已知端点的白名单是否覆盖该模型。触发判定与级联转发用同一口径，
+// 避免「触发时命中、转发时漏判」的分裂。
+func (fc *FallbackConfig) Covers(model string) bool {
+	for i := range fc.Endpoints {
+		if fc.Endpoints[i].Models[model] {
+			return true
+		}
+	}
+	return false
 }
 
 // loadLive 返回当前运行期快照；Live 为 nil 时用静态字段合成。
@@ -559,6 +579,13 @@ func (h *Handler) status(w http.ResponseWriter, r *http.Request) {
 		body["task_metrics"] = tm
 	}
 
+	// protocol_drift 上游协议漂移观测（R-102）：模块未启用（Drift=nil）时整体省略
+	// 该键——键缺失 = 未观测（四态 unknown 的外层表达），不是「无漂移」。模块启用后，
+	// 观测器内部再区分 unknown（未播种）/ ok / drift：禁止用键省略当「无漂移」读。
+	if h.cfg.Drift != nil {
+		body["protocol_drift"] = h.cfg.Drift.Status()
+	}
+
 	writeJSON(w, http.StatusOK, body)
 }
 
@@ -693,7 +720,7 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	// P2 fallback：CodeBuddy 账号池全挂（选号耗尽 + 轮转失败）时，
 	// 若请求模型在备用源白名单里，把请求原样转发到备用 OpenAI 兼容端点。
 	// 转发成功（非错误响应）就直接 return，不走下面的错误构造。
-	if h.cfg.Fallback != nil && h.cfg.Fallback.Models[bareModel] {
+	if h.cfg.Fallback != nil && h.cfg.Fallback.Covers(bareModel) {
 		if h.fallbackForward(w, r, run.body, bareModel) {
 			st.status = http.StatusOK
 			st.outcome = reqlog.OutcomeSuccess
@@ -898,34 +925,47 @@ func newFlushWriter(w http.ResponseWriter) *flushWriter {
 
 // fallbackForward 把请求体原样转发到备用 OpenAI 兼容端点（P2）。
 // 返回 true = 转发成功（已写响应）；false = 转发失败（调用方继续走错误路径）。
+// fallbackForward 备用上游按序级联转发（R-107）：按 Endpoints 配置顺序逐个尝试，
+// 第一个「白名单覆盖该模型 + 转发成功」的端点终结请求；全部失败返回 false 走末端错误。
+// 顺序即优先级——列表靠前的端点优先消耗。
 func (h *Handler) fallbackForward(w http.ResponseWriter, r *http.Request, body []byte, model string) bool {
 	fc := h.cfg.Fallback
-	if fc == nil || fc.BaseURL == "" || fc.APIKey == "" {
+	if fc == nil {
 		return false
 	}
-	timeout := time.Duration(fc.TimeoutSeconds) * time.Second
+	for i := range fc.Endpoints {
+		ep := fc.Endpoints[i]
+		if !ep.Models[model] {
+			continue
+		}
+		if h.forwardToOne(w, r, body, model, ep) {
+			return true
+		}
+		// 本端点没走完：继续下一个端点（级联语义）。
+	}
+	return false
+}
+
+// forwardToOne 把请求转发到单个备用端点并透传响应。
+// 返回 true = 已写出完整响应（调用方可终结请求）；false = 未成功（连接失败/读不完整，
+// 由调用方继续级联或走末端错误——R10 不静默吞）。
+func (h *Handler) forwardToOne(w http.ResponseWriter, r *http.Request, body []byte, model string, ep FallbackEndpoint) bool {
+	compat := upstream.OpenAICompatEndpoint{BaseURL: ep.BaseURL, APIKey: ep.APIKey}
+	timeout := time.Duration(ep.TimeoutSeconds) * time.Second
 	if timeout <= 0 {
 		timeout = 120 * time.Second
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), timeout)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		strings.TrimRight(fc.BaseURL, "/")+"/chat/completions",
-		bytes.NewReader(body))
+	req, err := compat.NewChatRequest(ctx, bytes.NewReader(body), r.Header.Get("Accept"))
 	if err != nil {
 		return false
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+fc.APIKey)
-	// 透传 Accept（SSE 客户端会带 text/event-stream）
-	if acc := r.Header.Get("Accept"); acc != "" {
-		req.Header.Set("Accept", acc)
 	}
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		log.Printf("[fallback] 转发到备用源失败 model=%s err=%v", model, err)
+		log.Printf("[fallback] 转发到备用源失败 endpoint=%s model=%s err=%v", compat.BaseURL, model, err)
 		return false
 	}
 	defer resp.Body.Close()
@@ -944,11 +984,11 @@ func (h *Handler) fallbackForward(w http.ResponseWriter, r *http.Request, body [
 		n, cerr := io.Copy(fw, resp.Body)
 		if cerr != nil {
 			// 已写 header，不能再改状态码；但必须让调用方知道这次转发没走完。
-			log.Printf("[fallback] 备用源流式转发中断 model=%s status=%d bytes=%d err=%v",
-				model, resp.StatusCode, n, cerr)
+			log.Printf("[fallback] 备用源流式转发中断 endpoint=%s model=%s status=%d bytes=%d err=%v",
+				compat.BaseURL, model, resp.StatusCode, n, cerr)
 			return false
 		}
-		log.Printf("[fallback] 已转发(stream) model=%s status=%d bytes=%d", model, resp.StatusCode, n)
+		log.Printf("[fallback] 已转发(stream) endpoint=%s model=%s status=%d bytes=%d", compat.BaseURL, model, resp.StatusCode, n)
 		return true
 	}
 	// 非 stream：读全部 body → 解析 usage → 写回。
@@ -956,7 +996,7 @@ func (h *Handler) fallbackForward(w http.ResponseWriter, r *http.Request, body [
 	if err != nil {
 		// 同上：读不全不是成功。返回 false 让调用方走既有错误路径
 		// （返回值语义：true = 已写出完整响应）。
-		log.Printf("[fallback] 备用源响应读取失败 model=%s err=%v", model, err)
+		log.Printf("[fallback] 备用源响应读取失败 endpoint=%s model=%s err=%v", compat.BaseURL, model, err)
 		return false
 	}
 	// 200 才解析 usage（错误响应没有 usage 字段）。
@@ -981,7 +1021,7 @@ func (h *Handler) fallbackForward(w http.ResponseWriter, r *http.Request, body [
 		}
 	}
 	_, _ = w.Write(respBody)
-	log.Printf("[fallback] 已转发 model=%s status=%d", model, resp.StatusCode)
+	log.Printf("[fallback] 已转发 endpoint=%s model=%s status=%d", compat.BaseURL, model, resp.StatusCode)
 	return true
 }
 
