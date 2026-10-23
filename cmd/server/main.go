@@ -112,6 +112,21 @@ func buildFallbackConfig(cfg *Config) *server.FallbackConfig {
 	return &server.FallbackConfig{Endpoints: eps}
 }
 
+// configFileGenuinelyMissing 判定「config 文件本身不存在」。
+//
+// 不能只凭 Load 的错误：Load 里 normalizePrompt 等校验会读取 prompt.file 等附属
+// 文件，这些文件缺失同样返回 fs.ErrNotExist 包装错误；此时 config 文件其实是
+// 存在的，若走 auto-generate 分支会把正常配置整体丢弃成默认值（账号池清空、
+// api_key 丢失、面板全 0）。只有 os.Stat(configPath) 本身报告不存在，才属于
+// 首次运行、应自动生成推荐配置。
+func configFileGenuinelyMissing(configPath string, loadErr error) bool {
+	if !errors.Is(loadErr, fs.ErrNotExist) {
+		return false
+	}
+	_, statErr := os.Stat(configPath)
+	return statErr != nil && errors.Is(statErr, fs.ErrNotExist)
+}
+
 func main() {
 	cfgPath := flag.String("config", "config.json", "配置文件路径（默认当前目录 config.json；不存在时自动生成推荐配置）")
 	flag.Parse()
@@ -119,7 +134,9 @@ func main() {
 	cfg, err := Load(*cfgPath)
 	if err != nil {
 		// errors.Is 才能看穿 Load 里 fmt.Errorf("%w") 的包装；os.IsNotExist 不行。
-		if errors.Is(err, fs.ErrNotExist) {
+		// 注意：必须验证 config 文件本身缺失，不能只看错误类型——prompt.file 等
+		// 附属文件缺失同样报 ErrNotExist，误判会丢弃正常配置（2026-10-23 实弹）。
+		if configFileGenuinelyMissing(*cfgPath, err) {
 			// 首次运行：目录下没有配置 → 自动落一份推荐配置（含随机 api_key）再加载。
 			// 双击 exe / 裸跑 docker 即开，无需先手工复制样例。
 			if key, werr := WriteDefault(*cfgPath); werr == nil {
