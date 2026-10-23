@@ -45,3 +45,7 @@
 ## 怎么回滚
 
 `git revert <本提交>`。无数据迁移、无配置变更、无上游报文变更；WAL 格式零变化（记录结构未动）。
+
+---
+
+**提交说明（2026-10-23 补）**：本批次改动已随 764303a（组织层 alerting/redisstore 提交）进入 main——共享 index 并行竞态所致，commit 归属在 alerting/redisstore 消息下；代码与测试内容完整（git show --stat 764303a 可核 17 files），组织层审查报告已作第六节竞态标注。
