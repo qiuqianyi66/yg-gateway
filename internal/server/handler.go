@@ -266,6 +266,7 @@ func (h *Handler) notFound(w http.ResponseWriter, r *http.Request) {
 	// 已知路径 → 该路径允许的方法集合。
 	known := map[string]map[string]bool{
 		"/v1/chat/completions": {"POST": true},
+		"/v1/messages":         {"POST": true},
 		"/v1/models":           {"GET": true},
 		"/status":              {"GET": true},
 		"/metrics":             {"GET": true},
@@ -933,15 +934,24 @@ func (h *Handler) fallbackForward(w http.ResponseWriter, r *http.Request, body [
 	if fc == nil {
 		return false
 	}
+	// committed = 已对客户端写出响应头。一旦提交，本端点失败后禁止续写
+	// 下一端点——A 已写头/半截流，B 再 WriteHeader + 写体会把两个响应
+	// 拼成 A/B 混合的损坏流。连接失败（未写任何字节）时 committed 仍为
+	// false，级联语义保留。
+	committed := false
 	for i := range fc.Endpoints {
 		ep := fc.Endpoints[i]
 		if !ep.Models[model] {
 			continue
 		}
-		if h.forwardToOne(w, r, body, model, ep) {
+		if h.forwardToOne(w, r, body, model, ep, &committed) {
 			return true
 		}
-		// 本端点没走完：继续下一个端点（级联语义）。
+		if committed {
+			// 已提交响应头后失败：终止级联（见上注释）。
+			break
+		}
+		// 本端点没走完且未写头：继续下一个端点（级联语义）。
 	}
 	return false
 }
@@ -949,7 +959,12 @@ func (h *Handler) fallbackForward(w http.ResponseWriter, r *http.Request, body [
 // forwardToOne 把请求转发到单个备用端点并透传响应。
 // 返回 true = 已写出完整响应（调用方可终结请求）；false = 未成功（连接失败/读不完整，
 // 由调用方继续级联或走末端错误——R10 不静默吞）。
-func (h *Handler) forwardToOne(w http.ResponseWriter, r *http.Request, body []byte, model string, ep FallbackEndpoint) bool {
+// committed 非空时：入口若已提交则直接放弃；WriteHeader 后置位，告知调用方
+// 级联终止（不允许续写另一端点）。
+func (h *Handler) forwardToOne(w http.ResponseWriter, r *http.Request, body []byte, model string, ep FallbackEndpoint, committed *bool) bool {
+	if committed != nil && *committed {
+		return false
+	}
 	compat := upstream.OpenAICompatEndpoint{BaseURL: ep.BaseURL, APIKey: ep.APIKey}
 	timeout := time.Duration(ep.TimeoutSeconds) * time.Second
 	if timeout <= 0 {
@@ -958,12 +973,8 @@ func (h *Handler) forwardToOne(w http.ResponseWriter, r *http.Request, body []by
 	ctx, cancel := context.WithTimeout(r.Context(), timeout)
 	defer cancel()
 
-	req, err := compat.NewChatRequest(ctx, bytes.NewReader(body), r.Header.Get("Accept"))
-	if err != nil {
-		return false
-	}
-
-	resp, err := http.DefaultClient.Do(req)
+	// 出站请求收口在 upstream 适配器（R6）：组装 + 发出都在 OpenAICompatEndpoint。
+	resp, err := compat.Do(ctx, bytes.NewReader(body), r.Header.Get("Accept"))
 	if err != nil {
 		log.Printf("[fallback] 转发到备用源失败 endpoint=%s model=%s err=%v", compat.BaseURL, model, err)
 		return false
@@ -973,6 +984,9 @@ func (h *Handler) forwardToOne(w http.ResponseWriter, r *http.Request, body []by
 	// 透传状态码 + Content-Type。
 	w.Header().Set("Content-Type", resp.Header.Get("Content-Type"))
 	w.WriteHeader(resp.StatusCode)
+	if committed != nil {
+		*committed = true
+	}
 
 	// SSE stream 逐块 flush 透传（缓冲会破坏流式体验）；**不再静默吞掉 io.Copy
 	// 的错误**——R10 红线。此前 `_, _ = io.Copy(...)` 把「客户端断连 / 备用源半截流」

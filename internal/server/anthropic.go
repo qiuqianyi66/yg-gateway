@@ -3,6 +3,8 @@ package server
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -148,8 +150,22 @@ func transformOpenAIToAnthropic(o openAICompletionResp) anthropicResp {
 // stream=false：转换 body → 内存拦截 chatCompletions → 转换响应。
 // stream=true：逐 chunk 拦截 OpenAI SSE，实时转 Anthropic SSE 事件序列。
 func (h *Handler) anthropicMessages(w http.ResponseWriter, r *http.Request) {
-	body, err := io.ReadAll(r.Body)
+	// 入站 body 上限同 chatCompletions（F-001）：MaxBodyBytes>0 时 MaxBytesReader
+	// 截断，超限就地 413——此前裸 io.ReadAll 让 /v1/messages 绕过该 DoS 防护。
+	var body []byte
+	var err error
+	if h.cfg.MaxBodyBytes > 0 {
+		body, err = io.ReadAll(http.MaxBytesReader(w, r.Body, h.cfg.MaxBodyBytes))
+	} else {
+		body, err = io.ReadAll(r.Body)
+	}
 	if err != nil {
+		var mbe *http.MaxBytesError
+		if errors.As(err, &mbe) {
+			writeOpenAIError(w, http.StatusRequestEntityTooLarge, "request_too_large",
+				fmt.Sprintf("request body exceeds %d bytes", mbe.Limit))
+			return
+		}
 		writeOpenAIError(w, http.StatusBadRequest, "invalid_request", "read body: "+err.Error())
 		return
 	}
@@ -180,6 +196,14 @@ func (h *Handler) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 	h.chatCompletions(iw, internalReq)
 
 	if iw.status >= 400 {
+		// interceptWriter 把错误状态与错误信封都吞进了 buf（WriteHeader 不穿透、
+		// Write 只进 buf）——直接返回会让客户端拿到 200 空体。透传捕获的状态码
+		// 与错误信封原文，与 chatCompletions 的错误口径一致。
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(iw.status)
+		if _, werr := w.Write(buf.Bytes()); werr != nil {
+			// 客户端已断连：错误信封送不到，无补救动作。
+		}
 		return
 	}
 

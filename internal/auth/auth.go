@@ -320,7 +320,8 @@ func (a *Auth) SaveAtomic() error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if strings.TrimSpace(a.AccessToken) == "" {
-		return fmt.Errorf("save refused: empty accessToken (uid=%s)", a.UID)
+		// R2：错误串会随 error 链被调用方原样打日志——UID 只留前 8 位。
+		return fmt.Errorf("save refused: empty accessToken (uid=%s)", logfmt.UID8(a.UID))
 	}
 	if a.FilePath == "" {
 		return fmt.Errorf("no FilePath set")
@@ -395,6 +396,18 @@ func LoadDir(dir string) ([]*Auth, error) {
 // 为什么单列（ADR-010）：`pool.SyncToDir` 的对齐是破坏性的（删状态 + 落盘），而它的输入就是
 // 这份列表。只要有一个文件读不出/解析失败，这份列表就比真实账号少一个——照单剔除等于
 // 把那个账号的健康度观测永久删掉。有了 skipped，调用方可以退化成「只增不删」。
+
+// lockdownSkippedFile 对读不出/解析失败的凭证文件做 ACL 兜底收紧。
+//
+// 为什么 skipped 分支也要收紧：坏文件（半写/解析失败）仍是凭证文件，若继承了
+// 容器/目录的宽 ACL（BUILTIN\Users 可读），坏文件里残留的 token 片段就暴露在
+// 继承权限下。LockdownFile 幂等（icacls /grant:r），失败 WARN 不阻断启动——
+// 与正常文件的 F-101 兜底同策略。
+func lockdownSkippedFile(path string) {
+	if err := LockdownFile(path); err != nil {
+		log.Printf("WARN: [auth] 坏凭证文件 %s ACL 兜底收紧失败: %v", path, err)
+	}
+}
 func LoadDirReport(dir string) (auths []*Auth, skipped []string, err error) {
 	files, err := filepath.Glob(filepath.Join(dir, "workbuddy*.json"))
 	if err != nil {
@@ -411,12 +424,14 @@ func LoadDirReport(dir string) (auths []*Auth, skipped []string, err error) {
 			// 调用方（cmd/server → pool.SyncToDir）会按这份短列表做破坏性对齐，
 			// 一个静默跳过的文件就等于「这个账号被删了」——见过它的日志才能查。
 			log.Printf("WARN: [auth] 跳过无法读取的账号文件 %s: %v", f, err)
+			lockdownSkippedFile(f)
 			skipped = append(skipped, f)
 			continue
 		}
 		a, err := Parse(raw)
 		if err != nil {
 			log.Printf("WARN: [auth] 跳过无法解析的账号文件 %s: %v", f, err)
+			lockdownSkippedFile(f)
 			skipped = append(skipped, f)
 			continue
 		}

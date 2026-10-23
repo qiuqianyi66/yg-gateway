@@ -57,6 +57,7 @@ func TestMethodNotAllowedReturnsOpenAIEnvelope(t *testing.T) {
 		method, path, wantAllow string
 	}{
 		{"GET", "/v1/chat/completions", "POST"},
+		{"PUT", "/v1/messages", "POST"},
 		{"POST", "/v1/models", "GET"},
 		{"DELETE", "/healthz", "GET"},
 		{"PUT", "/status", "GET"},

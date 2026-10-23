@@ -45,3 +45,17 @@ func (e OpenAICompatEndpoint) NewChatRequest(ctx context.Context, body io.Reader
 	}
 	return req, nil
 }
+
+// Do 发起该端点的一次 chat/completions 请求（R-107 级联转发的出站收口）。
+//
+// 为什么 server 包不直接 http.DefaultClient.Do：R6 要求出站请求集中在
+// internal/upstream——备用端点的组装（URL/鉴权/Accept 透传）与实际发出
+// （Client.Do）都收敛在本模板里，server 的级联转发只做编排，不持有 HTTP 客户端。
+// 超时由调用方经 ctx 控制（ctx.WithTimeout）。
+func (e OpenAICompatEndpoint) Do(ctx context.Context, body io.Reader, accept string) (*http.Response, error) {
+	req, err := e.NewChatRequest(ctx, body, accept)
+	if err != nil {
+		return nil, err
+	}
+	return http.DefaultClient.Do(req)
+}
