@@ -88,7 +88,7 @@ rea 的原则，本项目采纳：
 | 位置 | 现状语义 | 必须标注 |
 |---|---|---|
 | `accounts[].model_costs` tier | **推断**（少量 credit 样本） | kind=inference + samples |
-| `accounts[].ewma_success` / `ewma_latency_ms` | **派生**（EWMA 平滑） | kind=derivation；样本不足时**保留数值**并标 kind=unknown + 样本数（ADR-007 取舍一：标注比隐藏诚实——最初"不输出数字"违反 ADR-005 透出契约被测试打回后有意反转） |
+| `accounts[].ewma_success` / `ewma_latency_ms` | **派生**（EWMA 平滑） | kind=derivation；样本不足保留数值+unknown（ADR-007） |
 | usage 的 USD 折算价 | **推断**（OpenRouter 公开价折算） | kind=inference |
 | `/status` latency 分位数 | **派生**（固定分桶**插值**估算，非精确值） | kind=derivation + limitations 说明 |
 | `/v1/models` `supported_efforts` 为空 | **未知**（精简目录未返回），**不是**"不支持" | kind=unknown |
