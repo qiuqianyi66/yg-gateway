@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -120,7 +121,25 @@ func packageRemainUsed(a resourcePackage) (remain, used, size int64) {
 	return remain, used, size
 }
 
+// fetchUserResource 按账号 realm 选定计费域后查询积分（main 的默认 fetch）。
 func fetchUserResource(af *authFile) (remain, used, size int64, packs int, err error) {
+	return fetchUserResourceAt(billingBaseFor(af), af, &http.Client{Timeout: 20 * time.Second})
+}
+
+// billingPathFor 按计费域选查询路径：global 域无 /v2 前缀（与
+// internal/upstream 的 billingMeterPaths 同口径）。独立函数以便单测。
+func billingPathFor(base string) string {
+	if base == billingBaseGlobal {
+		return "/billing/meter/get-user-resource"
+	}
+	return "/v2/billing/meter/get-user-resource"
+}
+
+// fetchUserResourceAt 向指定 base 域查询积分。base/HTTP 客户端参数化，供测试
+// 用 httptest 注入假上游（真实域名 + 硬编码 client 无法单测成功路径）。
+// 接口与聚合逻辑：POST {base}{path} billing/meter/get-user-resource，聚合所有
+// package 的 Cycle* 字段，TotalDosage 作 size 下限。
+func fetchUserResourceAt(base string, af *authFile, client *http.Client) (remain, used, size int64, packs int, err error) {
 	now := time.Now()
 	body, _ := json.Marshal(map[string]any{
 		"PageNumber":               1,
@@ -130,12 +149,7 @@ func fetchUserResource(af *authFile) (remain, used, size int64, packs int, err e
 		"PackageEndTimeRangeBegin": now.Format("2006-01-02 15:04:05"),
 		"PackageEndTimeRangeEnd":   now.Add(365 * 101 * 24 * time.Hour).Format("2006-01-02 15:04:05"),
 	})
-	base := billingBaseFor(af)
-	// global 域无 /v2 前缀（与 internal/upstream 的 billingMeterPaths 同口径）。
-	path := "/v2/billing/meter/get-user-resource"
-	if base == billingBaseGlobal {
-		path = "/billing/meter/get-user-resource"
-	}
+	path := billingPathFor(base)
 	req, err := http.NewRequest(http.MethodPost, base+path, bytes.NewReader(body))
 	if err != nil {
 		return 0, 0, 0, 0, err
@@ -153,7 +167,6 @@ func fetchUserResource(af *authFile) (remain, used, size int64, packs int, err e
 	if af.Auth.Domain != "" {
 		req.Header.Set("X-Domain", af.Auth.Domain)
 	}
-	client := &http.Client{Timeout: 20 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
 		return 0, 0, 0, 0, err
@@ -201,19 +214,21 @@ func fetchUserResource(af *authFile) (remain, used, size int64, packs int, err e
 	return remain, used, size, packs, nil
 }
 
-func main() {
-	pretty := len(os.Args) > 1 && os.Args[1] == "-pretty"
-	authDir := "./auths"
-	if v := os.Getenv("WB2A_AUTH_DIR"); v != "" {
-		authDir = v
-	}
+// fetchFn 单账号积分查询的注入点（run 的第三个参数，测试传假实现）。
+type fetchFn func(af *authFile) (remain, used, size int64, packs int, err error)
+
+// run 执行 credit 命令主体（main 的委托对象）。args/authDir/fetch/stdout/stderr
+// 全部参数化：main 传真实值，测试传临时目录 + 假 fetch + 缓冲捕获输出。
+// 返回进程退出码（0 = 正常；1 = 枚举 auths 失败）。
+func run(args []string, authDir string, fetch fetchFn, stdout, stderr io.Writer) int {
+	pretty := len(args) > 1 && args[1] == "-pretty"
 	// Glob 只在 pattern 非法时失败（如 authDir 含 '[' 等元字符）。静默吞掉会让命令
 	// 报「0 个账号」并以 0 退出——把「配置写错」伪装成「确实没有账号」，脚本据此
 	// 判断会把 0 积分当成事实（ERROR-HANDLING.md 判据④「影响计量」）。
 	files, err := filepath.Glob(filepath.Join(authDir, "workbuddy-*.json"))
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "credit: 枚举 auths 失败:", err)
-		os.Exit(1)
+		fmt.Fprintln(stderr, "credit: 枚举 auths 失败:", err)
+		return 1
 	}
 	sort.Strings(files)
 
@@ -232,7 +247,7 @@ func main() {
 			accounts = append(accounts, res)
 			continue
 		}
-		remain, used, size, packs, err := fetchUserResource(&af)
+		remain, used, size, packs, err := fetch(&af)
 		if err != nil {
 			res.Error = err.Error()
 		} else {
@@ -276,15 +291,27 @@ func main() {
 		"accounts": accounts,
 	}
 	if pretty {
-		printPretty(accounts, totalRemain, totalUsed, totalSize, okCount)
-		return
+		printPretty(stdout, accounts, totalRemain, totalUsed, totalSize, okCount)
+		return 0
 	}
 	raw, _ := json.Marshal(out)
-	fmt.Println(string(raw))
+	fmt.Fprintln(stdout, string(raw))
+	return 0
+}
+
+func main() {
+	authDir := "./auths"
+	if v := os.Getenv("WB2A_AUTH_DIR"); v != "" {
+		authDir = v
+	}
+	code := run(os.Args, authDir, fetchUserResource, os.Stdout, os.Stderr)
+	if code != 0 {
+		os.Exit(code)
+	}
 }
 
 // printPretty 人类可读日报：四行汇总，无账号明细。
-func printPretty(accounts []accountResult, totalRemain, totalUsed, totalSize int64, okCount int) {
+func printPretty(w io.Writer, accounts []accountResult, totalRemain, totalUsed, totalSize int64, okCount int) {
 	withBalance := 0
 	var failed []string
 	for _, a := range accounts {
@@ -303,11 +330,11 @@ func printPretty(accounts []accountResult, totalRemain, totalUsed, totalSize int
 	if totalSize > 0 {
 		pct = totalRemain * 100 / totalSize
 	}
-	fmt.Printf("📊 WorkBuddy 积分日报\n")
-	fmt.Printf("账号: %d/%d\n", withBalance, len(accounts))
-	fmt.Printf("总计: %d/%d\n", totalRemain, totalSize)
-	fmt.Printf("剩余: %d%%\n", pct)
+	fmt.Fprintf(w, "📊 WorkBuddy 积分日报\n")
+	fmt.Fprintf(w, "账号: %d/%d\n", withBalance, len(accounts))
+	fmt.Fprintf(w, "总计: %d/%d\n", totalRemain, totalSize)
+	fmt.Fprintf(w, "剩余: %d%%\n", pct)
 	for _, f := range failed {
-		fmt.Printf("⚠️ %s\n", f)
+		fmt.Fprintf(w, "⚠️ %s\n", f)
 	}
 }
