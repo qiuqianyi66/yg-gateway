@@ -112,6 +112,7 @@ func (n *Notifier) send(ev Event) {
 
 	bodyEv := ev
 	bodyEv.AccountUID = logfmt.UID8(ev.AccountUID)
+	// 忽略 err：Event 仅含 string/int64 字段，json.Marshal 必然成功，不影响后续 POST（判据④）。
 	body, _ := json.Marshal(bodyEv)
 	go func() {
 		resp, err := n.cli.Post(n.cfg.WebhookURL, "application/json", bytes.NewReader(body))

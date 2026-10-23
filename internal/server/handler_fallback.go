@@ -130,6 +130,7 @@ func (h *Handler) forwardToOne(w http.ResponseWriter, r *http.Request, body []by
 			}, true)
 		}
 	}
+	// 忽略：响应可能已部分写出，客户端断连后写失败无法补救或重试，不影响已提交状态（判据①）。
 	_, _ = w.Write(respBody)
 	log.Printf("[fallback] 已转发 endpoint=%s model=%s status=%d", compat.BaseURL, model, resp.StatusCode)
 	return true
