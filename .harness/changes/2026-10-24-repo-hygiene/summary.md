@@ -40,7 +40,7 @@
 
 | 类别 | 内容 | 严重度 |
 |---|---|---|
-| **明文凭证** | `image_edited.png` 内 `[REDACTED-KEY]-9f3a…a3c8`；经核对该 key **仍在 `D:\yg-gateway\config.json`**（生产实例 `api_keys[0]`） | **高** |
+| **明文凭证** | `image_edited.png` 内 `[REDACTED-KEY]`；经核对该 key **仍在 `D:\yg-gateway\config.json`**（生产实例 `api_keys[0]`） | **高** |
 | 真实账号昵称 | `.harness/changes/2026-10-18-b1b-panel-unknown-visual/*.png`、`docs/screenshots/*.png` 里出现 `<account>.`、`¢$口`、`w` 与账号 UUID 前 12 位 | 中 |
 | 用户名 / 机器名 | `<local>`、`<domain>\<user>`、`owner: maintainer`，散见 11 个 `.harness/changes/**` 与 `docs/PLAN-*.md` | 低 |
 
