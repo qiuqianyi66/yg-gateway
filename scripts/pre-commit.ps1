@@ -56,8 +56,27 @@ $ErrorActionPreference = 'Continue'
 $repoRoot = Split-Path -Parent $PSScriptRoot
 Set-Location $repoRoot
 
-$goExe = 'C:\Program Files\Go\bin\go.exe'
-if (-not (Test-Path $goExe)) { $goExe = 'go' }
+# go 工具链解析：候选逐个**实跑 version 验证**，首个可用者胜出。不能只 Test-Path——
+# 本机出现过 go.exe 在位但损坏（报「binary is trimmed」），文件存在性检查挡不住，必须执行一次。
+# YG_GO_EXE 提供用户级覆盖（setx 即可，无需管理员）；全部候选失败则退出码 2（自身失败，非门禁红）。
+function Resolve-GoExe {
+    $cands = @()
+    if ($env:YG_GO_EXE) { $cands += $env:YG_GO_EXE }
+    $cands += @('C:\Program Files\Go\bin\go.exe', 'go')
+    foreach ($c in $cands) {
+        if (-not $c) { continue }
+        $v = @()
+        try { $v = @(& $c version 2>$null) } catch { continue }
+        if ($LASTEXITCODE -eq 0 -and (($v -join ' ') -match '^go version')) { return $c }
+    }
+    return $null
+}
+$goExe = Resolve-GoExe
+if (-not $goExe) {
+    Write-Host '错误：没有可用的 go 工具链（YG_GO_EXE / C:\Program Files\Go\bin\go.exe / PATH go 均实跑验证失败）' -ForegroundColor Red
+    Write-Host '  修复：setx YG_GO_EXE <可用工具链的 go.exe 路径>（无需管理员），或重装 Go（≥ go.mod 要求版本）。' -ForegroundColor Red
+    exit 2
+}
 
 # 主机可执行文件探测：本机（Windows PowerShell 5.1）没有独立 pwsh；CI（ubuntu runner）
 # 只有 pwsh、没有 `powershell`。子脚本一律用它调起，别写死 `powershell`。

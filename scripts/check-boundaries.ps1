@@ -24,6 +24,27 @@ $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path -Parent $PSScriptRoot
 Set-Location $repoRoot
 
+# go 工具链解析：候选逐个**实跑 version 验证**（不能只 Test-Path——go.exe 可能损坏），
+# YG_GO_EXE 提供用户级覆盖；全部失败退出码 2（= 脚本自身执行失败）。
+function Resolve-GoExe {
+    $cands = @()
+    if ($env:YG_GO_EXE) { $cands += $env:YG_GO_EXE }
+    $cands += @('C:\Program Files\Go\bin\go.exe', 'go')
+    foreach ($c in $cands) {
+        if (-not $c) { continue }
+        $v = @()
+        try { $v = @(& $c version 2>$null) } catch { continue }
+        if ($LASTEXITCODE -eq 0 -and (($v -join ' ') -match '^go version')) { return $c }
+    }
+    return $null
+}
+$goExe = Resolve-GoExe
+if (-not $goExe) {
+    Write-Host '错误：没有可用的 go 工具链（YG_GO_EXE / C:\Program Files\Go\bin\go.exe / PATH go 均实跑验证失败）' -ForegroundColor Red
+    Write-Host '  修复：setx YG_GO_EXE <可用工具链的 go.exe 路径>（无需管理员），或重装 Go（≥ go.mod 要求版本）。' -ForegroundColor Red
+    exit 2
+}
+
 $module = 'yg-gateway'
 
 # ---------------------------------------------------------------------------
@@ -89,7 +110,7 @@ if (-not (Test-Path $tmplFile)) {
 }
 $tmpl = (Get-Content $tmplFile -Raw).Trim()
 
-$list = & go list -f $tmpl ./... 2>&1
+$list = & $goExe list -f $tmpl ./... 2>&1
 if ($LASTEXITCODE -ne 0) {
     Write-Host "go list 执行失败：" -ForegroundColor Red
     Write-Host ($list -join "`n")
