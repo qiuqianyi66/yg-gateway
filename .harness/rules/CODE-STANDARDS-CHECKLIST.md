@@ -139,7 +139,7 @@ _ = c.RefreshToken(a)
   > 规则比实践严 → 人学会忽略规则；改为与分级一致后，「L2/L3 缺 review.md」才是可指摘的具体缺失。
   > 配套动作：给当时唯一缺件的 L2 改动补了
   > `.harness/changes/2026-10-16-depth-tasks-4-6/review.md`。
-- 🟢 文档分层：先 `docs/prd/` 后 `docs/plans/`；ADR 三条件全满足才写。
+- 🟢 文档分层：先 `docs/prd/` 后 `docs/` 根的 `PLAN-*.md`；ADR 三条件全满足才写。
 
 ---
 

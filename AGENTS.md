@@ -142,7 +142,7 @@ Unknown 是**一等公民实体**，不是面板上的一个展示区：
   `GOPROXY=https://goproxy.cn,direct`，`CGO_ENABLED=0`
 - 构建：`go build -trimpath -ldflags="-s -w" -o yg-gateway.exe ./cmd/server`
 - 门禁（五项核心；完整清单见 `scripts/pre-commit.ps1`，本地与 CI 同源）：
-  - `go test ./...`（**23 包：20 ok + 3 no test files**）
+  - `go test ./...`（**23 包：21 ok + 2 no test files**）
   - `go vet ./...`
   - `gofmt -l ./cmd ./internal`（**必须无输出**；漂移已清零，新文件零容忍）
   - `powershell -NoProfile -File scripts/check-boundaries.ps1`（依赖方向，退出码非 0 即违规）
