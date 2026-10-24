@@ -58,10 +58,10 @@
 - **工具调用流式保真**：~~给 r8_golden 增加流式工具调用金样~~ → **2026-10-24 复核撤销**：
   流式还原已有 5 个针对性单测（TestAggregateToolCalls / TestStreamToolCallNameOnce /
   TestStreamToolCallParallelFragments 等，覆盖分片/并行/名称语义），金样边际价值低。
-- **结构化输出**：`response_format`/`json_schema` **2026-10-24 实测全仓 0 命中**
-  （grep internal/server + internal/upstream 生产代码）——客户端传了也被透传或丢弃，
-  依赖它的 agent 解析会拿到非预期形态。**L1 首个落地候选**（需先核实现有 body 改写
-  链路对它的处理，REQ 单独立项）。
+- **结构化输出**：`response_format` 生产代码无显式处理，但**2026-10-24 链路实测**：
+  出站 body 走 AST 级重组（payload.go），未删除的键原样保留——即 response_format
+  目前**被无意识透传**（无测试锚定；上游是否认它未知）。已立项
+  `docs/prd/REQ-structured-output-2026-10-24.md`（P1 锚定透传 + P2 上游实测）。
 - **长循环韧性**：agent 一轮几十次调用，429/402 的退避语义对「工具循环」要可预期
   （Retry-After 已有；补文档化 + 流式场景的中途断流恢复行为说明）。
 - **`/v1/responses`**（OpenAI 新 API）按需评估——Codex 客户端正在迁移。

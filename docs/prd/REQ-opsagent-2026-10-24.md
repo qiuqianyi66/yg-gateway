@@ -46,3 +46,13 @@ MVP 的「行动」只有两类白名单：①触发一次成本探索（pick �
 
 ① ADR：编排层位置（scheduler 内 vs 独立包）与节拍选择 → ② MVP 实现（默认 off）
 → ③ 真机观察一轮 → ④ 再评估是否开放第二类白名单动作。
+
+## 2026-10-24 MVP 落地后的实测发现（后续项登记）
+
+- **面板可见性缺口**：opsagent 登记的 unknown 条目只在 `/metrics` 的
+  `unknowns_open` 计数里可见（`pool.OpenUnknownCount` = registry 全量）；
+  面板按账号的 Unknowns 列表走 `unknownSeen`（`uid|model` cost 专用键，
+  `internal/pool/unknown.go:173`），**不含** opsagent 条目。完整可视化需动
+  `internal/panel/app.js`——该文件冻结在 `maxFrontendLines` 棘轮上限（4378 行），
+  加视图前必须先在别处瘦身。解锁顺序：app.js 减 ≥100 行（如抽公共渲染函数）→
+  面板加「全部未消解 unknown」视图（读 registry 全量，非按账号过滤）。

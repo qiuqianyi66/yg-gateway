@@ -69,6 +69,8 @@
 
 - [growth-package-split-2026-10-24](prd/REQ-growth-package-split-2026-10-24.md)：upstream 拆出
   growth 域子包——**立项待执行（等条件）**，耦合事实与候选方案已记录，解锁动作见文末。
+- [structured-output-2026-10-24](prd/REQ-structured-output-2026-10-24.md)：response_format
+  结构化输出——**P1 锚定透传已落地**（payload_passthrough_test.go）；P2 上游实测待真机一发。
 - [opsagent-2026-10-24](prd/REQ-opsagent-2026-10-24.md)：网关内置运维 agent——
   **MVP 已落地（2026-10-24，默认 off）**：观察-建议闭环 + unknown/evidence 复用 +
   动作白名单护栏（ADR-017）；后续阶段（面板集成 / cost-explore 白名单开放）见 REQ §解锁动作。
