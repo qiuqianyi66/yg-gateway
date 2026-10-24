@@ -55,9 +55,13 @@
 现有地基：Anthropic `/v1/messages` 适配、DeepSeek 工具标记还原 `tool_calls`、SSE 透传、
 粘性会话（agent 的多轮工具循环天然受益）、按模型延迟分位。
 缺口与动作（REQ 粒度）：
-- **工具调用流式保真**：agent 客户端对流中 `tool_calls` 增量最敏感；给 r8_golden 增加
-  流式工具调用金样（部分 JSON 参数块的还原/截断）。
-- **结构化输出**：`response_format: json_schema` 透传/校验策略（agent 依赖它解析）。
+- **工具调用流式保真**：~~给 r8_golden 增加流式工具调用金样~~ → **2026-10-24 复核撤销**：
+  流式还原已有 5 个针对性单测（TestAggregateToolCalls / TestStreamToolCallNameOnce /
+  TestStreamToolCallParallelFragments 等，覆盖分片/并行/名称语义），金样边际价值低。
+- **结构化输出**：`response_format`/`json_schema` **2026-10-24 实测全仓 0 命中**
+  （grep internal/server + internal/upstream 生产代码）——客户端传了也被透传或丢弃，
+  依赖它的 agent 解析会拿到非预期形态。**L1 首个落地候选**（需先核实现有 body 改写
+  链路对它的处理，REQ 单独立项）。
 - **长循环韧性**：agent 一轮几十次调用，429/402 的退避语义对「工具循环」要可预期
   （Retry-After 已有；补文档化 + 流式场景的中途断流恢复行为说明）。
 - **`/v1/responses`**（OpenAI 新 API）按需评估——Codex 客户端正在迁移。
