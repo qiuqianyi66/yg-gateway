@@ -75,3 +75,47 @@ git revert <本提交>     # 恢复跟踪（不会恢复公网历史，历史清
   只有「轮换 key」能真正解除风险。
 - `.harness/changes/**` 里的用户名字样**未处理**：删掉会掏空审计链（本项目对外承诺的
   可审计性），且重写 80+ 历史文件风险高于收益。属可接受的残留，明确记录在此。
+
+---
+
+# 第二轮处置（2026-10-24 17:xx 执行记录）
+
+## 已完成
+
+| # | 动作 | 证据 |
+|---|---|---|
+| 1 | **轮换泄露的 API key** | `D:\yg-gateway\config.json` 顶层 `api_key` 换新（备份 `config.json.bak-20261024-keyrotate`）；新值存 `D:\yg-gateway\NEW-API-KEY-20261024.txt`（ACL 仅本机用户可读）；实例重启 PID 39804（cmd 重定向启动，deploy-prod.ps1 同款） |
+| 2 | 切换提交邮箱 | `git config user.email qiuqianyi66@users.noreply.github.com`（local 作用域，只影响以后提交） |
+| 3 | 测试里的真实 uid 换假值 | `internal/panel/{coverage_handlers_test.go,security_test.go}`：`248890d9-…` → `11111111-2222-4333-8444-555555555555`；`go test ./internal/panel` ok |
+| 4 | 删除本地恢复副本 | `yg-gateway-FULL-BACKUP-20261024.bundle`（含旧历史）；被移除文档的本地原件仍在磁盘，仅 git 元数据不可恢复 |
+| 5 | 删除本地泄漏截图 | `image_edited.png` 已删（未被跟踪、无引用） |
+
+## 冒烟（换 key 后）
+
+| 项 | 结果 |
+|---|---|
+| `GET /healthz` | 200，`healthy:4/4`，`realm_servable.cn:true` |
+| `GET /v1/models`（新 key） | 200，21 个模型 |
+| `GET /v1/models`（旧 key） | **401**（证明轮换生效） |
+| `POST /v1/chat/completions`（非流式） | 200，usage in=208 / out=8 |
+| 同上（`stream:true`） | 200，11 个 SSE 事件 |
+
+## 按 R8 保留、未改动
+
+`internal/upstream/school.go:81` 的 `machineId` 与同 payload 的 `os/osVersion/arch/timezone` 属**上游协议数据**（AGENTS.md R8：改名有风控风险，一律拒绝并说明）。它是设备指纹字段，不是凭证；改为新 UUID 会让同一批账号的设备画像突变，对养号有实际风险。**保留原值**，记录在此。
+
+## 审查发现（本轮新增，已处理状态）
+
+| 发现 | 状态 |
+|---|---|
+| 提交身份邮箱 `3541864988@qq.com` 公开在每次提交里 | **已改**以后提交为 noreply；**历史作者仍含旧邮箱**，只能靠重写历史清（若最终删库重建可顺带 `--mailmap`） |
+| 测试夹具里的真实 uid | 已换假值 |
+| `school.go` machineId | 按 R8 保留 |
+| 仓库根 `image_edited.png` | 已删本地 + 已从 main/tag 历史移除 |
+| 旧 SHA 仍可取回该图 | **待 GitHub Support 清缓存**（工单已由用户提交） |
+
+## 待办
+
+1. GitHub Support 工单结果（清 unreachable objects + `refs/pull/1/head`）
+2. 本轮 commit **只在本地**，未推送（保持远端 HEAD = `b55ae8b`，与工单描述一致）；工单结束后推送
+3. 桌面 `yg-release-backup`（19MB，6 个 release 附件）待删库重建后重传，传完可删
