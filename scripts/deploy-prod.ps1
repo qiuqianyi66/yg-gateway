@@ -63,8 +63,21 @@ if (-not (Test-Path -LiteralPath $LogDir)) { New-Item -ItemType Directory -Force
 $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
 $dateStamp = Get-Date -Format 'yyyyMMdd'
 
-$goExe = 'C:\Program Files\Go\bin\go.exe'
-if (-not (Test-Path $goExe)) { $goExe = 'go' }
+# go 工具链解析：候选逐个**实跑 version 验证**（不能只 Test-Path——go.exe 可能损坏），
+# YG_GO_EXE 提供用户级覆盖。**惰性调用**：只在 -Build 分支里用（构建发生在停服之前，
+# 失败走退出码 1「未触碰生产」语义；非 -Build 部署不需要 go，解析失败不该拦住它）。
+function Resolve-GoExe {
+    $cands = @()
+    if ($env:YG_GO_EXE) { $cands += $env:YG_GO_EXE }
+    $cands += @('C:\Program Files\Go\bin\go.exe', 'go')
+    foreach ($c in $cands) {
+        if (-not $c) { continue }
+        $v = @()
+        try { $v = @(& $c version 2>$null) } catch { continue }
+        if ($LASTEXITCODE -eq 0 -and (($v -join ' ') -match '^go version')) { return $c }
+    }
+    return $null
+}
 
 # 报告一律落盘（即使脚本中途挂掉也能看到它走到了哪一步）——rehearsal 与人工排查都读它。
 $state = [ordered]@{
@@ -559,6 +572,15 @@ try {
             return
         }
         Write-Step ('-Build：go build → ' + $Exe)
+        $goExe = Resolve-GoExe
+        if (-not $goExe) {
+            Write-Bad '没有可用的 go 工具链（YG_GO_EXE / C:\Program Files\Go\bin\go.exe / PATH go 均实跑验证失败）'
+            Write-Step '生产**未被触碰**（构建在停服之前拦下）；修复：setx YG_GO_EXE 或重装 Go'
+            $state.stage = 'rejected-no-go-toolchain'
+            $state.error = 'no usable go toolchain'
+            $exitCode = 1
+            return
+        }
         $env:GOPROXY = 'https://goproxy.cn,direct'
         $env:CGO_ENABLED = '0'
         Push-Location $repoRoot
