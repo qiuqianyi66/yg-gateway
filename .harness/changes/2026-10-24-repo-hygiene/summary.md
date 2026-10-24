@@ -119,3 +119,41 @@ git revert <本提交>     # 恢复跟踪（不会恢复公网历史，历史清
 1. GitHub Support 工单结果（清 unreachable objects + `refs/pull/1/head`）
 2. 本轮 commit **只在本地**，未推送（保持远端 HEAD = `b55ae8b`，与工单描述一致）；工单结束后推送
 3. 桌面 `yg-release-backup`（19MB，6 个 release 附件）待删库重建后重传，传完可删
+---
+
+# 第三轮处置（2026-10-24 20:0x，删库重建后收尾）
+
+## 已完成
+
+| 动作 | 证据 |
+|---|---|
+| 删库 + 重建同名公开仓库 | 旧 SHA `0d56946` 现返回 `fatal: upload-pack: not our ref`；`refs/pull/*` 归零（包级对象缓存与 PR 引用随仓库 ID 消失） |
+| 推 main + tag v2.0.0 | `main` / `tags/v2.0.0` 就位，293 提交，历史图片对象 0 |
+| 恢复 Release v2.0.0 | 6 个附件全部 uploaded（含 checksums.txt） |
+| 提交作者邮箱全量重写 | `git filter-repo --mailmap`：`3***@qq.com` → `qiuqianyi66@users.noreply.github.com`，`git log --all --format=%an <%ae>` 现只剩 `qiuqianyi66 <…@users.noreply.github.com>` |
+| 仓库 GITHUB_TOKEN 默认权限 read → write | `GET /repos/…/actions/permissions/workflow` = `{"default_workflow_permissions":"write"}` |
+
+## 两个坑（都踩过，记下来省下一次）
+
+1. **`git add -A` 会把工具层状态文件带进库**：`.mimosa/hook-state/session_*.continue.json`（177 字节，无个人信息）混进了一笔提交。已 `git rm --cached` + `.gitignore` 加 `/.mimosa/` + amend + 强推。教训：提交前逐条看 `git status --short`，别只看 `git add -A` 的结果计数。
+2. **PowerShell 的 `Set-Content -Encoding utf8` 在 5.1 下写 BOM**：mailmap 文件首字节 BOM 被 filter-repo 当成作者名的一部分，产生 `﻿qiuqianyi66`（U+FEFF 前缀）。修法：`[System.IO.File]::WriteAllText(path, text, UTF8Encoding($false))`；已重写一次剥掉。
+
+## 未闭环：build-image 推 GHCR 被拒
+
+```
+ERROR: failed to push ghcr.io/qiuqianyi66/yg-gateway:main
+       denied: permission_denied: write_package
+```
+
+根因（已实测）：**容器包不随仓库删除而消失**。匿名探测 `ghcr.io/v2/qiuqianyi66/yg-gateway/tags/list` 仍返回约 100 个 tag（`main` / `latest` / `2.0.0` / `2.0` / 大量 `sha-*`），说明旧包还在；它由**旧仓库 ID** 建立，新仓库的 `GITHUB_TOKEN` 不在它的 Actions access 列表里，所以 `packages: write` 也无济于事（token 默认权限已改为 write，仍被拒 = 卡在包级 ACL，不在 token 级）。
+
+两条修法（都需要仓库所有者操作）：
+
+- 包设置里给新仓库授 Write：`https://github.com/users/qiuqianyi66/packages/container/yg-gateway/settings` → Manage Actions access → Add repository；
+- 或给 CLI `read:packages` + `delete:packages` 范围后删除旧包，下次推送自动新建一个绑定本仓库的包。
+
+影响面：`gate` / `test` / `race` / 五平台构建全部 success，只有 `build-image` 红，`publish` 因此 skipped（所以 v2.0.0 的附件是本次手工上传的备份产物，而非 CI 由 tag 构建）。README 无 CI 徽章，公开页面看不到红色。
+
+## 已知残留（低危，未处理）
+
+重写前的两笔已推提交（`5a156a5`、`58d6b46`）在新仓库里成为悬空对象，仍可**按已知 SHA** 取回，其 author 字段是改写前的旧邮箱。要彻底清掉需要**再删一次库重建**（3 分钟，流程已跑通）。当前暴露条件：必须知道确切的 40 位 SHA，`github.com` 界面不会展示这些提交。
