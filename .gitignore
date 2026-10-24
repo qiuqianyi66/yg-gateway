@@ -88,3 +88,5 @@ server.exe
 # 面板截图：画面含真实账号昵称与账号 UUID 片段（个人信息），不入库
 /docs/screenshots/panel-*.png
 /.harness/changes/2026-10-18-b1b-panel-unknown-visual/panel-unknowns-*.png
+# 工具层 hook 状态（mimosa）；内容无害但不该进库
+/.mimosa/
