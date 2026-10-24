@@ -69,8 +69,9 @@
 
 - [growth-package-split-2026-10-24](prd/REQ-growth-package-split-2026-10-24.md)：upstream 拆出
   growth 域子包——**立项待执行（等条件）**，耦合事实与候选方案已记录，解锁动作见文末。
-- [opsagent-2026-10-24](prd/REQ-opsagent-2026-10-24.md)：网关内置运维 agent——**立项待执行
-  （等条件）**，MVP=观察-建议（unknown/evidence 语义复用，动作白名单），ADR 定编排层位置后执行。
+- [opsagent-2026-10-24](prd/REQ-opsagent-2026-10-24.md)：网关内置运维 agent——
+  **MVP 已落地（2026-10-24，默认 off）**：观察-建议闭环 + unknown/evidence 复用 +
+  动作白名单护栏（ADR-017）；后续阶段（面板集成 / cost-explore 白名单开放）见 REQ §解锁动作。
 - **F-102** 新一轮安全审计结论：阻塞在外部输入。
 - **ROADMAP §9 记录在案（本期不做）**：面板多语言/主题、重置密钥自定义、redisstore 消费风格、
   全局开关隔离、其余 oversize 文件（sse/panel/config.go）拆分、Key-IP 白名单面板 UI。

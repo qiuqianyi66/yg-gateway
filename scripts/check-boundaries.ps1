@@ -63,6 +63,9 @@ $allow = @{
                    'pool','prompt','reqlog','session','upstream','usage')
     # 领域层：账号池依赖凭证、日志脱敏，以及 domain 层（四态标注 / 未知跟踪）
     'pool'     = @('auth','evidence','logfmt','unknown')
+    # 运维 agent（ADR-017）：只依赖 domain 层；pool/metrics 的观察面由 cmd/server
+    # 装配期闭包注入（依赖倒置），本包不直接 import 它们
+    'opsagent' = @('evidence','logfmt','unknown')
     # 出站适配层：依赖凭证、日志脱敏、会话键解析（实测）
     'upstream' = @('auth','logfmt','session')
     # 会话键派生：依赖 redisstore（粘性绑定持久化）（实测）

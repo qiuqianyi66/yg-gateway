@@ -20,7 +20,6 @@ import (
 	"syscall"
 	"time"
 
-	"yg-gateway/internal/alerting"
 	"yg-gateway/internal/auth"
 	"yg-gateway/internal/httpauth"
 	"yg-gateway/internal/livecfg"
@@ -429,6 +428,9 @@ func main() {
 	// /status 暴露状态；探测 goroutine 在校验循环外启动（下方）。
 	driftMon := buildDriftMonitor(cfg)
 
+	// 提升为变量：opsagent 的建议输出口复用同一实例（去重窗口一致）。
+	alertNotifier := newAlertNotifier(cfg)
+
 	h := server.NewHandler(server.Config{
 		Pool:     p,
 		Upstream: up,
@@ -469,11 +471,7 @@ func main() {
 			}
 		}(),
 		// 异常外发告警（P0-4）：webhook URL 空 = 不告警（零回归）。
-		Alerting: alerting.New(alerting.Config{
-			WebhookURL:         cfg.Alerting.WebhookURL,
-			MinCreditThreshold: cfg.Alerting.MinCreditThreshold,
-			DedupWindow:        time.Duration(cfg.Alerting.DedupMinutes) * time.Minute,
-		}),
+		Alerting: alertNotifier,
 		// 备用上游级联（P2）：enabled=false 或 base_url 空 = 不启用（零回归）。
 		Fallback: buildFallbackConfig(cfg),
 		// 协议漂移观测（R-102）：未启用 = nil（/status 省略该键 = 外层 unknown）。
@@ -484,6 +482,8 @@ func main() {
 	defer stop()
 	go sch.Run(ctx)
 	sch.StartBalanceRefresh(ctx, cfg.BalanceRefreshInterval)
+	// 运维 agent（REQ-opsagent-2026-10-24 / ADR-017）：enabled=false 时 no-op。
+	startOpsAgent(cfg.OpsAgent, p, unknownReg, alertNotifier, ctx)
 
 	// 启动即预热模型积分倍率表：倍率只在 FetchModels/FetchGlobalModelInfos 成功时
 	// 填充（两者均懒触发），重启后到首次 /v1/models 或面板模型页被访问之前，
