@@ -98,7 +98,7 @@ func TestAppScriptServed(t *testing.T) {
 // UID 白名单：拒绝路径穿越与异常字符，放行真实 UUID 形态。
 func TestValidUID(t *testing.T) {
 	ok := []string{
-		"248890d9-bb26-4131-87a7-4ec74d472344",
+		"11111111-2222-4333-8444-555555555555",
 		"abc_123-XYZ",
 		"a",
 	}

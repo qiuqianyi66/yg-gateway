@@ -1553,7 +1553,7 @@ func TestValidImportUIDBoundaries(t *testing.T) {
 		{"", false},
 		{"a", true},
 		{"abc_123-XYZ", true},
-		{"248890d9-bb26-4131-87a7-4ec74d472344", true},
+		{"11111111-2222-4333-8444-555555555555", true},
 		{"-", true},
 		{"a..b", false},                 // 点号不放行（路径穿越最小单位）
 		{"../evil", false},              // 相对路径
