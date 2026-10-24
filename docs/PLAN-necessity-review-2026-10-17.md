@@ -2,7 +2,7 @@
 name: plan-necessity-review-2026-10-17
 description: 阶段 0 必要性分析（2026-10-17）——对 docs/PLAN-open-items-2026-10-17.md 里的剩余事项逐项回答"要不要做"，给证据与结论（做 / 不做 / 等条件 / 降级做）。
 status: active
-owner: <user>
+owner: maintainer
 last_updated: 2026-10-17
 ---
 

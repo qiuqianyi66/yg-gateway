@@ -85,3 +85,6 @@ server.exe
 /yg-gateway_四维度审查收口_*.json
 # 产品研究与 PRD 草稿（私有策略材料，不随代码开源）
 /docs/research/
+# 面板截图：画面含真实账号昵称与账号 UUID 片段（个人信息），不入库
+/docs/screenshots/panel-*.png
+/.harness/changes/2026-10-18-b1b-panel-unknown-visual/panel-unknowns-*.png

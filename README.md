@@ -21,9 +21,10 @@ Claude Code 填两行配置即可接入，零改造。
 
 ## 界面速览
 
-| 账号池监控（余额 / 到期 / 今日用量） | API Key 管理（多 Key 派发 + 接入配置） |
-|---|---|
-| ![账号池](docs/screenshots/panel-accounts.png) | ![API Key](docs/screenshots/panel-keys.png) |
+面板是单页八视图（账号池 / 用量 / 积分构成 / 任务中心 / 模型与档位 / API Key / 配置 / 运行日志），
+经 `go:embed` 打进二进制，启动后访问 `http://127.0.0.1:7863/panel/` 即可。
+
+> 截图不随仓库分发：画面里会出现真实账号昵称与账号 UUID 片段，属个人信息。
 
 ## 为什么选 YG Gateway
 

@@ -2,7 +2,7 @@
 name: plan-open-items-2026-10-17
 description: yg-gateway 未完成 / 待优化事项统一规划（2026-10-17 实测复核）——逐条给证据、规模、级别，区分真未完成 / 待拍板 / 文档债 / 已决策不做 / 优化项。
 status: active
-owner: <user>
+owner: maintainer
 last_updated: 2026-10-17
 ---
 
