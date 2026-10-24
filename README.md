@@ -51,7 +51,7 @@ YG Gateway 走的是另一条路——四个它们普遍没做透的点：
     </td>
     <td align="center" width="50%">
       <b>📋 工程治理可审计</b><br/>
-      <code>.harness/</code> 十阶段流程 + 红线 + 变更追踪，每个改动可追溯；23 个 Go 包（20 个有测试，3 个 CLI 无）全绿，前端 node 断言回归
+      <code>.harness/</code> 十阶段流程 + 红线 + 变更追踪，每个改动可追溯；23 个 Go 包（21 个有测试，2 个 CLI 无）全绿，前端 node 断言回归
     </td>
   </tr>
 </table>
@@ -271,7 +271,7 @@ Server酱 / TG bot / 飞书自定义机器人直接接。
 ```bash
 go build ./...
 go vet ./...
-go test ./...        # 完整测试套件（20 包：17 有测试 + 3 个 CLI 无测试）
+go test ./...        # 完整测试套件（23 包：21 有测试 + 2 个 CLI 无测试）
 gofmt -l ./cmd ./internal
 node --check internal/panel/app.js
 ```

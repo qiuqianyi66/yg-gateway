@@ -1,12 +1,18 @@
 ---
 name: plan-open-items-2026-10-17
 description: yg-gateway 未完成 / 待优化事项统一规划（2026-10-17 实测复核）——逐条给证据、规模、级别，区分真未完成 / 待拍板 / 文档债 / 已决策不做 / 优化项。
-status: active
+status: closed
 owner: maintainer
-last_updated: 2026-10-17
+last_updated: 2026-10-24
 ---
 
 # yg-gateway 未完成与待优化事项规划（2026-10-17）
+
+> **2026-10-24 收口**：本文件的 A/B/C/D/O 系列已全部收口或裁定不做（收口记录见
+> `docs/PLAN-next-2026-10-18.md`）。**当前在册开放项**以这两处为准：
+> `docs/roadmap/ROADMAP-prd-v2-2026-10-22.md` §9（记录在案不做/待排期）+
+> `.harness/changes/2026-10-24-repo-hygiene/summary.md`（安全事件待办）。
+> 新会话请直接读那两处，本文保留作历史口径。
 
 > 本文件只谈**本仓库**。每条都附实测命令与现值，不转抄旧文档结论——旧文档里「未做」的
 > 结论至少有 3 条已被实测推翻（见 §3）。
