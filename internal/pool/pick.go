@@ -291,7 +291,7 @@ func (p *Pool) pick(tried map[string]bool, reqModel, realm, group string) *auth.
 			}
 		}
 	} else {
-		e = p.pickWeighted(eligible, medianLatencyMs) // eligible 保序 = top5 降序子集
+		e = p.pickWeighted(eligible, maxCredits, medianLatencyMs) // eligible 保序 = top5 降序子集；maxCredits 用全集口径（与截断排序同基准）
 	}
 	if explored {
 		// 探索事件日志（可观测性）：选中号此时才确定，故在选中点打出。
@@ -436,7 +436,10 @@ var minPickGap = 100 * time.Millisecond
 //
 //		weight = credits 比例 × 10 + idleWeight
 //
-//	  - credits 比例 = 该号 credits / 候选集内最大 credits（避免量纲爆炸）
+//	  - credits 比例 = 该号 credits / maxCredits（**全集口径，由调用方传入**——
+//	    与 pick() 截断排序用的是同一个值。不得在本函数内用 cands 子集重算：
+//	    top5 因快过期/闲置补偿混入低分号而全集最高分号未进 top5 时，子集基准会
+//	    改变 credits 比例，两阶段权重不可比，违反 pick 头注的共享基准契约）
 //	  - idleWeight = min(距 lastUsed 小时数 × idleWeightPerHour, idleWeightMax)；从未使用给满分
 //
 // credits 全 0 时仍按 idleWeight 加权（不退化均匀随机）。
@@ -445,14 +448,8 @@ var minPickGap = 100 * time.Millisecond
 // 时刻取 p.now()（可注入时钟，见 SetClock）：与 pick 的权重计算共用同一时间口径，
 // 否则两阶段权重（截断排序 vs 抽签）会落在不同时刻上（生产差异在 µs 级，但测试
 // 需要它可冻结）。
-func (p *Pool) pickWeighted(cands []*entry, medianLatencyMs float64) *entry {
+func (p *Pool) pickWeighted(cands []*entry, maxCredits int64, medianLatencyMs float64) *entry {
 	now := p.now()
-	var maxCredits int64
-	for _, e := range cands {
-		if e.credits > maxCredits {
-			maxCredits = e.credits
-		}
-	}
 	const scale = 1_000_000 // 定点放大：int64 累加权重大整数抽签
 	weights := make([]int64, len(cands))
 	var total int64

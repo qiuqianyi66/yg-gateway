@@ -454,9 +454,11 @@ func (p *Pool) recordBreakerFailureLocked(e *entry) {
 		}
 	}
 	// 触发熔断：重置失败计数供下一轮重新累计；retryCount 递增放大退避指数。
+	// 时刻走 p.now()（可注入时钟）：half-open 门槛（pick 的 breakerHalfOpen）用
+	// p.now() 比较 breakerUntil，两侧必须同一时钟口径，否则注入时钟下熔断窗口错位。
 	e.fails = 0
 	e.retryCount++
-	e.breakerUntil = time.Now().Add(d)
+	e.breakerUntil = p.now().Add(d)
 }
 
 // CooldownUntilTomorrow4AM 冷却到下一个 04:00（本地时区）。
