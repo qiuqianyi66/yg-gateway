@@ -1,51 +1,77 @@
 # 2026-10-24 仓库卫生 + 公网上传安全复核
 
+## 现状态（2026-10-24 第二轮复核后修正）
+
+**上一轮结论「全仓无凭证」是错的，已作废。** 根因写在下面「误判复盘」一节。
+
 ## 改了什么
 
-1. `.gitignore` 新增 4 条排除（均为**本机产物**，非项目产物）：
-   - `/.workbuddy/` —— 本地 AI 代理记忆，含个人上下文与本机路径
-   - `/yg-gateway-worktrees/` —— git worktree 元数据锚点
-   - `/draft_*_folder/` —— 文档/图片工具的临时中间产物
-   - `/docs/research/_shots/` —— 4.4MB 渲染截图导出物，其中 `report.json` 含本机绝对路径
-2. 归档 `docs/research/YG-Gateway深度研究与产品PRD-v2.html`（40KB 源文档，无外链、无内嵌图片）。
+### 第一轮（commit 46aef77）
 
-## 为什么
+1. `.gitignore` 新增 4 条排除本机产物：`/.workbuddy/`、`/yg-gateway-worktrees/`、
+   `/draft_*_folder/`、`/docs/research/_shots/`。
+2. 归档 `docs/research/*.html` —— **第二轮已撤回**（属私有策略材料，见下）。
 
-仓库是 **PUBLIC**。上传前必须确认「本机/个人产物」不会被 `git add -A` 顺手带上公网。
-`.workbuddy/` 这类目录不在原有忽略表里，属于**新增的风险面**（原有忽略表只覆盖了
-`auths/`、`data/`、`config.json`、`*.key/.pem/.env`、二进制与备份）。
+### 第二轮（本提交）
 
-## 上传前安全复核结论（实测）
+从版本控制中移除 6 个**个人私有资产**（本地文件保留，只取消跟踪 + 入忽略表）：
 
-| 检查 | 方法 | 结论 |
+| 文件 | 为什么不能公开 |
+|---|---|
+| `image_edited.png` | 聊天截图，**画面内是明文 API Key**；且是私人对话内容 |
+| `HANDOFF.md` | 项目交接件：私有实例路径、账号数量、persona 存在性、部署细节 |
+| `工作准则-融入版.md` | 个人工作准则 |
+| `yg-gateway_四维度审查收口_任务交接.md` | 个人任务交接件 |
+| `yg-gateway_四维度审查收口_对账.json` | 同上 |
+| `docs/research/YG-Gateway深度研究与产品PRD-v2.html` | 产品研究/PRD 草稿，私有策略材料 |
+
+## 误判复盘（真因：二进制盲区）
+
+第一轮的「全历史凭证扫描」用的是 `git grep -I`。**`-I` 会跳过二进制文件**，
+所以 PNG 里的像素从来没被读过。文本 296 提交零命中 → 被误报成「无凭证」。
+
+真正的凭证就在一张 **PNG 截图**里：`image_edited.png`（2026-10-12 由 `f1e6324` 引入，
+2026-10-24 发现，公开约 12 天）。肉眼一读就看到了。
+
+**教训（与 L-15「否定性断言必须穷尽证据源」同源）**：凭证扫描必须覆盖
+**文本 + 图片 + 二进制**；`-I` 不是「没问题的证明」，是「没检查」。图片一律人工过目。
+
+## 暴露面清单（origin/main @ 46aef77 实测）
+
+| 类别 | 内容 | 严重度 |
 |---|---|---|
-| 是否有未推送提交 | `git rev-list --left-right --count origin/main...main` → `0 0`；8 个本地分支 `merge-base --is-ancestor` 全为真 | 无。代码与 origin/main 完全一致 |
-| 全历史高危凭证 | `git grep -E 'sk-…|cb_…|ghp_…|AKIA…|eyJ…|BEGIN … PRIVATE KEY'` 遍历 `git rev-list --all` 296 个提交 | 仅 1 个唯一匹配 `cb_y5Dy46tPQGGWtueMxXbe`，是「企鹅教师助手」载体应用 **buddyId**（`internal/upstream/desktop.go:230` 注释），**不是凭证** |
-| 敏感路径是否曾入库 | `git log --all --diff-filter=A --name-only` 过滤 `auths/ data/ backups/ verify/ config.json *.env *.key *.pem` | 从未入库 |
-| 待上传文件内容 | 对 4 个未跟踪目录逐文件正则扫（`sk-`/`skey`/`uin=`/`Cookie:`/`Bearer`/JWT/私钥/绝对路径） | 无凭证；HTML 中 `Bearer` 两处均为**鉴权设计描述文字** |
-| CI 密钥引用 | `.github/workflows/*.yml` 中 `secrets.` | 仅 `secrets.GITHUB_TOKEN` |
+| **明文凭证** | `image_edited.png` 内 `[REDACTED-KEY]-9f3a…a3c8`；经核对该 key **仍在 `D:\yg-gateway\config.json`**（生产实例 `api_keys[0]`） | **高** |
+| 真实账号昵称 | `.harness/changes/2026-10-18-b1b-panel-unknown-visual/*.png`、`docs/screenshots/*.png` 里出现 `<account>.`、`¢$口`、`w` 与账号 UUID 前 12 位 | 中 |
+| 用户名 / 机器名 | `<local>`、`<domain>\<user>`、`owner: <user>`，散见 11 个 `.harness/changes/**` 与 `docs/PLAN-*.md` | 低 |
+
+## 缓解（按顺序，第 1 条最急）
+
+1. **轮换 key**（唯一能真正止损的动作）：`D:\yg-gateway\config.json` 的 `api_keys[0]`
+   换新值 → `scripts/deploy-prod.ps1` 重启 → 冒烟。（当前 `listen=127.0.0.1:7863`，
+   外网不可直连，故不是「立刻被打」级别，但 key 已公开，必须视为已泄露。）
+2. **历史清除**（可选，需强推）：`image_edited.png` 与 `docs/research/*.html` 仍留在
+   历史里，`git log` 可取出。彻底清除要用 `git filter-repo` 重写 + `push --force-with-lease`。
+   **未执行**：破坏性操作需单独确认，且 force-push 会让已有 clone/fork 分叉。
+3. 本提交只做「不再新增暴露」：HEAD 已移除上述 6 文件 + 忽略表拦截。
 
 ## 怎么验证
 
 ```powershell
-git check-ignore -v docs/research/_shots/report.json .workbuddy/memory/2026-10-23.md `
-  yg-gateway-worktrees/usage-incremental/.cwd-anchor draft_912a7f80_folder/draft.xml
-git status --short --untracked-files=all      # 期望只剩 docs/research/*.html
-powershell -NoProfile -File scripts/pre-commit.ps1 -Fast
+git ls-files | Select-String 'image_edited|HANDOFF\.md|工作准则|四维度|docs/research'   # 期望空
+git check-ignore -v image_edited.png docs/research/x.html HANDOFF.md                    # 期望全部命中
+powershell -NoProfile -File scripts/pre-commit.ps1 -Fast                                # 期望退出码 0
 ```
 
 ## 怎么回滚
 
 ```powershell
-git revert <本次 commit>        # 只回滚 .gitignore 段与 docs 归档，无代码影响
+git revert <本提交>     # 恢复跟踪（不会恢复公网历史，历史清除需 filter-repo）
 ```
 
-本地若要恢复旧行为：删除 `.gitignore` 末尾「本机代理产物 / 个人草稿」整段即可。
+## 边界
 
-## 边界（明说的局限）
-
-- 凭证扫描是**正则签名**匹配，不是语义审计：**未命中不等于绝无凭证**，只能说明
-  「已知形态的高危 token 未出现」。若曾把真实 token 写进过非标准形态的字符串，
-  本扫描覆盖不到。
-- 历史已推送到公网：本次仅做**新增面**防漏，不重写历史（强推 rewrite 会让
-  fork/镜像上的旧对象继续可访问，收益低风险高）。
+- 本轮图片只人工过目了 5 张 PNG（全仓已无其它图片）。
+- 历史清除**未做**：因此 `image_edited.png` 里的 key 在 GitHub 历史中仍可取，
+  只有「轮换 key」能真正解除风险。
+- `.harness/changes/**` 里的用户名字样**未处理**：删掉会掏空审计链（本项目对外承诺的
+  可审计性），且重写 80+ 历史文件风险高于收益。属可接受的残留，明确记录在此。

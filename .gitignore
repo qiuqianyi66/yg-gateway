@@ -75,3 +75,13 @@ server.exe
 # docs/research 的渲染截图导出物（约 4.4MB 的 jpg + 含本机绝对路径的 report.json；
 # 源文档 docs/research/*.html 仍入库，截图可随时重新生成）
 /docs/research/_shots/
+# ── 个人私有资产：绝不入库（2026-10-24 复核发现，此前已误入公网）──────────────
+# image_edited.png：聊天截图，**画面里含明文 API Key**（[REDACTED-KEY]-…），且是私人对话
+/image_edited.png
+# 项目交接 / 工作准则 / 审查收口：个人工作上下文，含私有实例路径与内部账号数
+/HANDOFF.md
+/工作准则-融入版.md
+/yg-gateway_四维度审查收口_*.md
+/yg-gateway_四维度审查收口_*.json
+# 产品研究与 PRD 草稿（私有策略材料，不随代码开源）
+/docs/research/
