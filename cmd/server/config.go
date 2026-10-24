@@ -87,6 +87,8 @@ type Config struct {
 		DedupMinutes int `json:"dedup_minutes"`
 	} `json:"alerting"`
 
+	OpsAgent OpsAgentConfig `json:"opsagent"` // 运维 agent（默认关；结构见 config_opsagent.go）
+
 	// Fallback 备用上游级联（P2）：CodeBuddy 账号池全挂（选号耗尽）时，
 	// 把请求原样转发到一个独立的 OpenAI 兼容端点（DeepSeek 官方 / OpenRouter /
 	// 任意 OpenAI 兼容 API）。空配置 = 关闭（零回归）。

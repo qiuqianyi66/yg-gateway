@@ -22,6 +22,11 @@
     "min_credit_threshold": 100,
     "dedup_minutes": 60
   },
+  "opsagent": {
+    "enabled": false,
+    "interval_sec": 600,
+    "healthy_frac": 0.5
+  },
   "fallback": {
     "enabled": false,
     "base_url": "",
