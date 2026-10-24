@@ -64,3 +64,14 @@ backups/
 *.zip
 server.exe
 .DS_Store
+
+# ── 本机代理产物 / 个人草稿：绝不入库（仓库为 PUBLIC，见 2026-10-24 安全复核）────
+# .workbuddy：本地 AI 代理记忆（个人上下文，含本机路径与工作细节，非项目产物）
+/.workbuddy/
+# git worktree 元数据锚点（由 git worktree 生成，不应随仓库分发）
+/yg-gateway-worktrees/
+# 临时草稿目录（doc/image 工具的中间产物，命名带随机 id）
+/draft_*_folder/
+# docs/research 的渲染截图导出物（约 4.4MB 的 jpg + 含本机绝对路径的 report.json；
+# 源文档 docs/research/*.html 仍入库，截图可随时重新生成）
+/docs/research/_shots/
