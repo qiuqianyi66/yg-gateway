@@ -988,6 +988,7 @@ readLoop:
 	// 网关本地空流兜底帧走 hintFn=nil 的直写路径：该形态未覆盖（不编造 hint），
 	// 且 writeRaw 的 hintFn 闭包在空流路径下可能携带上一帧的上下文造成误配。
 	if validFrames == 0 {
+		// 忽略：写响应路径客户端可能已断开无法补救；紧邻的 [DONE] 写入错误会被检查并返回（判据①）。
 		_ = writeRaw(`{"error":{"message":"empty upstream stream","type":"upstream_error","code":"upstream_parse"}}`)
 	}
 	// 保证恰好写一个 [DONE]（上游漏发时兜底补上）。

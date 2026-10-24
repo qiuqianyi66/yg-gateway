@@ -3372,16 +3372,23 @@ func TestPanelAutoTaskRunGrowthQueueOnceUsesSamePipeline(t *testing.T) {
 	caEqStr(t, items[0].Status, "done", "定时队列项状态")
 }
 
-// HTTP 入口：growth 默认开、并发夹取、非法体也照跑；运行中 → 409。
+// HTTP 入口：growth 默认开、并发夹取、畸形体 400；运行中 → 409。
 func TestPanelAutoTaskTasksRunQueueHandler(t *testing.T) {
 	caFastGaps(t)
 	f := caNewFake()
 	f.caSetTask(caTask("chat_5", 0, 5, ""))
 	p := caNewPanel(t, f, caAccount("u1"))
 
-	// 非法 JSON（decode 失败被忽略）→ 仍按默认并发 1 启动。
+	// 畸形 JSON → 400（不静默用默认值启动队列；与 autotask/tasks 端点的畸形体约定一致）。
 	rec := httptest.NewRecorder()
 	p.tasksRunQueue(rec, httptest.NewRequest(http.MethodPost, "/panel/api/tasks/run_queue", strings.NewReader("{")))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("code=%d, want 400; body=%s", rec.Code, rec.Body.String())
+	}
+
+	// 合法空体 → 按默认并发 1 启动。
+	rec = httptest.NewRecorder()
+	p.tasksRunQueue(rec, httptest.NewRequest(http.MethodPost, "/panel/api/tasks/run_queue", strings.NewReader("{}")))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("code=%d, want 200; body=%s", rec.Code, rec.Body.String())
 	}
