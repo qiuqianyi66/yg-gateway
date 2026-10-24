@@ -86,6 +86,7 @@ func (c *Client) RunNightChats(a *auth.Auth, need int) (int64, error) {
 			}
 			return ok, fmt.Errorf("第 %d 次对话失败: http=%d err=%v body=%.120s", i+1, status, err, respBody)
 		}
+		// 忽略：排干 body 是回收连接前的清理路径，失败随即随 rc.Close 释放，不影响主流程（判据②）。
 		_, _ = io.Copy(io.Discard, io.LimitReader(rc, 1<<20))
 		rc.Close()
 		if err := c.ReportChatActivityModel(a, fmt.Sprintf("wb2api-night-%d-%d", time.Now().UnixMilli(), i), "", "glm-5.2", "GLM-5.2"); err != nil {

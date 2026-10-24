@@ -67,6 +67,8 @@
 
 ## 待办 / 不做（不在本索引「已落地」内）
 
+- [growth-package-split-2026-10-24](prd/REQ-growth-package-split-2026-10-24.md)：upstream 拆出
+  growth 域子包——**立项待执行（等条件）**，耦合事实与候选方案已记录，解锁动作见文末。
 - **F-102** 新一轮安全审计结论：阻塞在外部输入。
 - **ROADMAP §9 记录在案（本期不做）**：面板多语言/主题、重置密钥自定义、redisstore 消费风格、
   全局开关隔离、其余 oversize 文件（sse/panel/config.go）拆分、Key-IP 白名单面板 UI。

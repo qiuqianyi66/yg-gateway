@@ -26,6 +26,7 @@ const (
 // clientToken 幂等令牌（前端 randomUUID 同款语义）。
 func clientToken() string {
 	b := make([]byte, 16)
+	// 忽略：crypto/rand.Read 自 Go 1.24 起契约保证填满且永不返回错误，失败无路径，不影响幂等令牌（判据④）。
 	_, _ = rand.Read(b)
 	return fmt.Sprintf("%s-%s-%s-%s-%s",
 		hex.EncodeToString(b[0:4]), hex.EncodeToString(b[4:6]), hex.EncodeToString(b[6:8]),

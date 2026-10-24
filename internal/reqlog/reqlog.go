@@ -418,6 +418,7 @@ func (w *archiveWriter) openFile(now time.Time, rotate bool) error {
 	}
 	info, err := f.Stat()
 	if err != nil {
+		// 忽略：Stat 失败路径的收尾 Close，真实错误经返回值上报，不影响主流程（判据②）。
 		_ = f.Close()
 		return err
 	}

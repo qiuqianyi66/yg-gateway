@@ -295,6 +295,7 @@ func runPoll(base, origin, realm, statePath string, client *http.Client, out io.
 		r.Header.Set("Authorization", "Bearer "+tok.AccessToken)
 	}
 	if acctRaw, _, errAcct := doJSON(client, http.MethodGet, base+"/v2/plugin/login/account?state="+ls.State, acctHeaders, nil); errAcct == nil {
+		// 忽略：解析失败留零值（uid 空），login.sh 拿到空 uid 会报「无法获取 uid」并终止落盘，失败可见（判据③）。
 		_ = json.Unmarshal(acctRaw, &acct)
 	}
 	oraw, _ := json.Marshal(buildLoginOutput(tok, realm, acct))

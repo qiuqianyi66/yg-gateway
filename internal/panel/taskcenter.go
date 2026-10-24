@@ -189,7 +189,12 @@ func (p *Panel) tasksRunQueue(w http.ResponseWriter, r *http.Request) {
 		Concurrency int  `json:"concurrency"`
 		Growth      bool `json:"growth"`
 	}
-	_ = json.NewDecoder(r.Body).Decode(&body)
+	// 畸形体 400 而不是静默用默认值启动队列：与 autotask/tasks 端点的畸形体约定一致
+	//（损坏的请求若静默走默认值，等于一次误触发的全账号任务执行）。
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeErr(w, http.StatusBadRequest, "bad request body: "+err.Error())
+		return
+	}
 	if !body.Growth {
 		body.Growth = true
 	}
