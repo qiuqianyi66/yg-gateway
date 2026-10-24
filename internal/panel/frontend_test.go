@@ -1279,9 +1279,9 @@ const day = n => {
 };
 // overview 形态：没有 packages 数组，只有到期快照字段。
 const d = { accounts: [
-  { uid: 'aaaaaaaa-1', nickname: '秋',     credits: 4099,
+  { uid: 'aaaaaaaa-1', nickname: '昵称A',   credits: 4099,
     credits_earliest_expiry: day(2),  credits_earliest_remaining: 499 },
-  { uid: 'bbbbbbbb-2', nickname: '<account>', credits: 3243,
+  { uid: 'bbbbbbbb-2', nickname: '昵称B',   credits: 3243,
     credits_earliest_expiry: day(30), credits_earliest_remaining: 43 },
   { uid: 'cccccccc-3', nickname: '长期包', credits: 900,
     credits_earliest_expiry: null,    credits_earliest_remaining: 0 },
@@ -1290,7 +1290,7 @@ ctx.renderExpirySnapshot(d);
 const html = sinks['expList'] ? sinks['expList'].innerHTML : '';
 const names = [...html.matchAll(/<span class="exp-nm">([^<]*)<\/span>/g)].map(m => m[1]);
 // 2 天到期的应排最前（红），30 天其次，无到期信息的排最后。
-const wantNames = JSON.stringify(['秋', '<account>', '长期包']);
+const wantNames = JSON.stringify(['昵称A', '昵称B', '长期包']);
 const gotNames = JSON.stringify(names);
 process.stdout.write(JSON.stringify({
   visible: sinks['expBox'] ? sinks['expBox'].hidden === false : false,
@@ -1311,7 +1311,7 @@ process.stdout.write(JSON.stringify({
 	if err != nil {
 		t.Fatalf("expiry snapshot node test failed: %v\n%s", err, nodeDiag(err, out))
 	}
-	const want = `{"visible":true,"rows":3,"order":true,"got":"[\"秋\",\"<account>\",\"长期包\"]","want":"[\"秋\",\"<account>\",\"长期包\"]"}`
+	const want = `{"visible":true,"rows":3,"order":true,"got":"[\"昵称A\",\"昵称B\",\"长期包\"]","want":"[\"昵称A\",\"昵称B\",\"长期包\"]"}`
 	if strings.TrimSpace(string(out)) != want {
 		t.Fatalf("expiry snapshot=%s\nwant %s（visible 必须为 true，否则卡片仍隐藏）",
 			strings.TrimSpace(string(out)), want)
