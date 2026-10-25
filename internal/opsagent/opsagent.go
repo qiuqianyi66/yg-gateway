@@ -173,8 +173,56 @@ func New(cfg Config, obs Observers, reg *unknown.Registry, sink Sink) *Agent {
 	return &Agent{cfg: cfg, obs: obs, reg: reg, sink: sink, exec: DefaultExecutor()}
 }
 
+// discardSink canary 用：建议只进审计不外发（不污染 webhook/日志告警通道）。
+type discardSink struct{}
+
+func (discardSink) Suggest(Suggestion) {}
+
+// CanaryRound 规则心跳（ROADMAP v3 V3-7 / NEW-FRONTIERS #2）：注入**合成观察**
+// （1/4 健康 = capacity 必触发；hard 冷却+正余额 = 402-contradiction 必触发），
+// 断言规则真的会响。词表口径类 bug（如 hard vs hard_credit 匹配永假）在单测里
+// 以编译期词表为锚，但 pool 词表演进后的**运行态漂移**只有运行中自检能抓到。
+//
+// 隔离口径：合成观察跑在独立 probe Agent 上（sink=discard、reg=nil）——不污染
+// 真实 registry、不外发 webhook、不进历史环。返回失败清单（空 = 全部规则存活）。
+func (a *Agent) CanaryRound(now time.Time) []string {
+	synth := Observers{
+		Counts: func() PoolCounts { return PoolCounts{Total: 4, Healthy: 1, Cooling: 3} },
+		Accounts: func() []AccountView {
+			return []AccountView{{UID: "canary-synth", Nickname: "合成观察", Credits: 42, CoolKind: "hard"}}
+		},
+		Now: func() time.Time { return now },
+	}
+	probe := &Agent{cfg: a.cfg.normalized(), obs: synth, sink: discardSink{}, exec: DefaultExecutor()}
+	rd := probe.Round()
+	hasCap, hasContradiction := false, false
+	for _, s := range rd.Suggestions {
+		switch s.Rule {
+		case "capacity":
+			hasCap = true
+		case "credit-402-contradiction":
+			hasContradiction = true
+		}
+	}
+	var failures []string
+	if !hasCap {
+		failures = append(failures, "capacity 规则在合成观察上未触发（规则可能因字段/词表漂移而永假）")
+	}
+	if !hasContradiction {
+		failures = append(failures, "credit-402-contradiction 规则在合成观察上未触发（同上）")
+	}
+	if len(failures) > 0 {
+		log.Printf("WARN: [opsagent] canary FAIL：%v（规则自检失败=规则静默死亡，需排查）", failures)
+	} else {
+		log.Printf("[opsagent] canary ok：全部规则在合成观察上存活")
+	}
+	return failures
+}
+
 // Run 周期执行 Round 直到 ctx 取消（R9：ctx.Done 即返回，无泄漏 goroutine）。
+// 启动时先跑一次 canary 自检（失败只告警不阻断——规则死了比不知道规则死了好）。
 func (a *Agent) Run(ctx context.Context) {
+	a.CanaryRound(a.obs.Now())
 	t := time.NewTicker(a.cfg.Interval)
 	defer t.Stop()
 	for {
