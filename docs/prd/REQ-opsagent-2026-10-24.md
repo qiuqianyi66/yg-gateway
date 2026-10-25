@@ -49,10 +49,9 @@ MVP 的「行动」只有两类白名单：①触发一次成本探索（pick �
 
 ## 2026-10-24 MVP 落地后的实测发现（后续项登记）
 
-- **面板可见性缺口**：opsagent 登记的 unknown 条目只在 `/metrics` 的
-  `unknowns_open` 计数里可见（`pool.OpenUnknownCount` = registry 全量）；
-  面板按账号的 Unknowns 列表走 `unknownSeen`（`uid|model` cost 专用键，
-  `internal/pool/unknown.go:173`），**不含** opsagent 条目。完整可视化需动
-  `internal/panel/app.js`——该文件冻结在 `maxFrontendLines` 棘轮上限（4378 行），
-  加视图前必须先在别处瘦身。解锁顺序：app.js 减 ≥100 行（如抽公共渲染函数）→
-  面板加「全部未消解 unknown」视图（读 registry 全量，非按账号过滤）。
+- ~~面板可见性缺口~~ → **2026-10-25 已闭环（阶段 2）**：`GET /panel/api/opsagent/status`
+  （只读：registry 全量未消解 unknown + 最近 10 轮审计，未启用返回引导态）+
+  账号池视图底部「运维 Agent」卡片（`opsagent.js` 独立嵌入，**app.js 零改动**，
+  maxFrontendLines 棘轮不受影响）；`pool.AllOpenUnknowns()` 提供全量口径
+  （cost 专用键 `unknownSeen` 之外的第二条可见路径）。
+  剩余解锁顺序：app.js 瘦身 ≥100 行后可把该视图升级为独立导航页（可选，不阻塞）。

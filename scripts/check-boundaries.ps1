@@ -71,8 +71,10 @@ $allow = @{
     # 会话键派生：依赖 redisstore（粘性绑定持久化）（实测）
     'session'  = @('redisstore')
     # 面板：只读运维视图，可依赖领域包但不可反向被依赖（实测）
-    'panel'    = @('auth','httpauth','livecfg','logfmt','pool','reqlog',
-                   'scheduler','session','upstream','usage')
+    # + opsagent：运维 agent 审计/unknown 全量的只读展示（REQ-opsagent 阶段 2）
+    # + unknown：unknown 条目的只读列表（registry 全量，同上）
+    'panel'    = @('auth','httpauth','livecfg','logfmt','opsagent','pool','reqlog',
+                   'scheduler','session','unknown','upstream','usage')
     # 调度：依赖凭证、日志、池、上游（实测）
     'scheduler'= @('auth','logfmt','pool','upstream')
     # 热配置：依赖 httpauth（密钥约束校验）（实测）

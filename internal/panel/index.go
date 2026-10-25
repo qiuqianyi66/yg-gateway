@@ -27,6 +27,9 @@ var aclNoticeJS []byte
 //go:embed savings_note.js
 var savingsNoteJS []byte
 
+//go:embed opsagent.js
+var opsAgentJS []byte
+
 // csp 内容安全策略（严格版，无需 unsafe-inline）：
 //   - default-src 'none'        默认全禁，逐个开口
 //   - script-src 'self'         只跑同源脚本（app.js）；页面无内联事件处理器/内联脚本
@@ -84,4 +87,13 @@ func (p *Panel) savingsNoteScript(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	// 忽略：静态资源全量写回，写失败即客户端断连，无可恢复语义（与 appScript 同口径）。
 	_, _ = w.Write(savingsNoteJS)
+}
+
+// opsAgentScript 输出运维 agent 可观测视图脚本（REQ-opsagent 阶段 2，独立嵌入同上）。
+func (p *Panel) opsAgentScript(w http.ResponseWriter, r *http.Request) {
+	setSecurityHeaders(w)
+	w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	// 忽略：静态资源全量写回，写失败即客户端断连，无可恢复语义（与 appScript 同口径）。
+	_, _ = w.Write(opsAgentJS)
 }

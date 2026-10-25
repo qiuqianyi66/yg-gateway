@@ -166,6 +166,25 @@ func (p *Pool) OpenUnknownCount() int {
 	return p.unknownReg.Len()
 }
 
+// AllOpenUnknowns 返回全池未消解的 unknown 条目（registry 全量，不分账号、不分来源）。
+//
+// 为什么需要：面板「运维 Agent」视图（REQ-opsagent 阶段 2）。opsagent 登记的条目
+// （如 402-余额口径矛盾）没有 unknownSeen 键——那是 cost 口径的 uid|model 键，
+// openCostUnknownsLocked 按它过滤永远看不到 agent 条目（2026-10-24 实测缺口）。
+// 全量口径让两类来源在同一视图可见。
+func (p *Pool) AllOpenUnknowns() []unknown.Item {
+	if p.unknownReg == nil {
+		return nil
+	}
+	var out []unknown.Item
+	for _, it := range p.unknownReg.All() {
+		if !it.Resolved {
+			out = append(out, it)
+		}
+	}
+	return out
+}
+
 // openCostUnknownsLocked 收集该账号未消解的成本未知（供 Status 透出）。
 //
 // 调用方必须已持 p.mu（读锁即可）。遍历 sync.Map 在 RLock 下是安全的

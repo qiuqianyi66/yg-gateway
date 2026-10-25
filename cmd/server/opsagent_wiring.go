@@ -1,4 +1,4 @@
-// opsagent_wiring.go 运维 agent 装配（ADR-017）：观察面投影 + 建议输出口。
+// opsagent_wiring.go 运维 agent 装配（ADR-017）：观察面投影 + 建议输出口 + 生命周期。
 //
 // 为什么观察面在这里投影：opsagent 包只依赖 domain 层（evidence/logfmt/unknown），
 // pool 与 metrics 的数据由本文件以闭包注入——「读哪些字段」是装配层的显式决定
@@ -70,17 +70,26 @@ func opsAgentObservers(p *pool.Pool) opsagent.Observers {
 	}
 }
 
-// startOpsAgent 装配并启动运维 agent。enabled=false 时不做任何事（零回归）。
+// buildOpsAgent 构造运维 agent（REQ-opsagent / ADR-017）。
+// enabled=false 或 pool 缺失时返回 nil：面板显示「未启用」，startOpsAgent no-op
+// （双保险的零回归：config 无 opsagent 键的既有部署行为零变化）。
+func buildOpsAgent(cfg OpsAgentConfig, p *pool.Pool, reg *unknown.Registry, n *alerting.Notifier) *opsagent.Agent {
+	if !cfg.Enabled || p == nil {
+		return nil
+	}
+	return opsagent.New(cfg.normalized(), opsAgentObservers(p), reg, opsSink{n: n})
+}
+
+// startOpsAgent 启动已构造的 agent（nil = 未启用，no-op）。
 // ctx 用应用级 ctx（signal.NotifyContext）：进程退出信号即 agent 停止（R9）。
-func startOpsAgent(cfg OpsAgentConfig, p *pool.Pool, reg *unknown.Registry, n *alerting.Notifier, ctx context.Context) {
-	if !cfg.Enabled {
+func startOpsAgent(a *opsagent.Agent, ctx context.Context) {
+	if a == nil {
 		return
 	}
-	oc := cfg.normalized()
-	oa := opsagent.New(oc, opsAgentObservers(p), reg, opsSink{n: n})
-	go oa.Run(ctx)
+	interval, frac := a.ConfigSnapshot()
 	log.Printf("[opsagent] 已启用（观察-建议模式，不自动行动）：interval=%s healthy_frac=%.2f",
-		oc.Interval, oc.HealthyFrac)
+		interval, frac)
+	go a.Run(ctx)
 }
 
 // opsSink 建议输出口：WARN 日志一行（总是）+ 账号级建议走 alerting webhook
