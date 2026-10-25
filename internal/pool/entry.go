@@ -230,6 +230,10 @@ type entry struct {
 	lastErr                  time.Time  // 最近一次错误时间
 	lastSuccess              time.Time  // 最近一次成功时间
 	tokenUsage               TokenUsage // 聊天请求 token 用量摘要（持久化）
+	// recentTokens/recentTokensAt 衰减 token 账（REQ-routing P2）：写于
+	// RecordTokenUsage（p.mu 写锁），读于 pick 读锁——锁互斥保证安全，不持久化。
+	recentTokens   float64
+	recentTokensAt time.Time
 	// lastCheckinDay 最近一次签到成功的本地日期（"2006-01-02"）。签到成功与上游
 	// 幂等拒绝（"今天已签到"）都算；statusOf 据此输出 CheckinDone 供面板按钮显示
 	// 签到/已签。持久化：跨重启不丢当日状态。

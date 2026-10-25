@@ -68,8 +68,9 @@
 ## 待办 / 不做（不在本索引「已落地」内）
 
 - [routing-improvements-2026-10-25](prd/REQ-routing-improvements-2026-10-25.md)：选号路由改进——
-  **已立项待执行**：P1 credit_floor 软带（×0.5 降权重，硬拦底线不退）+ P2 usage 半衰期
-  可选策略（默认 idle 零回归）。来源：magpie 源码级深读（reference/magpie-deep-read）。
+  **主体落地（2026-10-25）**：P1 credit_floor 软带（带内 ×0.5 降权 + pickReason softband，
+  带宽按实测扣费定义）+ P2 近期用量衰减因子（1h 半衰期 token 账，`pool.recent_usage_factor`
+  默认关）。来源：magpie 源码深读 + 实跑（reference/magpie-deep-read §五/§七）。
 - [growth-package-split-2026-10-24](prd/REQ-growth-package-split-2026-10-24.md)：upstream 拆出
   growth 域子包——**立项待执行（等条件）**，耦合事实与候选方案已记录，解锁动作见文末。
 - [structured-output-2026-10-24](prd/REQ-structured-output-2026-10-24.md)：response_format

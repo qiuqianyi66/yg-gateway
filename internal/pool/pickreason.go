@@ -12,9 +12,41 @@
 package pool
 
 import (
+	"math"
 	"strconv"
 	"time"
 )
+
+// 近期用量衰减（REQ-routing P2，magpie usageHalfLife 翻译）常量。
+const (
+	// recentUsageHalfLife 衰减半衰期：1h 使 12h（签到间隔）后历史 ≈1/4096 归零
+	// = 新签到周期语义（REQ 适配论证）。
+	recentUsageHalfLife = time.Hour
+	// recentUsageScaleTokens 因子尺度：200k ≈ 一次重度 agent 会话。
+	recentUsageScaleTokens = 200_000.0
+)
+
+// decayRecentTokensTo 把衰减账推进到 t（写路径，p.mu 写锁下调用）。
+func (e *entry) decayRecentTokensTo(t time.Time) {
+	if e.recentTokensAt.IsZero() || !t.After(e.recentTokensAt) {
+		return
+	}
+	e.recentTokens *= math.Exp2(-t.Sub(e.recentTokensAt).Hours() / recentUsageHalfLife.Hours())
+	e.recentTokensAt = t
+}
+
+// recentUsageFactorOf 近期用量权重因子：2^(-衰减到当下的 token/scale)。从未服务
+// 返回 1。调用方须已持 p.mu（读锁即可：与写锁互斥）。
+func (e *entry) recentUsageFactorOf(now time.Time) float64 {
+	if e.recentTokensAt.IsZero() || e.recentTokens <= 0 {
+		return 1
+	}
+	v := e.recentTokens * math.Exp2(-now.Sub(e.recentTokensAt).Hours()/recentUsageHalfLife.Hours())
+	if v <= 0 {
+		return 1
+	}
+	return math.Exp2(-v / recentUsageScaleTokens)
+}
 
 // pickReason 一次选中的结构化理由（不可变，构造后不改）。
 type pickReason struct {
@@ -22,6 +54,7 @@ type pickReason struct {
 	Tier     int       // weighted：命中成本层（0 免费实测 / 1 未知 / 2 收费）
 	Explored bool      // weighted：本次是否切层探索（issue #136 a′）
 	Probe    bool      // weighted：half-open 试探放行（ADR-003 D-400）
+	Softband bool      // weighted：选中时账号处于 credit_floor 软带（REQ-routing P1）
 	Kind     string    // earliest-expiry：冷却类别（hard/soft/breaker/degrade 粗口径）
 	At       time.Time // 选中时刻（注入时钟口径，与 pick 同源）
 }
@@ -43,6 +76,9 @@ func (pr *pickReason) string() string {
 		}
 		if pr.Probe {
 			s += " halfopen-probe"
+		}
+		if pr.Softband {
+			s += " softband"
 		}
 	case "earliest-expiry":
 		if pr.Kind != "" {

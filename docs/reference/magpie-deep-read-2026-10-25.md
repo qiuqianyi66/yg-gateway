@@ -107,6 +107,39 @@ REQ 里的写法不准确，已修正）。
 `internal/gateway/count_tokens_test.go` 存在——count_tokens 是它网关层原生实现，
 BACKLOG A1 的做法得到验证；`redact.go` 也在 gateway 层（隐私脱敏位置佐证不抄理由）。
 
+## 七、实跑观察（2026-10-25，clone → nogui 构建 → serve 实测）
+
+> 方法：`git clone --depth 1` → `CGO_ENABLED=0 go build -tags nogui`（71.5MB 单
+> 二进制，本地工具链一次过）→ `magpie serve` headless 启动 + CLI 探测。以下全部
+> 是**跑起来才知道**的增量（文档没写或写得不像）。隐私注：它自动发现的本机
+> 订阅账号信息（邮箱等）不入库，只记行为。
+
+1. **端点面 12 类 vs 我们 3 个**：根路径直接回清单——chat/completions、**responses**、
+   messages、systemone、images/generations、images/edits、videos、embeddings、
+   rerank、audio/transcriptions、audio/translations、v1beta/models/*。对 CodeBuddy
+   场景多数用不上，但 **/v1/responses 是 Codex 客户端的真实缺口**（BACKLOG 已有）。
+2. **/v1/models 富模型卡且无鉴权可读**：context_length/modalities/pricing/
+   native_endpoints/display_name 全量元数据。我们的精简目录+三值语义是另一个
+   极端（诚实但贫瘠）——可在不破坏三值语义下补观测字段（记 BACKLOG 候选）。
+3. **账号自动发现（discovery 默认 on）**：读本机各 agent 的登录态直接变 provider
+   （实测它发现了我本机 Codex 订阅，标记「3 of 3 models · fetched just now」）。
+   这是它「零配置体验」的核心。**不抄**：与 R1（凭证不出 auths/）冲突，记为定位差异。
+4. **usage.jsonl 真实 schema**：`{t, agent, provider, host, providerAccount, model,
+   in/out/cache_read/cache_write, ms, status, ep, kind, source}`——**ep（端点）+
+   kind（调用种类）+ source（probe/user）** 三个维度我们没有，连 model_list 探测
+   都记账。可借鉴：reqlog 加 kind 维度（S 级，记 BACKLOG）。
+5. **quota-history.json 真实 schema**：按 `provider|account` 键 → 窗口数组
+   `{at, left, start, resetsAt}`，保留 30 天。比我们 creditsExpiring 单值丰富
+   （历史可画趋势）——「周期边界检测」的基础设施形态实证。
+6. **WorkBuddy 养号深度 = 仅签到**：`magpie accounts checkin` 只做每日签到循环
+   （cli/accounts_cli.go:712）；全仓 grep「旅行/夜猫/成长任务/连登」零命中。
+   **我们的五类养号（17 任务）是碾压级差异**——README 差异化叙事成立。
+7. **运维成熟度**：backup/restore（加密整机备份）、webdav/s3/github 三通道同步、
+   daemon 服务化、`magpie heap/cpu` 自诊断 profile 子命令。我们没有整机备份/
+   自诊断（记 BACKLOG 候选：heap/cpu profile 端点，S 级）。
+8. **分发对比**：nogui 71.5MB vs 我们 ~10MB（它内嵌 Bun 插件运行时）——「单二进制
+   零依赖」差异的真身。
+
 ## 六、战略结论（回应「直接用 vs 打磨」）
 
 - 两者正交：它做「agent 侧编排 + 多 provider」，我们做「CodeBuddy 深耕 + 账号池
