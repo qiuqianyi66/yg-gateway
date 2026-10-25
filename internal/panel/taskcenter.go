@@ -181,7 +181,8 @@ func (p *Panel) queue() *queueState {
 	return p.q
 }
 
-// tasksRunQueue 启动执行队列：{concurrency:1-4, growth:bool, school:bool}。
+// tasksRunQueue 启动执行队列：{concurrency:1-4, growth:bool}（growth 强制 true，
+// 该端点恒跑成长任务全量扫描）。
 // 先做一次扫描，把全部待办项排队（growth 按账号内 autoActions 顺序执行，
 // school 逐账号跑闭环），账号内串行、账号间受并发信号量约束。
 func (p *Panel) tasksRunQueue(w http.ResponseWriter, r *http.Request) {
