@@ -13,17 +13,19 @@
 - `internal/panel/opsagent_view.go`（新）：`GET /panel/api/opsagent/status` 只读端点
   （enabled 快照 + unknowns_open + 最近 10 轮审计；未启用 = 200 + `{"enabled":false}`
   引导态，非错误）。
-- `internal/panel/opsagent.js`（新，~110 行）：自包含视图脚本，走 acl_notice.js/
+- `internal/panel/opsagent.js`（新，87 行）：自包含视图脚本，走 acl_notice.js/
   savings_note.js 的独立嵌入模式——**app.js 零改动**（maxFrontendLines 棘轮 4378 不动）；
   所有动态文本过 esc()（工程结构 §三），无内联事件（CSP script-src 'self'）。
 - `internal/panel/index.html`：账号池视图底部「运维 Agent」卡片 + script 标签
-  （1831→1846 行，max 不变，oversizeFrontendFiles 恒 2）。
+  （1831→1840 行，max 不变，oversizeFrontendFiles 恒 2）。
 - `internal/panel/panel.go` / `index.go`：Config.OpsAgent 字段（nil=未启用）、路由×2、
   embed+serving（与既有静态资源同口径）。
 - `internal/opsagent/opsagent.go`：+`ConfigSnapshot()`（面板展示参数快照，装配期固定）。
 - `cmd/server/opsagent_wiring.go`：startOpsAgent 拆成 `buildOpsAgent`（构造，enabled=false
   或 pool 缺失 → nil）+ `startOpsAgent`（nil no-op）；main.go 把 notifier/agent 构造
   提前到 panel.New 之前（面板需拿实例），main.go 999 非空行（<1000 ✓）。
+- 测试：`internal/panel/opsagent_view_test.go`（新）、`cmd/server/opsagent_wiring_test.go`
+  （改，签名适配）、`internal/pool/unknown_all_test.go`（新，独立复审 🟡-1 补）。
 - `scripts/check-boundaries.ps1`：panel 行 += opsagent/unknown（只读展示，理由注释）。
 - `docs/prd/REQ-opsagent-2026-10-24.md`：阶段 2 勾销 + 剩余解锁顺序。
 

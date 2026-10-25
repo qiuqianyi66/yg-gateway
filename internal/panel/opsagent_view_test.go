@@ -116,6 +116,56 @@ func TestOpsAgentStatusEnabled(t *testing.T) {
 	}
 }
 
+// TestOpsAgentStatusRoundCapAndOrder 审计轮截断与顺序契约（独立复审 🟡-2 修复）：
+// History 保留 12 轮时 API 只返回最近 10 轮（maxStatusRounds），且轮内旧→新
+// （前端据此 reverse 渲染新→旧——顺序契约反转会让时间线倒挂且无报错）。
+func TestOpsAgentStatusRoundCapAndOrder(t *testing.T) {
+	p2 := pool.New("")
+	counts := opsagent.PoolCounts{Total: 4, Healthy: 1, Cooling: 3}
+	base := time.Date(2026, 10, 25, 10, 0, 0, 0, time.Local)
+	tick := 0
+	oa := opsagent.New(opsagent.Config{Interval: time.Minute, HealthyFrac: 0.5},
+		opsagent.Observers{
+			Counts:   func() opsagent.PoolCounts { return counts },
+			Accounts: func() []opsagent.AccountView { return nil },
+			Now: func() time.Time {
+				tick++
+				return base.Add(time.Duration(tick) * time.Minute)
+			},
+		}, unknown.NewRegistry(), nil)
+	for i := 0; i < 12; i++ {
+		oa.Round()
+	}
+
+	p := New(Config{Pool: p2, OpsAgent: oa})
+	rec := httptest.NewRecorder()
+	p.opsAgentStatus(rec, httptest.NewRequest(http.MethodGet, "/panel/api/opsagent/status", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("code=%d", rec.Code)
+	}
+	var out struct {
+		Rounds []struct {
+			At time.Time `json:"At"`
+		} `json:"rounds"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Rounds) != maxStatusRounds {
+		t.Fatalf("返回轮数 = %d, want %d（截断）", len(out.Rounds), maxStatusRounds)
+	}
+	for i := 1; i < len(out.Rounds); i++ {
+		if !out.Rounds[i-1].At.Before(out.Rounds[i].At) {
+			t.Fatalf("轮序必须旧→新：%v 应早于 %v", out.Rounds[i-1].At, out.Rounds[i].At)
+		}
+	}
+	// 截断保的是「最近」：末轮时刻 = 第 12 轮（tick 从 1 起）。
+	wantLast := base.Add(12 * time.Minute)
+	if !out.Rounds[len(out.Rounds)-1].At.Equal(wantLast) {
+		t.Fatalf("末轮 = %v, want %v（应是最新一轮）", out.Rounds[len(out.Rounds)-1].At, wantLast)
+	}
+}
+
 // TestOpsAgentScriptServing 静态 JS 资源：200 + JS Content-Type + 非空 + CSP 头。
 func TestOpsAgentScriptServing(t *testing.T) {
 	p := New(Config{})
