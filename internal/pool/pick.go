@@ -269,6 +269,7 @@ func (p *Pool) pick(tried map[string]bool, reqModel, realm, group string) *auth.
 		cands = cands[:5]
 	}
 	var e *entry
+	pickMode := "weighted" // 决策溯源：weighted 或 lru（top5 全刚用过的兜底分支）
 	// 防并发撞号：基于「上次选中时刻」过滤。改读锁后（ADR-005 D-500）同一瞬间
 	// 的并发 pick 可能都读到旧 lastUsed 而同选一号（语义放宽见 pick 头注释，
 	// 由 Acquire 租约 + tried 轮换自愈）；对「下一个进入者」而言，下方原子写回
@@ -280,6 +281,7 @@ func (p *Pool) pick(tried map[string]bool, reqModel, realm, group string) *auth.
 		}
 	}
 	if len(eligible) == 0 {
+		pickMode = "lru"
 		// top5 全部刚被用过：LRU 兜底，在**全候选 candsAll**（非仅 top5）里选最旧者。
 		// 用 usedSeq 单调序号而非 lastUsed 墙钟比较：Windows 等平台 time.Now() 精度
 		// ~0.5ms，快速连续选号时所有 lastUsed 完全相等，Before 全 false 会恒选
@@ -302,6 +304,9 @@ func (p *Pool) pick(tried map[string]bool, reqModel, realm, group string) *auth.
 	}
 	// 原子写回（ADR-005 D-500）：读锁下用 atomic 标记选中，不写普通字段。
 	e.setLastUsed(now)
+	e.setPickReason(&pickReason{Mode: pickMode, Tier: bestTier, Explored: explored,
+		Probe: p.breakerProbeGap > 0 && !e.breakerUntil.IsZero() && now.After(e.breakerUntil) && e.retryCount > 0,
+		At:    now})
 	seq := p.pickSeq.Add(1)
 	e.usedSeq.Store(seq) // 单调序号：保证 usedSeq 严格全序（防惊群/LRU 的权威依据）
 	// half-open 试探占位（ADR-003 D-400）：本号是被放行的试探（熔断刚到期且
@@ -413,6 +418,7 @@ func (p *Pool) pickEarliestExpiryLocked(tried map[string]bool, now time.Time, re
 	// LRU 兜底（按 usedSeq 取最旧）眼里永远是「最旧」，刚被用过就被立刻再选——
 	// 防集中/防惊群失效（entry.usedSeq 契约：每次被选中时取 p.pickSeq 自增值）。
 	best.setLastUsed(now) // 用调用方传入的同一 now（可注入时钟）：与上方 expiry 判定同一时刻
+	best.setPickReason(&pickReason{Mode: "earliest-expiry", Kind: coolKindOfCoarse(best.fallbackKind(now)), At: now})
 	seq := p.pickSeq.Add(1)
 	best.usedSeq.Store(seq)
 	return best.a
