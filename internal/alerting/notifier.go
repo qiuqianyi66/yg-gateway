@@ -82,6 +82,25 @@ func (n *Notifier) NotifyCreditLow(uid, nick string, credits int64) {
 }
 
 // NotifyAccountDown 账号级异常事件（被禁用 / 会话死 / 触发熔断）。
+// NotifyKeyUsage key 级用量阈值告警（ROADMAP v3 V3-2，只告警不拦截）。
+// used/threshold 由调用方从 usage.Recorder.MonthlyUsed 与配置取（月 token 口径）。
+// AccountUID 承载 keyID：send 的去重键 = Type:AccountUID，天然按 key 去重。
+func (n *Notifier) NotifyKeyUsage(keyID, name string, used, threshold int64) {
+	if n == nil || n.cfg.WebhookURL == "" || threshold <= 0 {
+		return
+	}
+	label := keyID
+	if name != "" {
+		label = name + "(" + keyID + ")"
+	}
+	n.send(Event{
+		Type:       "key_usage",
+		AccountUID: keyID,
+		Reason:     "key=" + keyID + " used=" + itoa(used) + " threshold=" + itoa(threshold),
+		Text:       "API Key「" + label + "」本月 token 用量 " + itoa(used) + " 已达阈值 " + itoa(threshold) + "（只告警不拦截）",
+	})
+}
+
 func (n *Notifier) NotifyAccountDown(kind, uid, nick, reason string) {
 	if n == nil || n.cfg.WebhookURL == "" {
 		return

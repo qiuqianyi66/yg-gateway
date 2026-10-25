@@ -450,14 +450,14 @@ type APIKeyConfig struct {
 	Models []string `json:"models"` // 三态模型白名单（支持 * 后缀通配，如 "glm-*"）
 	Realm  string   `json:"realm"`  // cn/global/空=不限；其他值 fail fast
 	RPM    int      `json:"rpm"`    // 该 Key 每分钟最大请求数；0 = 不限（旧行为）
-	// MonthlyTokenQuota 该 Key 当月 token 硬上限；0 = 不限。
-	// 已用量由 usage.Recorder 按 KeyID 累计（持久化跨重启），超限拒新请求。
+	// MonthlyTokenQuota 该 Key 当月 token 硬上限（usage.Recorder 按 KeyID 持久化累计）；0 = 不限，超限拒新请求。
 	MonthlyTokenQuota int64 `json:"monthly_token_quota"`
+	// UsageAlertTokens 当月 token 用量告警阈值（ROADMAP v3 V3-2，只告警不拦截）；0 = 关。
+	UsageAlertTokens int64 `json:"usage_alert_tokens"`
 	// Group 账号池分组标签（P1-B）：该 Key 只能用同 Group 的账号。空 = 不限池。
 	Group string `json:"group"`
-	// AllowedCIDRs 该 Key 允许的来源 IP/CIDR 白名单（R-108）。
-	// 省略/nil = 不限（向后兼容，不是「未配置即拒绝」）；非空 = fail-closed，
-	// 来源 IP 不在名单内即拒。非法 CIDR 在 normalize 阶段 fail fast（禁止静默忽略）。
+	// AllowedCIDRs 该 Key 允许的来源 IP/CIDR 白名单（R-108）。省略/nil = 不限（向后兼容）；
+	// 非空 = fail-closed，来源不在名单内即拒。非法 CIDR 在 normalize 阶段 fail fast（禁静默忽略）。
 	// 真实来源 IP 由 server 层复用受信代理 XFF 判定提取，本字段只声明允许范围。
 	AllowedCIDRs []string `json:"allowed_cidrs,omitempty"`
 	Enabled      *bool    `json:"enabled"` // 启停开关：nil/true=启用；false=禁用（不进鉴权索引，但保留在 config 里）

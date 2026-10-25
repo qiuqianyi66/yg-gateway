@@ -232,6 +232,7 @@ func NewHandler(cfg Config) *Handler {
 	h.keyRPM = newKeyRPMGuard()
 	h.mux.HandleFunc("POST /v1/chat/completions", h.withAuth(h.chatCompletions))
 	h.mux.HandleFunc("POST /v1/messages", h.withAuth(h.anthropicMessages))
+	h.mux.HandleFunc("POST /v1/messages/count_tokens", h.withAuth(h.countTokens)) // ROADMAP v3 V3-1
 	h.mux.HandleFunc("GET /v1/models", h.withAuth(h.rateLimited(h.models)))
 	h.mux.HandleFunc("GET /status", h.withAuth(h.rateLimited(h.status)))
 	// /metrics：Prometheus 文本导出（F-710）。与 /status 同鉴权口径——指标含

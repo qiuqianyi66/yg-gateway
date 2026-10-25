@@ -489,12 +489,12 @@ func main() {
 	sch.StartBalanceRefresh(ctx, cfg.BalanceRefreshInterval)
 	// 运维 agent（REQ-opsagent-2026-10-24 / ADR-017）：enabled=false 时 no-op。
 	startOpsAgent(opsAg, ctx)
+	startKeyUsageAlerts(cfg.APIKeys, rec, alertNotifier, ctx) // key 用量告警（V3-2，无配置项零回归）
 
-	// 启动即预热模型积分倍率表：倍率只在 FetchModels/FetchGlobalModelInfos 成功时
-	// 填充（两者均懒触发），重启后到首次 /v1/models 或面板模型页被访问之前，
-	// ModelRate 恒返回空串——积分保底的目录兜底在这段空窗期内形同虚设，触底号
-	// 会被当成「收费未知」放行并打穿（实测：重启后 2 分钟，97 分的账号打收费
-	// 模型归零；倍率表当时尚未建立）。
+	// 启动即预热模型积分倍率表：倍率只在 FetchModels/FetchGlobalModelInfos 成功时填充
+	//（两者均懒触发），重启后到首次 /v1/models 或面板模型页被访问之前，ModelRate 恒空串——
+	// 积分保底的目录兜底在这段空窗期内形同虚设，触底号会被当成「收费未知」放行并打穿
+	//（实测：重启后 2 分钟，97 分账号打收费模型归零；倍率表当时尚未建立）。
 	// 异步执行：不阻塞监听启动；失败仅记日志（下一轮懒触发或本轮重试仍可补上）。
 	go warmModelRates(ctx, up, p)
 
