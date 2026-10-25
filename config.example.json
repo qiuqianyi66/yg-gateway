@@ -10,6 +10,7 @@
       "realm": "cn",
       "rpm": 60,
       "monthly_token_quota": 5000000,
+      "usage_alert_tokens": 4000000,
       "group": "team-a"
     }
   ],
