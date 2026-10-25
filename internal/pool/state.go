@@ -439,6 +439,8 @@ func (p *Pool) PickByUIDForModel(uid, model string) *auth.Auth {
 	e.setLastUsed(now)
 	seq := p.pickSeq.Add(1)
 	e.usedSeq.Store(seq)
+	// 决策溯源（pickreason.go）：粘性命中也是一次「选中」，与 pick 各路径同口径记录。
+	e.setPickReason(&pickReason{Mode: "sticky", At: now})
 	return e.a
 }
 
@@ -485,6 +487,8 @@ func (p *Pool) PickByUID(uid string) *auth.Auth {
 	e.setLastUsed(now)
 	seq := p.pickSeq.Add(1)
 	e.usedSeq.Store(seq)
+	// 决策溯源（pickreason.go）：粘性命中也是一次「选中」，与 pick 各路径同口径记录。
+	e.setPickReason(&pickReason{Mode: "sticky", At: now})
 	return e.a
 }
 
@@ -626,6 +630,7 @@ func (p *Pool) statusOf(uid string, e *entry) Status {
 		SuccessCount:     e.successCount,
 		ErrTotal:         e.errTotal,
 		CheckinDone:      e.lastCheckinDay == now.Format("2006-01-02"),
+		PickReason:       e.lastPickReason().string(),
 		TokenUsage:       e.tokenUsage,
 		LastSuccessTime:  e.lastSuccess,
 		LastErrTime:      e.lastErr,

@@ -78,7 +78,11 @@ type Status struct {
 	CoolRemaining            int64     `json:"cool_remaining_sec,omitempty"`
 	Until                    time.Time `json:"until,omitempty"`
 	Reason                   string    `json:"reason,omitempty"`
-	SoftStreak               int       `json:"soft_streak,omitempty"` // 连续软冷却次数（指数退避指数，见 entry.softStreak）
+	// PickReason 最近一次选号理由（决策溯源，pickreason.go）：weighted tier=N [explore]
+	// [halfopen-probe] / sticky / lru / earliest-expiry kind=…。空 = 从未被选中。
+	// 只答「现在为什么是它」；请求级历史靠 reqlog 归档。
+	PickReason string `json:"pick_reason,omitempty"`
+	SoftStreak int    `json:"soft_streak,omitempty"` // 连续软冷却次数（指数退避指数，见 entry.softStreak）
 	// RateLimitedModels 当前仍在限额的模型列表（issue #36 限额台账）。
 	// 仅「带解析时间 6004」触发的模型级独立冷却（modelCooldowns 未到期条目）时非空，
 	// 每模型一行；运维据此看到"账号 A 的模型 X 还在限额中，预计 Z 时间恢复"。到期即消失（零回归）。
@@ -212,6 +216,9 @@ type entry struct {
 	a            *auth.Auth
 	credits      int64
 	creditsTotal int64 // 积分总额度（UserResource 聚合；0 = 未知）
+	// lastPick 最近一次选号理由（决策溯源，pickreason.go）。atomic.Pointer：
+	// 不可变结构整体换，读锁路径安全（与 lastUsed 同组运行态，不持久化）。
+	lastPick atomic.Pointer[pickReason]
 	// creditsExpiring 配置窗口内即将过期的可用积分子集，是 credits 的一部分。
 	// creditsEarliestExpiry / creditsEarliestRemaining 是全部未来到期批次中的最早一批；
 	// 两者均由签到/余额刷新更新，供 earliest-expiry 路由和状态观测使用。
