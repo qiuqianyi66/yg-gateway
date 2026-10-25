@@ -196,6 +196,7 @@ func main() {
 	p.SetWeights(cfg.Pool.IdleWeightPerHour, cfg.Pool.IdleWeightMax)
 	p.SetPreferExpiring(cfg.Pool.PreferExpiring)
 	p.SetEwma(cfg.Pool.Ewma.Enabled, cfg.Pool.Ewma.Alpha, cfg.Pool.Ewma.MinSamples) // EWMA 表现回灌（ADR-005 D-502，默认关 = 零回归）
+	p.SetRecentUsageFactor(cfg.Pool.RecentUsageFactor)                              // 近期用量衰减（REQ-routing P2，默认关）
 
 	// 会话粘性路由（可配关闭）。
 	var sessRouter *session.Router

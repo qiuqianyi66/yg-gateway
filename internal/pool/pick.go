@@ -304,9 +304,10 @@ func (p *Pool) pick(tried map[string]bool, reqModel, realm, group string) *auth.
 	}
 	// 原子写回（ADR-005 D-500）：读锁下用 atomic 标记选中，不写普通字段。
 	e.setLastUsed(now)
+	_, inBand := p.softBandFactorOf(e, now)
 	e.setPickReason(&pickReason{Mode: pickMode, Tier: bestTier, Explored: explored,
-		Probe: p.breakerProbeGap > 0 && !e.breakerUntil.IsZero() && now.After(e.breakerUntil) && e.retryCount > 0,
-		At:    now})
+		Probe:    p.breakerProbeGap > 0 && !e.breakerUntil.IsZero() && now.After(e.breakerUntil) && e.retryCount > 0,
+		Softband: inBand, At: now})
 	seq := p.pickSeq.Add(1)
 	e.usedSeq.Store(seq) // 单调序号：保证 usedSeq 严格全序（防惊群/LRU 的权威依据）
 	// half-open 试探占位（ADR-003 D-400）：本号是被放行的试探（熔断刚到期且
@@ -525,6 +526,14 @@ func (p *Pool) routingWeightOf(e *entry, maxCredits int64, now time.Time, median
 	w := p.weightOf(e, maxCredits, now)
 	if p.ewmaEnabled {
 		w *= p.ewmaWeightFactor(e, medianLatencyMs)
+	}
+	// 软带（REQ-routing P1）：floor 带内 ×0.5 降档不硬拦（悬崖→坡道）。
+	if f, inBand := p.softBandFactorOf(e, now); inBand {
+		w *= f
+	}
+	// 近期用量衰减（REQ-routing P2，默认关）：刚服务过大量 token 的号让位。
+	if p.recentUsageFactor {
+		w *= e.recentUsageFactorOf(now)
 	}
 	if p.preferExpiring && expiringNow(e, now) {
 		return w * expiringVirtualSlots

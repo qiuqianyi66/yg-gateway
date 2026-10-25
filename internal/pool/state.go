@@ -277,6 +277,12 @@ func (p *Pool) NoteModelCost(uid, model string, credit float64, tokens int) {
 // RecordTokenUsage 记录一次实际发起的聊天账号尝试及上游返回的 usage 增量。
 // usage 字段缺失时仍累计请求次数，但只累计明确存在的 token 字段。
 func (p *Pool) RecordTokenUsage(uid string, delta TokenUsageDelta) {
+	p.RecordTokenUsageWithTime(uid, delta, p.now())
+}
+
+// RecordTokenUsageWithTime 同 RecordTokenUsage 但时间可注入（测试冻结时钟；
+// 生产经 RecordTokenUsage 走 p.now()——与选号/冷却同一时钟口径）。
+func (p *Pool) RecordTokenUsageWithTime(uid string, delta TokenUsageDelta, now time.Time) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	e, ok := p.byUID[uid]
@@ -285,7 +291,24 @@ func (p *Pool) RecordTokenUsage(uid string, delta TokenUsageDelta) {
 	}
 	usage := &e.tokenUsage
 	usage.RequestCount++
-	usage.LastUsedAt = time.Now()
+	usage.LastUsedAt = now
+	// 衰减 token 账（REQ-routing P2）：先衰减到当下再累加本次总 token。
+	// 只用确定已知的量（HasTotal 优先，其次 prompt+completion 已知分量），缺字段的
+	// 调用不污染账（unknown 不当 0 记——四态纪律在计量侧的体现）。
+	if delta.HasTotalTokens && delta.TotalTokens >= 0 {
+		e.decayRecentTokensTo(now)
+		if e.recentTokensAt.IsZero() {
+			e.recentTokensAt = now // 首次入账：decay 只推进已有时间戳，这里初始化
+		}
+		e.recentTokens += float64(delta.TotalTokens)
+	} else if delta.HasPromptTokens && delta.HasCompletionTokens &&
+		delta.PromptTokens >= 0 && delta.CompletionTokens >= 0 {
+		e.decayRecentTokensTo(now)
+		if e.recentTokensAt.IsZero() {
+			e.recentTokensAt = now
+		}
+		e.recentTokens += float64(delta.PromptTokens + delta.CompletionTokens)
+	}
 	if delta.Model != "" {
 		usage.LastModel = delta.Model
 	}

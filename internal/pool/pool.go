@@ -75,6 +75,9 @@ type Pool struct {
 	ewmaEnabled    bool
 	ewmaAlpha      float64
 	ewmaMinSamples int64
+	// recentUsageFactor 近期用量衰减因子开关（REQ-routing P2，SetRecentUsageFactor
+	// 注入；默认关 = 零回归，因子恒 1）。半衰期/尺度常量见 pickreason.go。
+	recentUsageFactor bool
 	// maxInFlight 单账号最大在途请求数；0 = 不限（租约关闭）。
 	maxInFlight int
 	// maxInFlightGlobal global 域单账号在途上限分档（WAF 403 修复 P1-1：global 域
@@ -198,6 +201,12 @@ func (p *Pool) SetBreaker(threshold int, cooldown, cooldownMax time.Duration) {
 // SetEwma 注入 EWMA 表现回灌参数（ADR-005 D-502，main 从 config 解析后调用）。
 // enabled=false 时权重因子恒 1（完全回到现状行为）；alpha 非 (0,1] 保留默认；
 // minSamples<=0 保留默认。热生效（与 pool.* 其余 Set* 同口径）。
+func (p *Pool) SetRecentUsageFactor(enabled bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.recentUsageFactor = enabled
+}
+
 func (p *Pool) SetEwma(enabled bool, alpha float64, minSamples int) {
 	p.mu.Lock()
 	defer p.mu.Unlock()

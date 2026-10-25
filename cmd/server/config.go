@@ -363,11 +363,11 @@ type Config struct {
 		DegradeCooldownMax string  `json:"degrade_cooldown_max"` // 降权时长的上限钳制，默认 "2h"（仅当 cooldown 超该值才钳制）
 		IdleWeightPerHour  float64 `json:"idle_weight_per_hour"` // 闲置补偿：每小时未用 +0.5 权重
 		IdleWeightMax      float64 `json:"idle_weight_max"`      // 闲置补偿封顶，默认 5.0
-		// PreferExpiring 快过期积分加权开关，默认 true。开启且 expiring_soon 窗口内
-		// 存在有效批次时，该账号选号权重 ×2（虚拟实例 slots=2，见 pool 路由加权）；
-		// 不按到期时间排序、与批次金额无关（issue #101 对齐实现口径）。
+		// PreferExpiring 快过期加权开关，默认 true：expiring_soon 窗口内有有效批次时
+		// 权重 ×2（slots=2，见 pool 路由加权）；不按到期排序、与金额无关（issue #101 口径）。
 		// 关闭后完全不使用到期信息选号。
-		PreferExpiring bool `json:"prefer_expiring"`
+		PreferExpiring    bool `json:"prefer_expiring"`
+		RecentUsageFactor bool `json:"recent_usage_factor"` // 近期用量衰减（REQ-routing P2）：权重×2^(-衰减token/200k)，半衰期 1h，默认关
 		// ExpiringSoon 快过期积分窗口（如 "168h"=7天）：签到/余额刷新时，到期时间在
 		// 此窗口内的批次令账号命中上述 ×3 加权；窗口开大 → 命中账号变多、
 		// 偏好被稀释。空/0 = 禁用该加权门槛。

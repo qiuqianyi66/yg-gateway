@@ -1,7 +1,7 @@
 ---
 name: req-routing-improvements-2026-10-25
 description: 选号路由吸收 magpie 深读成果——90% 带软降权 + usage 半衰期可选策略（含必要性分析）。
-status: 已立项待执行
+status: 主体落地（2026-10-25 P1+P2 实现与测试，默认全关零回归；真机分布校准 bandMult 假设待做）
 owner: maintainer
 ---
 
