@@ -58,11 +58,54 @@
 - **Bun 插件/中间件生态**：违背单二进制零依赖（go.mod 个位数）红线。
 - **首条消息摘要做粘性键**：我们有 ADR-004 的内容派生键（可关），语义已覆盖。
 
-## 五、Unknown（诚实登记）
+## 五、Unknown（诚实登记）→ **2026-10-25 二轮源码研读已消解**
 
-- **pace 模式公式**：文档只说「按 allowance 加权」未给公式，需读
-  `internal/agent/route.go` 源码才能确认与 smart 的差异——**unknown**，requires:
-  一次源码阅读；BACKLOG A6 的 pace 实现以此为前置。
+读了 `internal/routes/strategies.go`（Smart/Pace/LeastUsed/Weighted 全部实现）+
+`internal/gateway/routing.go`（Seat 组装），三个此前的 unknown/拍脑袋点全部有实锤：
+
+### ① pace 公式（源码级）
+
+**`pace = 周剩余份额 ÷ 距 reset 的小时数`**（"what it has left of its week per hour
+until that renews, the most first"）。它统一了 smart 和 least-used 各自的失败模式
+（源码注释原文）：least-used 会把「80% 剩余但 1 小时后 reset」排在新号前（浪费）；
+smart 会把「3% 剩余 1 小时到期」排在「90% 剩余 2 小时到期」前（打光快没的）。
+pace = **每小时的流失风险**。分带细节：先按 tier 分层，层内 Learns 优先，再按 pace
+的**十分之一带宽**分组——注释里专门论证了为什么要「先排序后画带」：非传递性
+（三个 pace 各差 1/12 会循环成环）。带内按衰减 token（见③）。
+对照 YG：我们的快过期×3 虚拟实例 ≈ smart 思想；pace 是更平滑的统一度量，但依赖
+「reset 时刻已知」——CodeBuddy 的到期是批次制（creditsEarliestExpiry），可推导。
+
+### ② 90% 带的真实现：三档字典序分层，不是乘系数
+
+```go
+const LowShare = 90; UsedShare = provider.SpentShare
+func tier(share) { >=UsedShare→2; >=LowShare→1; else 0 }
+return append(append(fine, low...), spent...)  // 字典序拼接
+```
+
+带内（tier 1）按 Used 升序；近耗尽（tier 2）里 **Credits 多者优先**（spentBefore：
+还能靠 credits 续命的先上）。**没有权重系数**——「软」体现在「仍在候选序列里，
+只是排到 fine 之后（failover 才轮到）」。另一处精妙：Smart 层内按 `Soon`（各窗口
+reset 时刻）比较时**截断到小时**（"to the hour, so a few minutes don't reorder"）。
+
+### ③ 半衰期实锤：token 记账维度，非权重乘子
+
+```go
+const usageHalfLife = time.Hour
+// tokenUse.now: u.n * math.Exp2(-Δt.Seconds()/usageHalfLife.Seconds())
+// served: routed.used[rest].now(now) + float64(tokens)
+```
+
+作用在**该账号累计服务的 token 数**上（base-2 指数衰减），是 LeastUsed/Pace 带内的
+**次级排序键**，不参与任何权重乘法。翻译到 YG 的加权抽签体系：等价物是给每账号记
+「衰减 token 账」（RecordTokenUsage 已有累计值，缺时间戳衰减），选号时作为乘性因子
+`w *= exp2(-recentTokens/scale)` 或带内次级降权——**不是**替换线性 idle 补偿（我此前
+REQ 里的写法不准确，已修正）。
+
+### 顺带佐证
+
+`internal/gateway/count_tokens_test.go` 存在——count_tokens 是它网关层原生实现，
+BACKLOG A1 的做法得到验证；`redact.go` 也在 gateway 层（隐私脱敏位置佐证不抄理由）。
 
 ## 六、战略结论（回应「直接用 vs 打磨」）
 

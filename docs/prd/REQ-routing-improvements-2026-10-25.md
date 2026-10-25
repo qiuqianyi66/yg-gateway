@@ -26,30 +26,45 @@ owner: maintainer
 - **更便宜的等效手段**：调大 floor 值只是移动悬崖位置；调 idleWeightPerHour 不改
   形状。均不解决「悬崖/形状」本身。
 
-## 方案
+## 方案（2026-10-25 二轮源码研读后修正——原 ×0.5/替换 idle 两处为拍脑袋，已按 magpie 实现实锤改写；依据见 reference/magpie-deep-read §五）
 
 ### P1 软带（soft band）
 
-- `credit_floor > 0` 时新增软带：`floor < credits ≤ floor×1.2` 的账号**不硬拦**，
-  路由权重 ×0.5（通过 weightOf 之后的因子实现，与 EWMA 因子同挂法）。
-- `credits ≤ floor` 仍硬拦（现状语义不变，保底底线不退）。
-- config 无新键（软带倍率 1.2 先内定，有实测诉求再暴露）。
-- 决策溯源：pickReason 加 `softband` 标记（读到带内降权时）。
+- **分层思想（对齐 magpie tier 实现）**：`credit_floor > 0` 时账号分三档——
+  `credits > floor×bandMult` 正常 / `floor < credits ≤ floor×bandMult` 近底线档 /
+  `credits ≤ floor` 硬拦（现状语义不变）。magpie 的「软」是字典序分层（带内排
+  fine 之后、failover 才轮到）；YG 是加权抽签体系，**正确翻译是带内权重降档**
+  （×0.5）而非排序——加权体系里所有候选本就都会被抽到，概率降低即「排后」。
+- **bandMult 参数不再拍 1.2，改为「按典型请求扣费定义」**：带内含义 =「还敢接
+  N 次收费请求」。N 取 2（一次误判余量）；扣费量级从 modelCost 实测台账取该账号
+  近期 P50（无观测时回退全池 P50，再回退 bandMult=1.2 常量）。真机分布出来后
+  复核（这是执行期任务，不是研究期）。
+- 决策溯源：pickReason 加 `softband` 标记。
 
-### P2 半衰期策略（可选，默认关）
+### P2 近期用量衰减因子（修正：不是替换 idle 补偿）
 
-- `pool.weight_mode`：`"idle"`（默认，现状零回归）| `"halflife"`。
-- halflife 模式下闲置补偿项替换为 `maxBoost × 0.5^(hoursSinceUsed)`，从未使用给
-  满分；`idleWeightPerHour/Max` 键在该模式下不参与。
-- 与软带、EWMA、快过期因子正交叠乘（都是乘性因子，无耦合）。
+- **magpie 实锤**：半衰期作用于**token 记账维度**（`exp2(-Δt/1h)`，served 时累加
+  衰减值），作为策略层内的**次级键**，不乘权重。原方案「替换线性 idle 补偿」
+  是误读，废弃。
+- **YG 翻译**：每账号维护「衰减 token 账」——`RecordTokenUsage` 已有累计值，补
+  时间戳：`decayed = (decayed + Δtokens) × 2^(-Δt/1h)`（served 时先衰减再累加，
+  读取时衰减到当前）。选号时作为**乘性因子**参与 routingWeightOf：
+  `w *= 2^(-decayed/scaleTokens)`，scaleTokens 默认 200k（≈一次重度 agent 会话）。
+- **1h 半衰期对 CodeBuddy 节奏的适配论证**：magpie 的 1h 面向 Claude 5h 窗
+  （窗长的 1/5）；CodeBuddy 的节拍是签到 09/21（两次 12h）+ 硬冷却到次日 04:00——
+  「让刚用过的号歇会儿」的自然尺度是**小时级**（两次签到之间），1h 半衰期使
+  2 次签到间隔（12h）后历史用量仅剩 1/4096 ≈ 归零，恰好等于「新一轮签到周期
+  重新开始」的语义。**结论：1h 合适，无需改**；config 留 `halflife` 键以便真机调。
+- 与软带、EWMA、快过期因子正交叠乘（都是乘性因子）。默认关
+  （`pool.recent_usage_factor: false`）。
 
-## Given-When-Then
+## Given-When-Then（随方案修正更新）
 
-- When 账号 credits=180、floor=150（带内），Then 该账号仍可被选中，权重为带外的
-  0.5 倍，pickReason 含 softband；credits=120（≤floor）时仍被硬拦（现状）。
-- When `weight_mode=halflife` 且账号 1 小时前用过，Then 其闲置补偿 = 满分×0.5；
-  4 小时前用过 = 满分×0.0625；从未用过 = 满分。
-- When `weight_mode` 留空/="idle"，Then 行为与现状逐位一致（零回归锚定测试）。
+- When 账号 credits 在 (floor, floor×bandMult] 带内，Then 仍可被选中、权重×0.5、
+  pickReason 含 softband；credits ≤ floor 仍硬拦（现状）。
+- When 衰减因子开启且账号刚服务过 100k token，Then 其权重因子 = 2^(-0.5)（1h
+  半衰期、scale=200k）；12h 后因子 ≈ 1（签到周期归零语义）。
+- When 两个因子全关（默认），Then 行为与现状逐位一致（零回归锚定测试）。
 - When 软带号被选中后余额跌破 floor，Then 下轮 pick 硬拦（软带不是逃逸口）。
 
 ## 验证与回滚
