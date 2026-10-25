@@ -35,18 +35,36 @@ func TestNewAlertNotifier(t *testing.T) {
 	}
 }
 
-// TestStartOpsAgentDisabledNoOp disabled=false：立即返回（无 goroutine、无输出）。
-func TestStartOpsAgentDisabledNoOp(t *testing.T) {
-	startOpsAgent(OpsAgentConfig{}, nil, nil, nil, context.Background()) // 不 panic 即过
+// TestBuildOpsAgentDisabledNil disabled=false 或 pool 缺失：返回 nil（面板引导态 + 启动 no-op）。
+func TestBuildOpsAgentDisabledNil(t *testing.T) {
+	if got := buildOpsAgent(OpsAgentConfig{Enabled: true}, nil, nil, nil); got != nil {
+		t.Fatal("pool 缺失应返回 nil")
+	}
+	p := pool.New("")
+	if got := buildOpsAgent(OpsAgentConfig{}, p, nil, nil); got != nil {
+		t.Fatal("disabled 应返回 nil")
+	}
+	if got := buildOpsAgent(OpsAgentConfig{Enabled: true}, p, nil, nil); got == nil {
+		t.Fatal("enabled 且 pool 非空应返回实例")
+	}
+}
+
+// TestStartOpsAgentNilNoOp nil 实例：立即返回（无 goroutine、无输出）。
+func TestStartOpsAgentNilNoOp(t *testing.T) {
+	startOpsAgent(nil, context.Background()) // 不 panic 即过
 }
 
 // TestStartOpsAgentEnabledStartsAndExits enabled=true：Run 跑在传入 ctx 上，
 // 取消即回收（R9 在装配层的延续）；用真实 pool 空池（无副作用）。
 func TestStartOpsAgentEnabledStartsAndExits(t *testing.T) {
 	p := pool.New("")
+	oa := buildOpsAgent(OpsAgentConfig{Enabled: true, IntervalSec: 1}, p,
+		unknown.NewRegistry(), newAlertNotifier(&Config{}))
+	if oa == nil {
+		t.Fatal("enabled 且 pool 非空应返回实例")
+	}
 	ctx, cancel := context.WithCancel(context.Background())
-	startOpsAgent(OpsAgentConfig{Enabled: true, IntervalSec: 1}, p, unknown.NewRegistry(),
-		newAlertNotifier(&Config{}), ctx)
+	startOpsAgent(oa, ctx)
 	cancel() // 立即取消：Run 的 ticker 循环随 ctx.Done 退出
 	time.Sleep(20 * time.Millisecond)
 }

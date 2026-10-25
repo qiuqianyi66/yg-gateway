@@ -371,6 +371,12 @@ func main() {
 	unknownReg := unknown.NewRegistry()
 	p.SetUnknownRegistry(unknownReg)
 
+	// 外发告警 + 运维 agent（REQ-opsagent / ADR-017）：二者共用 notifier（去重窗口
+	// 一致）；agent 实例传给面板（nil = 未启用，面板有引导态）。enabled=false 时
+	// buildOpsAgent 返回 nil、startOpsAgent no-op（零回归）。
+	alertNotifier := newAlertNotifier(cfg)
+	opsAg := buildOpsAgent(cfg.OpsAgent, p, unknownReg, alertNotifier)
+
 	// 请求指标始终启用；JSONL 归档只写脱敏元数据，写盘失败不影响聊天请求。
 	requestLog := reqlog.New(reqlog.Config{
 		Dir:           stateSibling(cfg.StateFile, "request-logs"),
@@ -395,6 +401,7 @@ func main() {
 		RequestLog:      requestLog,
 		Upstream:        up,
 		Scheduler:       sch,
+		OpsAgent:        opsAg,
 		AuthDir:         cfg.AuthDir,
 		APIKey:          cfg.APIKey,
 		RedisMode:       redisMode,
@@ -427,9 +434,6 @@ func main() {
 	// 协议漂移观测（R-102，P1）：启用时从快照文件恢复基线（缺失 = unknown），
 	// /status 暴露状态；探测 goroutine 在校验循环外启动（下方）。
 	driftMon := buildDriftMonitor(cfg)
-
-	// 提升为变量：opsagent 的建议输出口复用同一实例（去重窗口一致）。
-	alertNotifier := newAlertNotifier(cfg)
 
 	h := server.NewHandler(server.Config{
 		Pool:     p,
@@ -483,7 +487,7 @@ func main() {
 	go sch.Run(ctx)
 	sch.StartBalanceRefresh(ctx, cfg.BalanceRefreshInterval)
 	// 运维 agent（REQ-opsagent-2026-10-24 / ADR-017）：enabled=false 时 no-op。
-	startOpsAgent(cfg.OpsAgent, p, unknownReg, alertNotifier, ctx)
+	startOpsAgent(opsAg, ctx)
 
 	// 启动即预热模型积分倍率表：倍率只在 FetchModels/FetchGlobalModelInfos 成功时
 	// 填充（两者均懒触发），重启后到首次 /v1/models 或面板模型页被访问之前，

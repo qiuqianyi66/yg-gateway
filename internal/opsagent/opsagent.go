@@ -187,6 +187,12 @@ func (a *Agent) Run(ctx context.Context) {
 	}
 }
 
+// ConfigSnapshot 返回运行参数快照（面板「运维 Agent」视图展示用）。
+// 参数装配期固定（与 pool.Set* 同风格），运行期不提供热改。
+func (a *Agent) ConfigSnapshot() (interval time.Duration, healthyFrac float64) {
+	return a.cfg.Interval, a.cfg.HealthyFrac
+}
+
 // History 返回保留的轮报告（旧→新）。返回副本，调用方改不动内部状态。
 func (a *Agent) History() []Round {
 	a.mu.Lock()

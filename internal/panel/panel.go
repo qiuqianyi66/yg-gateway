@@ -24,6 +24,7 @@ import (
 	"yg-gateway/internal/auth"
 	"yg-gateway/internal/httpauth"
 	"yg-gateway/internal/livecfg"
+	"yg-gateway/internal/opsagent"
 	"yg-gateway/internal/pool"
 	"yg-gateway/internal/reqlog"
 	"yg-gateway/internal/scheduler"
@@ -64,6 +65,10 @@ type Config struct {
 	StickyCount func() int
 	// SessionSnapshot 返回当前粘性会话详情列表（key → uid + last_active）；nil 时不返回。
 	SessionSnapshot func() []session.SessionBinding
+
+	// OpsAgent 运维 agent 实例（REQ-opsagent 阶段 2）：nil = 未启用，
+	// /panel/api/opsagent/status 返回 {"enabled":false}（前端有引导态）。
+	OpsAgent *opsagent.Agent
 
 	// Usage 逐请求用量记录器（nil = 用量接口返回 501）。
 	Usage *usage.Recorder
@@ -166,6 +171,8 @@ func (p *Panel) routes() {
 	p.mux.HandleFunc("GET /panel/app.js", p.appScript)
 	p.mux.HandleFunc("GET /panel/acl_notice.js", p.aclNoticeScript)
 	p.mux.HandleFunc("GET /panel/savings_note.js", p.savingsNoteScript)
+	p.mux.HandleFunc("GET /panel/opsagent.js", p.opsAgentScript)
+	p.mux.HandleFunc("GET /panel/api/opsagent/status", p.withAuth(p.opsAgentStatus))
 	p.mux.HandleFunc("GET /panel/api/overview", p.withAuth(p.overview))
 	p.mux.HandleFunc("GET /panel/api/logs", p.withAuth(p.logsHandler))
 	p.mux.HandleFunc("GET /panel/api/request_metrics", p.withAuth(p.requestMetrics))
