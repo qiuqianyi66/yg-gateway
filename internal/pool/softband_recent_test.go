@@ -72,6 +72,43 @@ func TestSoftBandWeightAndReason(t *testing.T) {
 	}
 }
 
+// TestSoftBandPrescreenCap 带宽 cap（floor×0.5）与热路径预筛：credits > floor×1.5
+// 恒带外（即使台账算出的带宽更大也被 cap）；大额台账不再放大带宽。
+func TestSoftBandPrescreenCap(t *testing.T) {
+	p := New("")
+	p.mu.Lock()
+	p.creditFloor = 100
+	p.mu.Unlock()
+	p.Add(&auth.Auth{UID: "rich"})
+	p.Add(&auth.Auth{UID: "edge"})
+	p.SetCredits("rich", 200, 0)              // = floor×2 > 预筛线 floor×1.5 → 恒带外
+	p.SetCredits("edge", 149, 0)              // 恰在预筛线内；无台账 → upper=min(120, 150)=120 → 带外
+	p.NoteModelCost("edge", "m1", 10.0, 1000) // 大额扣费：2×10/1000×20000=400 → 被 cap 到 150
+	now := time.Now()
+	p.mu.RLock()
+	fRich, inRich := p.softBandFactorOf(p.byUID["rich"], now)
+	fEdge, inEdge := p.softBandFactorOf(p.byUID["edge"], now)
+	upperCapped := p.softBandUpper(p.byUID["edge"], now) // 大额台账直查：验证 cap
+	p.mu.RUnlock()
+	if inRich || fRich != 1 {
+		t.Fatalf("floor×2 应被预筛为带外（带宽 cap = floor×0.5）")
+	}
+	if !inEdge || fEdge != softBandFactor {
+		t.Fatalf("149 ∈ (100, cap150] 应带内（大额台账被 cap 到 150，非 500）")
+	}
+	if upperCapped != 150 {
+		t.Fatalf("softBandUpper = %d, want 150（500 被 cap 到 floor×1.5）", upperCapped)
+	}
+	// cap 生效的带内案例：credits=130（(100,150] 内）应带内。
+	p.SetCredits("edge", 130, 0)
+	p.mu.RLock()
+	_, in130 := p.softBandFactorOf(p.byUID["edge"], now)
+	p.mu.RUnlock()
+	if !in130 {
+		t.Fatal("130 应带内（upper=min(max(120,500),150)=150）")
+	}
+}
+
 // TestSoftBandDisabledWhenFloorOff creditFloor=0（保底关闭）时无带。
 func TestSoftBandDisabledWhenFloorOff(t *testing.T) {
 	p := New("")

@@ -40,3 +40,23 @@ P1：单提交 revert（floor>0 部署恢复纯硬拦）。P2：config 键删掉
 
 bandMult 的 20k token/请求假设与实测台账中位数的取法（当前逐次计算，仅近 floor 号
 触发，热路径无感）——真机分布后复核（REQ 状态注明）。
+
+## 独立审查状态（如实记录）
+
+子 agent 独立复审按协议尝试 **2 次，均被环境并发配额阻断**（model concurrency limit
+exceeded）→ 按编排协议放弃子 agent 路线，转**主线自查**（不冒充独立复审——L-16
+要求另起一人，review.md 留空待将来独立补）。主线自查发现并修复（这些是真实 findings，
+但复核者与实现者同为本次会话，证明力打折扣）：
+
+- 🟡 **热路径声称不成立**：summary/注释原称「中位数只在近 floor 号上被调用，
+  热路径无感」——实际 `routingWeightOf` 对**所有**健康候选调用 `softBandFactorOf`，
+  中位数计算会跑满热路径。修复：带宽硬上限 `floor×0.5`（软带是坡道不是跑道）+
+  一行预筛（credits > floor×1.5 恒带外），中位数只对预筛通过的少数号执行。
+  新测试 TestSoftBandPrescreenCap 直查 `softBandUpper` 断言 cap（500→150）。
+- 🟢 测试算术错误两处（149/cap 边界算错、modelCost nil map 直填）——测试修复过程
+  中被机器抓到（panic + 数值断言），未流入生产。
+- 🟢 R10 形态一处（`f, _ :=` 忽略布尔）——pre-commit 检查器抓到，改用 inBand 分支。
+- 🟢 P2 真 bug 一处：首次入账 recentTokensAt 未初始化（decay 只推进已有时间戳）→
+  因子恒 1——新测试的数值断言抓到，已修+锚定。
+
+待办：环境允许时（或人工新会话）按本文清单跑一次真正的独立复审补 review.md。
