@@ -19,6 +19,7 @@ import (
 	"yg-gateway/internal/logfmt"
 	"yg-gateway/internal/pool"
 	"yg-gateway/internal/reqlog"
+	"yg-gateway/internal/session"
 	"yg-gateway/internal/upstream"
 )
 
@@ -372,6 +373,21 @@ type requestTrace struct {
 	// 是 authKeyKey context，这里只做日志归因，避免重复持有含摘要的对象）。
 	keyID   string
 	keyName string
+	// sessionFP 会话键盐哈希（V3-10 agent 画像）。由 chatCompletions 在
+	// deriveSessionKeys 之后经 setSessionFP 写入；空 = 无会话身份（unknown）。
+	// 与出站 X-Conversation-Request-ID 同源（session.RequestIDForKey），
+	// 归档里按它聚合即可还原「一个 agent 会话吃了多少 token」。
+	sessionFP string
+}
+
+// setSessionFP 记录会话键的盐哈希。调用方在 deriveSessionKeys 拿到 sessKey 后
+// 传入原始 sessKey——这里统一走 session.RequestIDForKey 哈希，避免调用方
+// 各写一遍盐哈希逻辑、或误把原始 conversationId 落盘（PII）。
+func (t *requestTrace) setSessionFP(sessKey string) {
+	if t == nil || sessKey == "" {
+		return
+	}
+	t.sessionFP = session.RequestIDForKey(sessKey)
 }
 
 // setKey 记录鉴权命中的 Key 的归因字段（id/name，不含明文、不含约束对象）。
@@ -467,6 +483,10 @@ func (t *requestTrace) event(status int) reqlog.Event {
 	e.UserAgent = t.userAgent
 	e.KeyID = t.keyID
 	e.KeyName = t.keyName
+	e.SessionFP = t.sessionFP
+	// AgentKind 从 UA 派生：UA 空（开关关/UA 空）→ ClassifyAgentKind 返回 ""，
+	// omitempty 自然省略；采到了但不认识 → "other"。
+	e.AgentKind = ClassifyAgentKind(t.userAgent)
 	if e.Outcome == "" {
 		if status >= 200 && status < 300 {
 			e.Outcome = reqlog.OutcomeSuccess

@@ -110,6 +110,17 @@ type Event struct {
 	// 用途：拿着这个 ID 去查上游日志，关联网关请求和上游侧的 trace。
 	// 零值 = 上游响应里没有 requestId（或者成功响应我们不解析）。
 	UpstreamRequestID string `json:"upstream_request_id,omitempty"`
+	// SessionFP 会话键的盐哈希（ROADMAP v3 V3-10）：session.RequestIDForKey(sessKey)
+	// 的 32 hex 输出。与出站 X-Conversation-Request-ID 同源同盐——同一客户端同一会话
+	// 在内存里/归档里/上游侧三处聚合到同一个稳定 ID，不需要反向解出原始会话键。
+	// 缺失 = 该请求没有可归属的会话身份（无 conversation_id 且内容派生关/无可派生），
+	// 三值处理：禁止把空串读成「单轮散客已确认」，它是 unknown。
+	SessionFP string `json:"session_fp,omitempty"`
+	// AgentKind 调用方 UA 分类（ROADMAP v3 V3-10）。闭词表见 server.ClassifyAgentKind；
+	// 本字段只存分类结果，不存原始 UA（UA 已在 UserAgent 字段，受 request_client_info 开关）。
+	// 三态：空 = 未采集（开关关/UA 空，unknown）；"other" = 采到了但词表不认识；
+	// 具体词表值 = inference（UA 客户端可控可伪造，分类概率正确，非 observation）。
+	AgentKind string `json:"agent_kind,omitempty"`
 }
 
 // Filter 用于从归档中筛选最近记录。字符串字段一律「包含」匹配（大小写不敏感），
