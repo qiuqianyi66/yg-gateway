@@ -14,6 +14,45 @@ import (
 // ErrKind 错误分类，pool 据此决定冷却时长。
 type ErrKind int
 
+// EvidenceLevel 错误判定的证据强度（四态纪律的错误分类版）。
+//
+// 为什么需要：现在的 13 种 ErrKind 告诉我们"是什么错误"，但没告诉我们
+// "这个判定的确定性有多高"。402 状态码是权威信号（余额就是没了），但
+// body 里出现"积分不足"四个字只是关键词匹配——上游可能在不同语境下
+// 用这个词。把猜测当事实会导致基于噪声做严厉操作（禁用账号、长冷却）。
+//
+// 三级标签：
+//   - High：确定性证据。HTTP 状态码本身就是权威信号（402/429/401/5xx），
+//     或精确业务码（11102/14018/11115/11135/11101）、精确词（12153）。
+//     可以直接执行严厉操作（禁用账号、长冷却、不累计错误计数）。
+//   - Medium：中等证据。body 关键词匹配，但关键词有歧义空间
+//     （"积分不足"可能指额度也可能指余额，"rate limit"可能指账号也可能指模型）。
+//     执行操作要保守一些（短冷却、累计错误计数但不直接禁用）。
+//   - Low：低证据/推断。纯文案猜测，没有结构化证据
+//     （"blocked by security policy"是我们猜测上游是误报）。
+//     最保守处理（降级重试、不罚账号、观察）。
+type EvidenceLevel int
+
+const (
+	EvidenceNone   EvidenceLevel = iota // 成功
+	EvidenceHigh                        // 确定性证据：状态码/精确业务码/精确词
+	EvidenceMedium                      // 中等证据：body 关键词匹配，有歧义空间
+	EvidenceLow                         // 低证据/推断：纯文案猜测，无结构化证据
+)
+
+func (e EvidenceLevel) String() string {
+	switch e {
+	case EvidenceHigh:
+		return "high"
+	case EvidenceMedium:
+		return "medium"
+	case EvidenceLow:
+		return "low"
+	default:
+		return "none"
+	}
+}
+
 const (
 	ErrNone           ErrKind = iota // 成功
 	ErrHardCredit                    // 余额不足（402 或 body 关键词）→ 长冷却
@@ -69,6 +108,15 @@ type Error struct {
 	Kind   ErrKind
 	Status int
 	Msg    string
+	// Evidence 错误判定的证据强度（见 EvidenceLevel 注释）。
+	// 为什么放在 Error 而不是 ErrKind：同一个 ErrKind 可能有不同的判定路径
+	// （比如 ErrHardCredit 可能来自 402 状态码=High，也可能来自 body 关键词=Medium）。
+	// 证据强度是这次判定的属性，不是错误类型的属性。
+	Evidence EvidenceLevel
+	// UpstreamRequestID 上游响应里的 requestId 字段（从错误 body 解析）。
+	// 用途：拿着这个 ID 去查上游日志，关联网关请求和上游侧的 trace。
+	// 零值 = 上游响应里没有 requestId（或者成功响应我们不解析）。
+	UpstreamRequestID string
 	// RetryAfter 上游明示的等待时长（Retry-After 秒 / retry-after-ms /
 	// x-ratelimit-reset 头解析，见 ParseRetryAfter）。零值 = 上游未明示，
 	// 冷却时长回落调用方计算值。挂载点选在 Error 信封：Kind 决定「罚不罚」，
@@ -592,4 +640,118 @@ func Classify(status int, body string) ErrKind {
 	}
 	// HTTP 200 但业务 code 非 0 且含余额关键词的情况已被上面 hardMarkers 捕获。
 	return ErrNone
+}
+
+// ClassifyError 按 HTTP 状态码 + body 判定错误类别，返回完整 Error 对象
+// （含 EvidenceLevel 证据强度标签）。新代码优先用这个。
+//
+// EvidenceLevel 推断口径（与 Classify 判定路径对应）：
+//   - High：状态码本身就是权威信号（402/429/401/404/5xx），或精确业务码
+//     （11102/14018/11115/11135/11101）、精确词（12153）。
+//   - Medium：body 关键词匹配，但关键词有歧义空间（"积分不足"/"rate limit" 等）。
+//   - Low：纯文案猜测（contentBlockedMarkers）、兜底的 ErrClient。
+//
+// 注意：这个函数的 evidence level 是「事后推断」——基于 status + kind 反推判定路径。
+// 大部分情况下准确，但边界情况（比如 ErrPromptTooLong 是 11115 业务码命中还是文案命中）
+// 可能有偏差。后续如果需要精确到每条判定路径的 evidence level，可以拆成 classifyWithEvidence。
+func ClassifyError(status int, body string) *Error {
+	kind := Classify(status, body)
+	ev := inferEvidenceLevel(kind, status, body)
+	return &Error{
+		Kind:              kind,
+		Status:            status,
+		Msg:               truncate(body, 200),
+		Evidence:          ev,
+		UpstreamRequestID: extractRequestID(body),
+	}
+}
+
+// extractRequestID 从错误 body 里提取上游的 requestId 字段。
+// 上游错误信封形态：{"code":11133,"msg":"...","requestId":"b0b28043..."}
+// 或者嵌套在 error 子对象里。解析失败返回空串（宁缺毋滥，不猜）。
+func extractRequestID(body string) string {
+	if body == "" {
+		return ""
+	}
+	var root map[string]any
+	if err := json.Unmarshal([]byte(body), &root); err != nil {
+		return ""
+	}
+	nodes := []map[string]any{root}
+	if inner, ok := root["error"].(map[string]any); ok {
+		nodes = append(nodes, inner)
+	}
+	for _, node := range nodes {
+		for _, key := range []string{"requestId", "request_id", "RequestId"} {
+			if v, ok := node[key]; ok && v != nil {
+				if s, ok := v.(string); ok && s != "" {
+					return s
+				}
+			}
+		}
+	}
+	return ""
+}
+
+// inferEvidenceLevel 根据 ErrKind + status + body 反推证据强度。
+// 这是 ClassifyError 的辅助函数，不要单独调用。
+func inferEvidenceLevel(kind ErrKind, status int, body string) EvidenceLevel {
+	switch kind {
+	case ErrHardCredit:
+		// 402 状态码 = 确定性；body 关键词 = 中等
+		if status == 402 {
+			return EvidenceHigh
+		}
+		return EvidenceMedium
+	case ErrSoftRate:
+		// 429 状态码 = 确定性；body 关键词 = 中等
+		if status == 429 {
+			return EvidenceHigh
+		}
+		return EvidenceMedium
+	case ErrSessionDead:
+		// 12153 精确词 = 确定性
+		return EvidenceHigh
+	case ErrNotFound:
+		// 404 状态码 = 确定性
+		return EvidenceHigh
+	case ErrServer:
+		// 5xx 状态码 = 确定性
+		return EvidenceHigh
+	case ErrContentBlocked:
+		// 纯文案猜测 = 低证据
+		return EvidenceLow
+	case ErrBadParams:
+		// 11101 业务码 = High；文案 = Medium
+		if strings.Contains(body, `"code":11101`) || strings.Contains(body, `"code": 11101`) {
+			return EvidenceHigh
+		}
+		return EvidenceMedium
+	case ErrAccountFault:
+		// 关键词匹配 = 中等
+		return EvidenceMedium
+	case ErrModelBlocked:
+		// 11102 精确业务码 = 确定性
+		return EvidenceHigh
+	case ErrWafBlock:
+		// 403 + 无业务信封 = 推断（可能是 WAF 也可能是其他）
+		return EvidenceMedium
+	case ErrPromptTooLong:
+		// 11115 业务码 = High；文案 = Medium
+		if strings.Contains(body, `"code":11115`) || strings.Contains(body, `"code": 11115`) {
+			return EvidenceHigh
+		}
+		return EvidenceMedium
+	case ErrImageInvalid:
+		// 11135 业务码 = High；文案 = Medium
+		if codeMarker(strings.ToLower(body), "11135") {
+			return EvidenceHigh
+		}
+		return EvidenceMedium
+	case ErrClient:
+		// 兜底 = 低证据/推断
+		return EvidenceLow
+	default:
+		return EvidenceNone
+	}
 }

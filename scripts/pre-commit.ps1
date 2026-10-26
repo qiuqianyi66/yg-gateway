@@ -1,4 +1,4 @@
-# pre-commit.ps1 — 提交前检查：把 .harness/rules/ 里的规范变成**退出码**
+﻿# pre-commit.ps1 — 提交前检查：把 .harness/rules/ 里的规范变成**退出码**
 #
 # 为什么需要：规范写在文档里没人看（编码规范.md 第八节那 26 项自检清单，靠人记得住
 # 才有效）；只有变成退出码才有约束力。本脚本把下列约束机器化：
@@ -14,6 +14,8 @@
 #   7. 治理自洽     check-harness.ps1（AGENTS.md 路径断链 / SKILL frontmatter / 路由表；
 #                    「未测」项不影响退出码，REQ-harness-engineering-2026-10-19 F1）
 #   8. 上下文预算   check-context-budget.ps1（常驻层 token 估算棘轮，只许下调；同上 F2）
+#   9. R6 出站隔离  check-upstream-isolation.ps1（出站请求集中 internal/upstream，
+#                    白名单放行合法例外如 panel/login.go OAuth 流程）
 #
 # 为什么新检查一律挂在这里而不是另开脚本入口（2026-10-19 实测）：CI 的 `gate` job
 # （.github/workflows/gate.yml）只跑**一条命令**——`pre-commit.ps1 -Fast -AllFiles -Base <ref>`。
@@ -155,7 +157,7 @@ $prodGoFiles = @($goFiles | Where-Object { $_ -notlike '*_test.go' })
 # ---------------------------------------------------------------------------
 # 检查 1：gofmt 零漂移（只查本次改动的文件）
 # ---------------------------------------------------------------------------
-Write-Section '检查 1/10：gofmt'
+Write-Section '检查 1/11：gofmt'
 # 本地只看本次改动的 .go 文件（存量已清零，增量严格拦截）；
 # CI 用 -AllFiles 看全仓——CI 工作区干净，「改动文件」恒为空，只看改动等于不检查。
 $gofmtTargets = @()
@@ -187,7 +189,7 @@ if ($gofmtTargets.Count -eq 0) {
 #   (b) 其余新增忽略点（`_ = ...` / `, _ := ...` / `, _ = ...`）→ 必须带解释注释
 #       （同行 `//`，或紧邻上两行内含「忽略」/`ignore`）。
 # ---------------------------------------------------------------------------
-Write-Section '检查 2/10：R10 静默忽略（新增行）'
+Write-Section '检查 2/11：R10 静默忽略（新增行）'
 
 $ignorePattern = '^\s*_ = |^\s*_ := |,\s*_\s*:?='
 $identPattern = '^\s*_ = ([A-Za-z_][A-Za-z0-9_]*)\s*(//.*)?$'
@@ -296,7 +298,7 @@ if ($r10bad.Count -gt 0) {
 # 判据：.ps1 里出现该形态**一律是 bug**（正确写法：行内引用用「」，需要字面双引号用单引号串
 # 或 here-string；确实要转义引号则用反引号转义）。
 # ---------------------------------------------------------------------------
-Write-Section '检查 3/10：PowerShell 引号陷阱（新增行）'
+Write-Section '检查 3/11：PowerShell 引号陷阱（新增行）'
 $psTrap = New-Object System.Collections.ArrayList
 foreach ($a in $added) {
     if ($a.File -notlike '*.ps1') { continue }
@@ -328,7 +330,7 @@ if ($psTrap.Count -gt 0) {
 # 作用域说明：这条检查天然是「本地」的（CI 工作区干净、无未跟踪文件），CI 里必然通过，
 # 这不是放水——它要拦的本来就是本地跑覆盖率时的手误。
 # ---------------------------------------------------------------------------
-Write-Section '检查 4/10：仓库根的字面名垃圾文件（L-3）'
+Write-Section '检查 4/11：仓库根的字面名垃圾文件（L-3）'
 $literalBad = New-Object System.Collections.ArrayList
 foreach ($f in @(& git ls-files --others --exclude-standard 2>$null)) {
     if (-not $f) { continue }
@@ -350,7 +352,7 @@ if ($literalBad.Count -gt 0) {
 # ---------------------------------------------------------------------------
 # 检查 5：构建与静态检查
 # ---------------------------------------------------------------------------
-Write-Section '检查 5/10：go build + go vet'
+Write-Section '检查 5/11：go build + go vet'
 $buildOut = @(& $goExe build ./... 2>&1)
 if ($LASTEXITCODE -ne 0) {
     $buildOut | Select-Object -First 40 | ForEach-Object { Write-Host ("    " + $_) -ForegroundColor DarkGray }
@@ -372,7 +374,7 @@ if ($LASTEXITCODE -ne 0) {
 # ---------------------------------------------------------------------------
 # 检查 6：测试
 # ---------------------------------------------------------------------------
-Write-Section '检查 6/10：go test ./...（-cover，输出复用给检查 7）'
+Write-Section '检查 6/11：go test ./...（-cover，输出复用给检查 7）'
 # 只跑**一次**全量测试：这份 `-cover` 输出既是「测试是否绿」的判据，也是检查 7 深度棘轮
 # 的覆盖率来源（先落 $env:TEMP，再传给 check-depth.ps1）。
 # 不加 -cover 会让 check-depth 内部又跑一遍全量 —— 同一个门禁里跑两遍，本机实测第二遍就是
@@ -406,7 +408,7 @@ if ($Fast) {
 # ---------------------------------------------------------------------------
 # 检查 7：治理门禁（依赖方向 + 深度棘轮）
 # ---------------------------------------------------------------------------
-Write-Section '检查 7/10：边界与深度棘轮'
+Write-Section '检查 7/11：边界与深度棘轮'
 $bout = @(& $hostExe -NoProfile -File scripts/check-boundaries.ps1 2>&1)
 if ($LASTEXITCODE -ne 0) {
     $bout | Select-Object -First 30 | ForEach-Object { Write-Host ("    " + $_) -ForegroundColor DarkGray }
@@ -437,7 +439,7 @@ if ($coverTmpPath -ne '' -and (Test-Path -LiteralPath $coverTmpPath)) {
 }
 
 # ---------------------------------------------------------------------------
-# 检查 8/10：新增需求文档必须有「必要性」段（阶段 0）
+# 检查 8/11：新增需求文档必须有「必要性」段（阶段 0）
 #
 # 由来：2026-10-17 盘点 14 项待办有 6 项经实测不需要做。规则见
 # .harness/rules/开发流程规范.md「零、阶段 0：必要性分析」；只对**本次新增**的
@@ -446,7 +448,7 @@ if ($coverTmpPath -ne '' -and (Test-Path -LiteralPath $coverTmpPath)) {
 # 退出码三态必须**分开报**（2026-10-17 第 3 轮独立复审 🟢）：脚本自身失败（2）与
 # 缺段（1）是两件事，混成一句「缺必要性段」会把排查引到错的地方。
 # ---------------------------------------------------------------------------
-Write-Section '检查 8/10：新增需求文档的必要性段（阶段 0）'
+Write-Section '检查 8/11：新增需求文档的必要性段（阶段 0）'
 $reqArgs = @('-NoProfile', '-File', 'scripts/check-req-necessity.ps1')
 if ($Base -ne '') { $reqArgs += @('-Base', $Base) }
 $rout = @(& $hostExe @reqArgs 2>&1)
@@ -465,7 +467,7 @@ switch ($LASTEXITCODE) {
 }
 
 # ---------------------------------------------------------------------------
-# 检查 9/10：治理一致性体检（check-harness.ps1）
+# 检查 9/11：治理一致性体检（check-harness.ps1）
 #
 # 由来（REQ-harness-engineering-2026-10-19 §五 F1）：`.harness/` 下有规则 / 技能 / REQ /
 # ADR / changes 目录，`AGENTS.md` 里还有一堆指向它们的路径——此前没有任何脚本能回答
@@ -477,7 +479,7 @@ switch ($LASTEXITCODE) {
 # 另：脚本里**故意未实现**的检项会输出「未测」且**不影响退出码**——未测 ≠ 通过，
 # 但不能让「还没做的检查」把门禁堵死（PRD §六 Q4：先跑两周统计真问题再决定是否补齐）。
 # ---------------------------------------------------------------------------
-Write-Section '检查 9/10：治理一致性体检（8 检项：路径 / 技能 / 编号 / 追踪 / 经验 / 分母）'
+Write-Section '检查 9/11：治理一致性体检（8 检项：路径 / 技能 / 编号 / 追踪 / 经验 / 分母）'
 $hout = @(& $hostExe -NoProfile -File scripts/check-harness.ps1 2>&1)
 switch ($LASTEXITCODE) {
     0 {
@@ -497,7 +499,7 @@ switch ($LASTEXITCODE) {
 }
 
 # ---------------------------------------------------------------------------
-# 检查 10/10：常驻上下文预算（check-context-budget.ps1）
+# 检查 10/11：常驻上下文预算（check-context-budget.ps1）
 #
 # 由来（同上 PRD §五 F2）：HarnessTax（UC Berkeley/Arena，2026-09）实测——harness 对
 # 成功率影响仅 ±2–5%，对成本影响可达 5×，成本主源是**首调用上下文**。本仓常驻层实测
@@ -506,7 +508,7 @@ switch ($LASTEXITCODE) {
 # 棘轮纪律：基线**只许下调**（-Update 收紧），基线 json 必须入库（本地改了不提交，
 # CI 仍按旧值判 = 假绿）。压降常驻层后跑 -Update，再连同 json 一起提交。
 # ---------------------------------------------------------------------------
-Write-Section '检查 10/10：常驻上下文预算（棘轮，只许下调）'
+Write-Section '检查 10/11：常驻上下文预算（棘轮，只许下调）'
 $cout = @(& $hostExe -NoProfile -File scripts/check-context-budget.ps1 2>&1)
 switch ($LASTEXITCODE) {
     0 {
@@ -522,6 +524,35 @@ switch ($LASTEXITCODE) {
         $cout | Select-Object -Last 12 | ForEach-Object { Write-Host ("    " + $_) -ForegroundColor DarkGray }
         Write-Bad ("check-context-budget.ps1 自身失败（exit={0}，不是超预算）" -f $LASTEXITCODE)
         Add-Failure '上下文预算脚本自身失败'
+    }
+}
+
+# ---------------------------------------------------------------------------
+# 检查 11/11：R6 出站请求隔离（check-upstream-isolation.ps1）
+#
+# 由来：AGENTS.md R6 写了「出站请求集中 internal/upstream，禁其他包直连上游」，
+# 但此前靠 code review 人盯，没有机器检查。一次随手在 panel/scheduler 里写个
+# http.Get 就绕过了 upstream 层的重试/熔断/错误分类。
+#
+# 白名单放行合法例外（如 panel/login.go 的 OAuth 设备授权流程），新增例外需更新
+# scripts/check-upstream-isolation.ps1 的白名单并说明理由。
+# ---------------------------------------------------------------------------
+Write-Section '检查 11/11：R6 出站请求隔离'
+$uout = @(& $hostExe -NoProfile -File scripts/check-upstream-isolation.ps1 2>&1)
+switch ($LASTEXITCODE) {
+    0 {
+        $uout | Select-Object -Last 2 | ForEach-Object { Write-Host ("    " + $_) -ForegroundColor DarkGray }
+        Write-Pass '出站请求集中在 internal/upstream'
+    }
+    1 {
+        $uout | Select-Object -Last 10 | ForEach-Object { Write-Host ("    " + $_) -ForegroundColor DarkGray }
+        Write-Bad 'R6 违规：出站请求未集中在 internal/upstream'
+        Add-Failure 'R6 出站请求隔离检查失败'
+    }
+    default {
+        $uout | Select-Object -Last 10 | ForEach-Object { Write-Host ("    " + $_) -ForegroundColor DarkGray }
+        Write-Bad ("check-upstream-isolation.ps1 自身失败（exit={0}，不是违规）" -f $LASTEXITCODE)
+        Add-Failure 'R6 隔离检查脚本自身失败'
     }
 }
 
@@ -552,3 +583,4 @@ if ($failures.Count -gt 0) {
 
 Write-Host '提交前检查全部通过。' -ForegroundColor Green
 exit 0
+
