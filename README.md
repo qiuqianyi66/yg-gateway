@@ -58,6 +58,20 @@ YG Gateway 走的是另一条路——四个它们普遍没做透的点：
 
 完整对比（含诚实劣势与路线图）见 [docs/COMPETITIVE-ANALYSIS.md](docs/COMPETITIVE-ANALYSIS.md)。
 
+### 三护城河：同类项目普遍没做透的三件事
+
+上面 2×2 是"能跑起来"的门槛。下面三件是 v3 深化期打穿的差异点——对照 magpie /
+one-api / LiteLLM / CRS 的八维实测（见 `docs/reference/magpie-deep-read-2026-10-25.md`），
+这三项它们基本是空白或只做了一半：
+
+| 护城河 | 做法 | 同类现状 |
+|---|---|---|
+| **💰 实测成本分层（四态）** | 每个账号×每个模型跑一发带 credit 的调用，把「这个号对这个模型到底收不收费、收多少」从目录价/插件声明变成**实测 observation**；样本不足保留 unknown，绝不把"没测过"读成"免费" | magpie / one-api 只信目录价或用户自填；LiteLLM 按厂商声明价折算 |
+| **🩺 健康治理** | EWMA 成功率/延迟平滑 + 402/429 软硬冷却 + 连续失败熔断 + **half-open 自动试探**（到期限速放行 1 次，避免洪峰二次打挂坏号） | magpie 只有手动 "Try now"，无成功率/延迟指标；CRS 无 half-open |
+| **🔍 决策溯源（pickReason）** | 每次选号落一个结构化理由（四路径之一），面板 `/status` 透出；配套 `internal/unknown/` registry 把"不知道"当一等公民登记（带 revision，推断不能消解推断） | 同类项目选完就完了，出问题只能翻日志猜；unknown 当 0/当否的更是普遍 |
+
+这三件事不写在 README 会被当成"又一个套壳网关"——它们是本项目养号叙事的证据链。
+
 ## 架构
 
 ```mermaid
@@ -176,6 +190,21 @@ curl -s http://localhost:7863/healthz
 | Anthropic 兼容（Claude Code） | `http://127.0.0.1:7863` | 同上（`ANTHROPIC_AUTH_TOKEN`） |
 
 面板里创建 Key 后可直接复制/下载现成配置，模型列表由客户端自动发现（`GET /v1/models`）。
+
+### 与 Magpie / CC Switch 配合
+
+YG Gateway 把腾讯 CodeBuddy 账号池包装成一个 OpenAI / Anthropic 兼容端点；
+**Magpie 和 CC Switch 管的是 Claude Code 侧的 provider 切换，两者正交，可叠加**：
+
+- **Magpie**（管 Claude Code 账号池的竞品/搭档）：在它的 provider 配置里加一个
+  自定义 OpenAI 兼容端点，`base_url = http://127.0.0.1:7863/v1`，`api_key = 面板 Key`。
+  这样 Magpie 看到的"一个稳定可用的上游"，背后是 YG Gateway 在替你养 CodeBuddy 号、
+  做选号与健康治理。
+- **CC Switch**（Claude Code 配置切换器）：新增一个自定义 provider，
+  `ANTHROPIC_BASE_URL = http://127.0.0.1:7863`，`ANTHROPIC_AUTH_TOKEN = 面板 Key`。
+  切换到这一档，Claude Code 的请求就落到本网关的 CodeBuddy 池。
+
+两者都只需要填两行（base_url + token），不需要改 YG Gateway 的代码或配置。
 
 ## 进阶配置
 
