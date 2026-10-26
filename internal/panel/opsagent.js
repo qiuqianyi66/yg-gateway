@@ -61,7 +61,12 @@
     var body = document.getElementById('opsagentBody');
     if (!body) return;
     body.textContent = '加载中…';
-    fetch('/panel/api/opsagent/status').then(function (r) {
+    // api_key 鉴权下必须带 Bearer（app.js LS_KEY='yg-gateway.key'，此处硬编码保持同步；
+    // 自包含不依赖 app.js，若 app.js 改键名需同步改这里）。
+    var k = null;
+    try { k = localStorage.getItem('yg-gateway.key'); } catch (e) { k = null; }
+    var hdr = k ? { 'Authorization': 'Bearer ' + k } : {};
+    fetch('/panel/api/opsagent/status', { headers: hdr }).then(function (r) {
       if (!r.ok) throw new Error('HTTP ' + r.status);
       return r.json();
     }).then(function (d) {

@@ -1,0 +1,14 @@
+{
+  "name": "yg-gateway-e2e",
+  "private": true,
+  "version": "0.0.0",
+  "description": "V3-6 面板浏览器级 E2E 冒烟（Playwright）——最小化依赖，只装 @playwright/test",
+  "scripts": {
+    "build:server": "pwsh -NoProfile -File scripts/build-server.ps1",
+    "test": "npm run build:server && playwright test",
+    "test:headed": "npm run build:server && playwright test --headed"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.49.0"
+  }
+}
