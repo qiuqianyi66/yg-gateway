@@ -139,6 +139,11 @@ func TestRequestMetricsRecordsStream(t *testing.T) {
 	if e.Outcome != reqlog.OutcomeSuccess || e.Status != http.StatusOK || !e.OK || e.Model != "glm-5.2" || e.TotalTokens != 2 || e.Attempts != 1 {
 		t.Fatalf("event = %+v", e)
 	}
+	// kind 维度（V3-8）：chat 路径的事件必须显式打标 chat——历史行的「缺失=未知」
+	// 三值语义只对旧归档成立，新事件缺标 = 生产方漏打，直接判失败。
+	if e.Kind != reqlog.KindChat {
+		t.Fatalf("event kind = %q, want %q", e.Kind, reqlog.KindChat)
+	}
 }
 
 // 调用来源必须进归档事件：命中受信任代理时采信 X-Forwarded-For 首段（反代后真实

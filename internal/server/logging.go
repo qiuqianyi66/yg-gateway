@@ -435,7 +435,10 @@ func (t *requestTrace) event(status int) reqlog.Event {
 		Time:      t.start,
 		RequestID: t.id,
 		Path:      "/v1/chat/completions",
-		Status:    status,
+		// 本记录器的唯一入账路径就是 chat completions（V3-8）：kind 在这里定死，
+		// 上方路径判断改了这里必须跟着改——kind 是给消费方区分流量用的，宁缺毋错。
+		Kind:   reqlog.KindChat,
+		Status: status,
 	}
 	duration := time.Since(t.start)
 	e.DurationMs = duration.Milliseconds()

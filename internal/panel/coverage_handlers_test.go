@@ -484,7 +484,8 @@ func TestPanelHandlersRequestLogsLimitAndFilters(t *testing.T) {
 	rec := reqlog.New(reqlog.Config{Enabled: true, Dir: t.TempDir(), MaxBytes: 1 << 20, RetentionDays: 7})
 	now := time.Now()
 	rec.Record(reqlog.Event{Time: now, RequestID: "keep", Model: "glm-5.2", Account: "nick(abcd1234)",
-		ClientIP: "10.1.2.3", UserAgent: "curl/8.0", Status: 200, OK: true, Outcome: reqlog.OutcomeSuccess})
+		ClientIP: "10.1.2.3", UserAgent: "curl/8.0", Kind: reqlog.KindChat,
+		Status: 200, OK: true, Outcome: reqlog.OutcomeSuccess})
 	rec.Record(reqlog.Event{Time: now, RequestID: "drop", Model: "gpt-5.5", Account: "other(99998888)",
 		ClientIP: "192.168.1.9", UserAgent: "Mozilla/5.0", Status: 429, OK: false, Outcome: reqlog.OutcomeHTTPError})
 	rec.Close()
@@ -499,6 +500,16 @@ func TestPanelHandlersRequestLogsLimitAndFilters(t *testing.T) {
 	}
 	if got := chNum(t, out["limit"]); got != 200 {
 		t.Errorf("默认 limit = %v, want 200", got)
+	}
+
+	// kind 过滤（V3-8）：精确匹配；drop 无 kind（模拟历史行）不得被 kind=chat 命中。
+	out = chWant(t, chDo(t, p, "GET", "/panel/api/request_logs?kind=chat", ""), http.StatusOK)
+	rows = chRows(t, out["entries"])
+	if len(rows) != 1 || chStr(t, rows[0]["request_id"]) != "keep" {
+		t.Fatalf("按 kind=chat 过滤应只留 keep，实际 %+v", rows)
+	}
+	if rows2 := chRows(t, chWant(t, chDo(t, p, "GET", "/panel/api/request_logs?kind=probe", ""), http.StatusOK)["entries"]); len(rows2) != 0 {
+		t.Fatalf("kind=probe 应回空（probe 尚无入账来源），实际 %+v", rows2)
 	}
 
 	// limit 上限钳制 1000；非法/非正值回落默认 200。

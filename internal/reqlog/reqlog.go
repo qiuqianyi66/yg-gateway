@@ -45,6 +45,16 @@ const (
 	OutcomeInterrupted = "interrupted"
 )
 
+// 调用种类词表（ROADMAP v3 V3-8，借鉴 magpie usage.jsonl 的 ep/kind/source）。
+// 封闭词表：新增值必须同步本注释与消费方，不许裸字符串。
+// 现状边界：只有 chat 路径向本记录器入账；探测（模型目录 / canary）与养号
+// （autotask）直连 upstream、不经此处——probe/farming 先占位，供后续记录方使用。
+const (
+	KindChat    = "chat"    // 下游聊天流量（当前唯一入账来源）
+	KindProbe   = "probe"   // 探测流量（健康/目录/canary 类合成调用）
+	KindFarming = "farming" // 养号流量（autotask 任务动作）
+)
+
 // Config 归档参数。Enabled=false 时仍保留内存指标。
 type Config struct {
 	Dir           string
@@ -62,22 +72,26 @@ type Config struct {
 // 归档里不会出现来源字段）——来源信息比 token 计数敏感，运营可自行决定是否落盘。
 // 仍然不写提示词、响应正文、Authorization 或其它凭证。
 type Event struct {
-	Time             time.Time `json:"time"`
-	RequestID        string    `json:"request_id"`
-	Path             string    `json:"path"`
-	Account          string    `json:"account,omitempty"`
-	Model            string    `json:"model,omitempty"`
-	Status           int       `json:"status"`
-	OK               bool      `json:"ok"`
-	Outcome          string    `json:"outcome"`
-	DurationMs       int64     `json:"duration_ms"`
-	TTFBMs           int64     `json:"ttfb_ms,omitempty"`
-	Attempts         int       `json:"attempts,omitempty"`
-	PromptTokens     int64     `json:"prompt_tokens,omitempty"`
-	CompletionTokens int64     `json:"completion_tokens,omitempty"`
-	TotalTokens      int64     `json:"total_tokens,omitempty"`
-	Credit           float64   `json:"credit,omitempty"`
-	HasCredit        bool      `json:"credit_known"`
+	Time      time.Time `json:"time"`
+	RequestID string    `json:"request_id"`
+	Path      string    `json:"path"`
+	// Kind 调用种类（上方词表）。缺失 = 未知：V3-8 之前的历史归档行没有该字段，
+	// 消费方必须按三值处理（chat/probe/farming/缺失），禁止把空串读成 chat——
+	// 与 /v1/models 的三值口径同源（字段省略表达未知，不改变 wire 形状）。
+	Kind             string  `json:"kind,omitempty"`
+	Account          string  `json:"account,omitempty"`
+	Model            string  `json:"model,omitempty"`
+	Status           int     `json:"status"`
+	OK               bool    `json:"ok"`
+	Outcome          string  `json:"outcome"`
+	DurationMs       int64   `json:"duration_ms"`
+	TTFBMs           int64   `json:"ttfb_ms,omitempty"`
+	Attempts         int     `json:"attempts,omitempty"`
+	PromptTokens     int64   `json:"prompt_tokens,omitempty"`
+	CompletionTokens int64   `json:"completion_tokens,omitempty"`
+	TotalTokens      int64   `json:"total_tokens,omitempty"`
+	Credit           float64 `json:"credit,omitempty"`
+	HasCredit        bool    `json:"credit_known"`
 	// CacheHitTokens / CacheMissTokens 上游前缀缓存命中/未命中 token（issue #92）。
 	// 上游未回该维度时两者皆零值省略；hit=0 + miss>0 即整段未命中。
 	CacheHitTokens  int64 `json:"cache_hit_tokens,omitempty"`
@@ -92,17 +106,24 @@ type Event struct {
 	// 只存短稳定 id 与展示名，不存 Key 明文、不存 Authorization 原文（R1/R2）。
 	KeyID   string `json:"key_id,omitempty"`
 	KeyName string `json:"key_name,omitempty"`
+	// UpstreamRequestID 上游响应里的 requestId（从错误 body 解析）。
+	// 用途：拿着这个 ID 去查上游日志，关联网关请求和上游侧的 trace。
+	// 零值 = 上游响应里没有 requestId（或者成功响应我们不解析）。
+	UpstreamRequestID string `json:"upstream_request_id,omitempty"`
 }
 
 // Filter 用于从归档中筛选最近记录。字符串字段一律「包含」匹配（大小写不敏感），
 // 便于面板用一段 IP 前缀或 UA 片段捞请求；From/To 是闭区间（零值 = 该侧不设界），
 // 供「今天 / 近 7 天 / 自定义区间」这类时间查询使用。
+// 唯一例外是 Kind：封闭词表走**精确**匹配（"chat" 不该命中任何其他词），空串 =
+// 不过滤；历史行 kind 缺失不会被 Kind="chat" 命中（缺失 = 未知，见 Event.Kind）。
 type Filter struct {
 	Outcome   string
 	Account   string
 	Model     string
 	ClientIP  string
 	UserAgent string
+	Kind      string
 	From      time.Time
 	To        time.Time
 }
@@ -631,6 +652,9 @@ func readFile(path string, filter Filter) ([]Event, error) {
 
 func (f Filter) match(e Event) bool {
 	if f.Outcome != "" && e.Outcome != f.Outcome {
+		return false
+	}
+	if f.Kind != "" && e.Kind != f.Kind {
 		return false
 	}
 	if !containsFold(e.Account, f.Account) {

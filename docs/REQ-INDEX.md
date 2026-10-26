@@ -67,6 +67,11 @@
 
 ## 待办 / 不做（不在本索引「已落地」内）
 
+- [reqlog-kind-2026-10-26](prd/REQ-reqlog-kind-2026-10-26.md)：reqlog 加 kind 维度
+  （ROADMAP v3 V3-8）——**已落地（2026-10-26）**：`Event.Kind` 封闭词表
+  chat/probe/farming + 归档精确过滤 + `/panel/api/request_logs` kind 参数；
+  缺失=未知（历史行三值兼容）。probe/farming 为占位词表值（这两类流量目前
+  直连 upstream 不经 reqlog）。V3-10 agent 流量画像的地基。
 - [routing-improvements-2026-10-25](prd/REQ-routing-improvements-2026-10-25.md)：选号路由改进——
   **主体落地（2026-10-25）**：P1 credit_floor 软带（带内 ×0.5 降权 + pickReason softband，
   带宽按实测扣费定义）+ P2 近期用量衰减因子（1h 半衰期 token 账，`pool.recent_usage_factor`
