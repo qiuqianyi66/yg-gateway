@@ -11,7 +11,8 @@ YG Gateway：自托管 OpenAI/Anthropic 兼容反向代理，把腾讯 CodeBuddy
 
 ## 当前提交链（本地 main，未推送）
 
-本会话（2026-10-26）新增 5 个提交，全部过 pre-commit 11/11：
+本会话（2026-10-26）新增 6 个提交，全部过 pre-commit 11/11（`27f75ee` 为本文件初版；
+本次复核修订另成 1 个提交——git log 最新一条即最终版）：
 
 | commit | 内容 |
 |---|---|
@@ -20,11 +21,12 @@ YG Gateway：自托管 OpenAI/Anthropic 兼容反向代理，把腾讯 CodeBuddy
 | `cbf1399` | V3-13 README 三护城河 + Magpie/CC Switch 章节 |
 | `bde24a4` | V3-13 review 修订：按 L-15 删未深读的同类项目名，Magpie 定位纠偏 |
 | `7a9ad3c` | routing-p1p2 独立复审 review.md（🟢 通过）+ PLAN-next 进度收口 |
+| `27f75ee` | docs: 新会话开工指南 KICKOFF-next-session-2026-10-26.md（初版） |
 
 加上之前已有的：`b1fac0c`(V3-9 harnessrun) → `5166235`(V3-7/V3-8/OpenDesign 吸收) →
 `41caf25`(V3-8) → `e704b3e`(PLAN-next 交接) → `4931e4b3`(V3-7 canary)。
 
-**门禁状态**：11/11 全绿，23 包测试全过。棘轮：config.go 977 / main.go 1000 贴线 /
+**门禁状态**：11/11 全绿，21 包测试全过（2 包无测试文件）。棘轮：config.go 977 / main.go 1000 贴线 /
 app.js 4378 冻结 / sse.go 1070（基线 maxFileLines=1089）也在高位 / 上下文预算 15822 压线。
 
 ## 接下来做什么（按优先级）
@@ -41,8 +43,11 @@ app.js 4378 冻结 / sse.go 1070（基线 maxFileLines=1089）也在高位 / 上
    - opsagent 卡片加载（有数据时）
    - 至少 10 条用户可见行为断言
 2. 绿了之后抽公共渲染函数瘦身 app.js ≥100 行，棘轮收紧。
-3. 参考：仓库内**无** Playwright 先例（unknown，需从零搭脚手架；参考官方
-   `@playwright/test` 起步模板）；CI ubuntu 可跑。
+3. 参考：仓库内无 Playwright 脚手架（observation，2026-10-26 穷尽复核：全仓 grep 仅命中
+   7 份 docs；无 package.json / playwright.config；verify/ 目录不存在且 git 历史从未入库——
+   commit message 里的"Playwright 验证"是外部插件手动验证），需从零搭脚手架（参考官方
+   `@playwright/test` 起步模板）。注意：ROADMAP v3 第 99/169 行等处"本机 verify/ 有先例"
+   已过时，以本实测为准。CI ubuntu 可跑。
 
 **Given-When-Then**：When E2E 套件在本地与 CI 跑，Then 全绿且断言 ≥10 条；
 When 瘦身合并，Then maxFrontendLines 下降且 E2E 仍绿。
@@ -82,15 +87,19 @@ powershell -NoProfile -File scripts/deploy-prod.ps1 -Build -Feature v3-p0
 
 ### P3：等用户那边的（不要代做）
 
-- GitHub 推送（等工单清 unreachable objects，本地 main 领先远端 33 个提交）
-- 管理员重装 Go ≥1.27.3，撤掉 `YG_GO_EXE` 兜底
+- GitHub 推送（等工单清 unreachable objects；本地 main 领先远端 **34** 个提交，复核于
+  `27f75ee`——若本文件之上又新增了提交，开工前先 `git rev-list --count origin/main..HEAD`
+  实测，别照抄这个数）
+- 管理员重装 Go ≥1.27.3（2026-10-26 复核：`C:\Program Files\Go` 仍是 **1.27.0**，靠
+  `GOTOOLCHAIN=auto` 切 mod 缓存里的 1.27.3 在跑，能用但属临时态）；装好后撤
+  `YG_GO_EXE` 兜底
 - V3-3 生产换版（用户在 D:\yg-gateway 执行）
 
 ## 环境须知（新会话必读）
 
-- **本机 go 已坏**：所有 go 命令前先设
-  `$env:YG_GO_EXE='C:\Users\yanha\go\pkg\mod\golang.org\toolchain@v0.0.1-go1.27.3.windows-amd64\bin\go.exe'`
-  （脚本已支持该变量；管理员重装 Go 前一直有效）。
+- **Go 环境（2026-10-26 复核）**：系统 Go 仍是 1.27.0，但 `GOTOOLCHAIN=auto` 会自动切到
+  mod 缓存里的 go1.27.3 toolchain，`go.exe` 可直接用；`YG_GO_EXE` 是**用户级**环境变量，
+  新会话自动继承（脚本兜底仍在），**无需**每次手动设。管理员重装 Go ≥1.27.3 后此兜底可撤。
 - PowerShell 语法，不要用 Bash。
 - 上下文预算 15822/15822 压线：动 `.harness/rules/*` 或 AGENTS.md 前先等价压缩。
 - 子 agent 配额不稳：主会话存活时后台 agent 大概率 `model concurrency limit exceeded`
@@ -116,3 +125,5 @@ powershell -NoProfile -File scripts/deploy-prod.ps1 -Build -Feature v3-p0
 - ✅ routing-p1p2 独立复审 review.md（commit 7a9ad3c）
 - ✅ .gitignore 补 Windows .exe（commit 01f59a5）
 - ✅ PLAN-next-2026-10-25.md 进度更新
+- ✅ 本文件 KICKOFF-next-session-2026-10-26.md（初版 commit 27f75ee；复核修订随最新提交，
+  经子 agent 审查）
