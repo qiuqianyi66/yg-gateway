@@ -11,8 +11,8 @@ YG Gateway：自托管 OpenAI/Anthropic 兼容反向代理，把腾讯 CodeBuddy
 
 ## 当前提交链（本地 main，未推送）
 
-本会话（2026-10-26）新增 6 个提交，全部过 pre-commit 11/11（`27f75ee` 为本文件初版；
-本次复核修订另成 1 个提交——git log 最新一条即最终版）：
+本会话（2026-10-26）新增 6 个提交，全部过 pre-commit 11/11（`27f75ee` 为本文件初版，
+复核修订紧随其后，git log 最新一条即最终版）：
 
 | commit | 内容 |
 |---|---|
@@ -43,11 +43,12 @@ app.js 4378 冻结 / sse.go 1070（基线 maxFileLines=1089）也在高位 / 上
    - opsagent 卡片加载（有数据时）
    - 至少 10 条用户可见行为断言
 2. 绿了之后抽公共渲染函数瘦身 app.js ≥100 行，棘轮收紧。
-3. 参考：仓库内无 Playwright 脚手架（observation，2026-10-26 穷尽复核：全仓 grep 仅命中
-   7 份 docs；无 package.json / playwright.config；verify/ 目录不存在且 git 历史从未入库——
-   commit message 里的"Playwright 验证"是外部插件手动验证），需从零搭脚手架（参考官方
-   `@playwright/test` 起步模板）。注意：ROADMAP v3 第 99/169 行等处"本机 verify/ 有先例"
-   已过时，以本实测为准。CI ubuntu 可跑。
+3. 参考：仓库内无 Playwright 脚手架（observation，2026-10-26 穷尽复核：grep 命中仅见于
+   文档/记录类文件——docs 7 份 + .harness 记录 5 份 + .gitignore 1 处；无 package.json /
+   playwright.config；verify/ 目录不存在且 git 历史从未入库；commit message 中的
+   "Playwright 实测/真机验证"均为面板功能手动验证记录，无脚手架佐证），需从零搭脚手架
+   （参考官方 `@playwright/test` 起步模板）。注意：ROADMAP v3 第 99/169 行等处
+   "本机 verify/ 有先例"已过时，以本实测为准。CI ubuntu 可跑。
 
 **Given-When-Then**：When E2E 套件在本地与 CI 跑，Then 全绿且断言 ≥10 条；
 When 瘦身合并，Then maxFrontendLines 下降且 E2E 仍绿。
@@ -87,9 +88,9 @@ powershell -NoProfile -File scripts/deploy-prod.ps1 -Build -Feature v3-p0
 
 ### P3：等用户那边的（不要代做）
 
-- GitHub 推送（等工单清 unreachable objects；本地 main 领先远端 **34** 个提交，复核于
-  `27f75ee`——若本文件之上又新增了提交，开工前先 `git rev-list --count origin/main..HEAD`
-  实测，别照抄这个数）
+- GitHub 推送（等工单清 unreachable objects；本地 main 领先远端 **35** 个提交，复核于
+  HEAD `5d9e938`——本文件如再有新提交则 +1，开工前以 `git rev-list --count origin/main..HEAD`
+  实测为准，别照抄这个数）
 - 管理员重装 Go ≥1.27.3（2026-10-26 复核：`C:\Program Files\Go` 仍是 **1.27.0**，靠
   `GOTOOLCHAIN=auto` 切 mod 缓存里的 1.27.3 在跑，能用但属临时态）；装好后撤
   `YG_GO_EXE` 兜底
