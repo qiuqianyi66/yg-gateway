@@ -1,0 +1,64 @@
+name: e2e
+
+# 浏览器级面板冒烟（Playwright，V3-6）。
+#
+# 定位：**门禁之上的额外验证层，不是门禁的分叉**。
+#   - 先 `uses: gate.yml`（与 release.yml 共用同一份门禁实现，`gate` job 就是它）
+#   - 再跑浏览器 E2E（内部/panel 前端无构建链、go:embed 进二进制，面板回归只能靠浏览器级验证；
+#     REQ-necessity-stage-and-frontend-ratchet 的「重评条件：出现 Playwright 兜底」由此落地）
+# 为什么**不**挂进 pre-commit.ps1：pre-commit 是本地+CI 共用的确定性快检，E2E 需要
+# node_modules + 浏览器二进制（本地可能未装、CI gate job 无 node），挂进去会让本地每次提交
+# 变慢 ~1 分钟且 CI/本地两份判定条件不同（分叉风险）。独立 workflow + 共用 gate 保持单门禁语义。
+#
+# 触发：main push 全跑；PR 按影响面（面板前端 / 测试服务配置 / E2E 自身）。
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths:
+      - "e2e/**"
+      - "internal/panel/**"
+      - "cmd/server/**"
+      - ".github/workflows/e2e.yml"
+      - ".github/workflows/gate.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  # 与 release.yml 同一份门禁实现：E2E 自己也会产出/消费可运行二进制，必须先过同一道门。
+  gate:
+    uses: ./.github/workflows/gate.yml
+    with:
+      base_ref: ${{ github.base_ref }}
+
+  e2e:
+    needs: gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: e2e/package-lock.json
+      - name: 安装 Playwright 依赖（npm ci 按 lockfile 精确复现）
+        working-directory: e2e
+        run: npm ci
+      - name: 安装 chromium 及系统依赖（--with-deps 装 ubuntu 缺失库）
+        working-directory: e2e
+        run: npx playwright install --with-deps chromium
+      - name: 构建测试实例二进制（go:embed 面板，R13：改前端必须重编译）
+        working-directory: e2e
+        run: pwsh -NoProfile -File scripts/build-server.ps1
+      - name: 浏览器级面板冒烟（密钥门 → 登录 → 八视图 → opsagent 卡片）
+        working-directory: e2e
+        run: npx playwright test

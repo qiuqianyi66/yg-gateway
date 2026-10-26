@@ -93,7 +93,7 @@
   重定为「顶格解除 + 同构块表驱动」。剩余结构手段（struct 注释外移）列为不做。
 - 量级 M（实际 S）。
 
-**V3-6 · E2E 先行 → app.js 瘦身**
+**V3-6 · E2E 先行 → app.js 瘦身**（①✅ 2026-10-26）
 - 依据：app.js 4378 冻结锁死全部前端演进；10-17 必要性评审裁定「无浏览器级 E2E
   不拆」——本项即解锁动作。
 - 步骤：①Playwright 冒烟（无现成脚手架，verify/ 不存在，2026-10-26 复核）：登录→八视图切换→账号卡片→
@@ -101,6 +101,10 @@
 - GWT：When E2E 套件在本地与 CI 跑，Then 全绿且断言 ≥10 条用户可见行为；
   When 瘦身合并，Then maxFrontendLines 下降且 E2E 仍绿。
 - 量级 M-L。**解锁：A3 key RPM 可视化、A5 opsagent 独立导航页。**
+- 进展（2026-10-26）：e2e/ 套件 4 测试 34 断言全绿（本地 6.3s，隔离实例 %TEMP%\yg-e2e 端口 7864）；
+  CI 接线 `.github/workflows/e2e.yml`（先调共享 gate.yml 再跑浏览器，不复制门禁）；顺带修真 bug：
+  `opsagent.js` 请求缺 Authorization 头 → api_key 鉴权下卡片恒 401「加载失败」。②③ 待做：
+  抽公共渲染函数瘦身 ≥100 行后收紧 `maxFrontendLines`（基线 4378）。
 
 **V3-7 · opsagent 规则心跳（canary rounds）**（NEW-FRONTIERS #2）
 - 依据：词表口径 bug 的本质是「规则在生产永假但无人知道」——单测覆盖编译期，
