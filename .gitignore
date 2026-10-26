@@ -12,6 +12,12 @@ data/
 /credit
 /yg-gateway
 /signin_bin
+# Windows 构建产物（go build 默认带 .exe 后缀；上面四条是 Linux/Mac 形态）
+/login.exe
+/credit.exe
+/yg-gateway.exe
+/server.exe
+/harnessrun.exe
 
 # Config with secrets (use config.example.json)
 config.json
