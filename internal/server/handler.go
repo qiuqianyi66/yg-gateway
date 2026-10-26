@@ -586,7 +586,40 @@ func (h *Handler) status(w http.ResponseWriter, r *http.Request) {
 		body["protocol_drift"] = h.cfg.Drift.Status()
 	}
 
+	// agent_profile（V3-10）：从 reqlog archive 读最近 1000 条 chat 事件，按
+	// session_fp / agent_kind 聚合。零条事件（或事件里没有任何 session_fp /
+	// agent_kind 信号）时整块省略——与 task_metrics / protocol_drift 同源，
+	// 键缺失 = 未观测，不是「没有 agent 流量」。
+	if prof := h.agentProfileSnapshot(); prof != nil {
+		body["agent_profile"] = prof
+	}
+
 	writeJSON(w, http.StatusOK, body)
+}
+
+// agentProfileSnapshot 读 archive 并聚合 agent 流量画像。无数据（无 RequestLog、
+// archive 关闭、零条 chat 事件、事件里既无 session_fp 也无 agent_kind）时返回 nil。
+func (h *Handler) agentProfileSnapshot() any {
+	if h.cfg.RequestLog == nil {
+		return nil
+	}
+	events, err := h.cfg.RequestLog.ReadArchive(1000, reqlog.Filter{Kind: reqlog.KindChat})
+	if err != nil || len(events) == 0 {
+		return nil
+	}
+	// 整块省略条件：所有事件都没打过 session_fp 也没打过 agent_kind（V3-10 之前
+	// 的归档行、或开关全关的历史窗口）——聚合出来全是 unknown 桶空榜，不如不输出。
+	hasSignal := false
+	for i := range events {
+		if events[i].SessionFP != "" || events[i].AgentKind != "" {
+			hasSignal = true
+			break
+		}
+	}
+	if !hasSignal {
+		return nil
+	}
+	return reqlog.AggregateProfile(events)
 }
 
 // latencySnapshot 返回延迟分位数快照；未启用观测（Latency=nil）时返回 nil。
@@ -654,6 +687,12 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	// 阶段② 的键派生（会话级键 / 粘性绑定号 / 轮级键）已抽到 chatflow.go 的
 	// deriveSessionKeys——它与粘性开关解耦，且必须在提示词改写之前取。
 	sessKey, stickyUID, turnKey := h.deriveSessionKeys(&reqView, modelStr)
+	// V3-10：把会话键的盐哈希挂到 reqlog trace——归档里按它聚合即可还原
+	// 「一个 agent 会话吃了多少 token / cache 命中」。trace 为 nil 时（测试路径
+	// 或 RequestLog 未开）静默跳过：setSessionFP 内部判空。
+	if tr := requestTraceFrom(r); tr != nil {
+		tr.setSessionFP(sessKey)
+	}
 
 	// 运行期状态载体：原 5 个闭包（hasImage / releaseHeld / unbindSticky / fail /
 	// recordAttempt）已改为 chatRun 的方法（chatrun.go）——它们共享 heldUID /

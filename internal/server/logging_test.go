@@ -11,6 +11,7 @@ import (
 
 	"yg-gateway/internal/auth"
 	"yg-gateway/internal/reqlog"
+	"yg-gateway/internal/session"
 )
 
 // captureStdout 重定向 os.Stdout（连同 chatLogOut，见 SetChatLogOutput 的注入点）
@@ -523,5 +524,67 @@ func TestHealthzDoesNotLogTableRow(t *testing.T) {
 	})
 	if strings.Contains(out, "| #") {
 		t.Errorf("healthz/models/status must not emit table rows:\n%s", out)
+	}
+}
+
+// V3-10 G1：带 metadata.conversation_id 的 chat 请求，reqlog 事件必须打出
+// SessionFP（= session.RequestIDForKey(sessKey)，可复算），UA 分类进 AgentKind。
+// G2：UA 未采集（RecordClientInfo=false）时 AgentKind 省略（unknown，不冒充 other）。
+func TestRequestMetricsTagsSessionFPAndAgentKind(t *testing.T) {
+	up := newFakeUpstream(t, func(string) (int, string, bool) {
+		return 200, sseOK, true
+	})
+	reqLog := reqlog.New(reqlog.Config{})
+	h := NewHandler(Config{
+		Pool:             testPoolWith(&auth.Auth{UID: "u1", AccessToken: "at1", ExpiresAt: 9999999999}),
+		Upstream:         up,
+		RequestLog:       reqLog,
+		RecordClientInfo: true,
+	})
+	rec := httptest.NewRecorder()
+	body := `{"model":"glm-5.2","stream":true,"messages":[{"role":"user","content":"hi"}],"metadata":{"conversation_id":"test-conv-xyz"}}`
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(body))
+	req.Header.Set("User-Agent", "claude-cli/1.0.0")
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("code=%d body=%s", rec.Code, rec.Body)
+	}
+	e := reqLog.Snapshot().Recent[0]
+	wantFP := session.RequestIDForKey("test-conv-xyz")
+	if e.SessionFP != wantFP {
+		t.Errorf("session_fp = %q want %q (sha256(salt|sessKey)[:16])", e.SessionFP, wantFP)
+	}
+	if e.AgentKind != "claude_code" {
+		t.Errorf("agent_kind = %q want claude_code", e.AgentKind)
+	}
+}
+
+// V3-10 G2 反向：RecordClientInfo=false 时 UA 不采集，AgentKind 必须空串（unknown），
+// 不能兜底成 "other"。SessionFP 仍应打（会话键来自 body 解析，与 UA 开关无关）。
+func TestRequestMetricsAgentKindOmittedWhenClientInfoOff(t *testing.T) {
+	up := newFakeUpstream(t, func(string) (int, string, bool) {
+		return 200, sseOK, true
+	})
+	reqLog := reqlog.New(reqlog.Config{})
+	h := NewHandler(Config{
+		Pool:       testPoolWith(&auth.Auth{UID: "u1", AccessToken: "at1", ExpiresAt: 9999999999}),
+		Upstream:   up,
+		RequestLog: reqLog,
+		// RecordClientInfo 零值 false → 不采 UA
+	})
+	rec := httptest.NewRecorder()
+	body := `{"model":"glm-5.2","stream":true,"messages":[{"role":"user","content":"hi"}],"metadata":{"conversation_id":"c2"}}`
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(body))
+	req.Header.Set("User-Agent", "claude-cli/1.0.0")
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("code=%d body=%s", rec.Code, rec.Body)
+	}
+	e := reqLog.Snapshot().Recent[0]
+	if e.AgentKind != "" {
+		t.Errorf("agent_kind = %q want empty (UA not collected → unknown, not other)", e.AgentKind)
+	}
+	if e.SessionFP == "" {
+		t.Errorf("session_fp must still be set from body metadata (UA switch is orthogonal)")
 	}
 }
