@@ -109,10 +109,13 @@
   When 规则失配，Then observation 落证据 + 告警；When 心跳关闭，Then 零行为。
 - 量级 S。风险：canary 建议走 Sink 需抑制（canary Sink 单独注入）。
 
-**V3-8 · reqlog 加 kind 维度**（借鉴 magpie usage.jsonl 的 ep/kind/source）
+**V3-8 · reqlog 加 kind 维度**（✅ 2026-10-26 落地）（借鉴 magpie usage.jsonl 的 ep/kind/source）
 - 依据：实跑发现它连 model_list 探测都记账；我们无法区分「聊天流量/探测流量/
   养号流量」——agent 流量画像的地基。
 - 量级 S。
+- 落地注：reqlog 全仓唯一构造点在 chat 路径；探测（FetchModels/canary 合成观察）
+  与养号（autotask 直连 upstream）不进 reqlog——probe/farming 为占位词表值，
+  现状边界与语义口径见 `docs/prd/REQ-reqlog-kind-2026-10-26.md`。
 
 **V3-9 · harness runner（`cmd/harnessrun`）**（NEW-FRONTIERS #4）
 - 依据：金样重放被子 agent 配额阻塞（run-2026-10-24 blocked ×3）——缺不依赖

@@ -1,6 +1,7 @@
 package reqlog
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -394,5 +395,73 @@ func TestReadArchiveDayRangeCoarseFilter(t *testing.T) {
 	}
 	if len(rows) != 2 || rows[0].RequestID != "day-b" || rows[1].RequestID != "day-a" {
 		t.Fatalf("仅 To = %+v, want [day-b day-a]", rows)
+	}
+}
+
+// kind 维度（V3-8）：归档精确过滤 + 历史行的三值语义。
+// 缺失 = 未知：V3-8 之前的行没有 kind 字段，不得被 Kind="chat" 命中（那是把
+// 未分类读成已分类），也不得在 wire 上序列化成 "kind":""。
+func TestArchiveFilterByKind(t *testing.T) {
+	dir := t.TempDir()
+	r := New(Config{Enabled: true, Dir: dir, MaxBytes: 1 << 20, RetentionDays: 7})
+	base := time.Now().Add(-time.Minute)
+	tagged := Event{RequestID: "chat-1", Path: "/v1/chat/completions", Kind: KindChat,
+		Status: 200, OK: true, Outcome: OutcomeSuccess}
+	legacy := Event{RequestID: "legacy-1", Path: "/v1/chat/completions",
+		Status: 200, OK: true, Outcome: OutcomeSuccess} // V3-8 之前的行：无 kind
+	for i, e := range []Event{tagged, legacy} {
+		e.Time = base.Add(time.Duration(i) * time.Second)
+		r.Record(e)
+	}
+	r.Close()
+
+	// 精确匹配只命中显式打标的行，历史行不跟聊。
+	got, err := r.ReadArchive(10, Filter{Kind: KindChat})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].RequestID != "chat-1" {
+		t.Fatalf("kind=chat 过滤 = %+v, want [chat-1]（历史行不命中）", got)
+	}
+
+	// 词表里其他种类当前无入账来源（probe/farming 直连 upstream 不经此处），
+	// 过滤必须回零行而不是误命中——这一行为留给未来的记录方兑现。
+	got, err = r.ReadArchive(10, Filter{Kind: KindFarming})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("kind=farming 过滤 = %+v, want 空（farming 尚无入账来源）", got)
+	}
+
+	// 不筛 kind → 全部行可见，历史行读回保持 kind 缺失（空串）。
+	got, err = r.ReadArchive(10, Filter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("空 kind 过滤 = %+v, want 两行都可见", got)
+	}
+	for _, e := range got {
+		if e.RequestID == "legacy-1" && e.Kind != "" {
+			t.Fatalf("历史行 kind = %q, want 空串（缺失=未知，不冒充任何词表值）", e.Kind)
+		}
+	}
+
+	// wire 三态：kind 零值不出现在 JSON 上（与 /v1/models 的字段省略口径同源）；
+	// 显式值原样落盘。
+	raw, err := json.Marshal(Event{RequestID: "x"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), `"kind"`) {
+		t.Fatalf("kind 零值不应出现在 wire 上: %s", raw)
+	}
+	raw, err = json.Marshal(Event{RequestID: "x", Kind: KindProbe})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `"kind":"probe"`) {
+		t.Fatalf("kind 显式值应原样落盘: %s", raw)
 	}
 }
