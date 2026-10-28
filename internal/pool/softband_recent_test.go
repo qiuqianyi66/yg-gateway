@@ -26,8 +26,8 @@ func TestSoftBandWeightAndReason(t *testing.T) {
 	t0 := time.Date(2026, 10, 25, 12, 0, 0, 0, time.Local)
 	p.byUID["in"].setLastUsed(t0)
 	p.byUID["out"].setLastUsed(t0)
-	wIn := p.routingWeightOf(p.byUID["in"], 300, t0, 0)
-	wOut := p.routingWeightOf(p.byUID["out"], 300, t0, 0)
+	wIn := p.routingWeightOf(p.byUID["in"], 300, t0, 0, 0)
+	wOut := p.routingWeightOf(p.byUID["out"], 300, t0, 0, 0)
 	p.mu.Unlock()
 
 	// 基础权重相同（credits 项被 max 归一差异：in=110/300、out=300/300 —— 先算
@@ -147,9 +147,9 @@ func TestRecentUsageFactor(t *testing.T) {
 	p.SetCredits("u", 100, 0)
 	p.mu.Lock()
 	p.byUID["u"].setLastUsed(now)
-	wOff := p.routingWeightOf(p.byUID["u"], 100, now, 0)
+	wOff := p.routingWeightOf(p.byUID["u"], 100, now, 0, 0)
 	p.recentUsageFactor = true
-	wOn := p.routingWeightOf(p.byUID["u"], 100, now, 0)
+	wOn := p.routingWeightOf(p.byUID["u"], 100, now, 0, 0)
 	p.mu.Unlock()
 	if math.Abs(wOff/(wOn/0.5)-1) > 1e-9 {
 		t.Fatalf("开关行为：off=%v on=%v（on 应为 off×0.5）", wOff, wOn)

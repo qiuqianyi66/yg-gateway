@@ -18,7 +18,7 @@ func TestEwmaDisabledRegression(t *testing.T) {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	e := p.byUID["u1"]
-	if w := p.routingWeightOf(e, 100, time.Now(), 1234); w != p.weightOf(e, 100, time.Now()) {
+	if w := p.routingWeightOf(e, 100, time.Now(), 1234, 0); w != p.weightOf(e, 100, time.Now()) {
 		t.Fatalf("ewma 关闭时 factor 必须恒 1：routing=%v weight=%v", w, p.weightOf(e, 100, time.Now()))
 	}
 }
@@ -165,8 +165,8 @@ func TestEwmaPickShiftsWeight(t *testing.T) {
 	}
 	// 权重对比：好号 factor=1（0 样本中性），坏号 factor<1。
 	p.mu.RLock()
-	wGood := p.routingWeightOf(p.byUID["good"], 100, time.Now(), 0)
-	wBad := p.routingWeightOf(p.byUID["bad"], 100, time.Now(), 0)
+	wGood := p.routingWeightOf(p.byUID["good"], 100, time.Now(), 0, 0)
+	wBad := p.routingWeightOf(p.byUID["bad"], 100, time.Now(), 0, 0)
 	p.mu.RUnlock()
 	if wGood <= wBad {
 		t.Fatalf("坏号不应高于好号：good=%v bad=%v", wGood, wBad)
@@ -282,9 +282,9 @@ func TestEwmaLatencyPenalizesSlowInPick(t *testing.T) {
 	rawFast := p.weightOf(eFast, 100, base)
 	rawMid := p.weightOf(eMid, 100, base)
 	rawSlow := p.weightOf(eSlow, 100, base)
-	wFast := p.routingWeightOf(eFast, 100, base, median)
-	wMid := p.routingWeightOf(eMid, 100, base, median)
-	wSlow := p.routingWeightOf(eSlow, 100, base, median)
+	wFast := p.routingWeightOf(eFast, 100, base, median, 0)
+	wMid := p.routingWeightOf(eMid, 100, base, median, 0)
+	wSlow := p.routingWeightOf(eSlow, 100, base, median, 0)
 	p.mu.RUnlock()
 	if rawSlow <= rawFast || rawSlow <= rawMid {
 		t.Fatalf("前提失效：slow 的未罚权重应最高（久置补偿）, raw: fast=%v mid=%v slow=%v",
