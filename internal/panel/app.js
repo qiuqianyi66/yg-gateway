@@ -285,16 +285,8 @@ function fmtLocalDateTime(ms) {
 }
 
 /* ── 时间范围控件（用量 / 请求记录共用）────────────────────────────────
-   预设项：今天 / 近 24 小时 / 近 3 天 / 近 7 天 / 近 30 天 / 全部历史 / 自定义。
-
-   为什么区间一律由前端算好再发：
-     - 「今天」必须是**浏览器本地时区**的 00:00 起。服务端时区未必与浏览器一致
-       （容器常挂 TZ=Asia/Shanghai，而浏览器可能在任何时区），让服务端算"今天"
-       会在跨时区时切错日子。
-     - 「自定义」本来就是用户挑的具体时刻，没有任何服务端推导空间。
-
-   滚动预设（近 N 小时/天）则保留 hours 参数：服务端按整点对齐的滚动窗口与旧
-   行为逐位一致，前端自己减 N 小时会多算/少算一个边界桶。 */
+   区间由前端算好再发：「今天」必须按浏览器本地时区 00:00 起（服务端时区未必一致）；
+   滚动预设（近 N 小时/天）保留 hours 参数（服务端整点对齐，前端自己减会算错边界）。 */
 const TRANGE_PRESETS = [
   ['today', '今天'],
   ['24', '近 24 小时'],
@@ -716,7 +708,7 @@ function renderAccountsUnsafe(list) {
       '</div>' +
       '<div class="acc-cred"><div class="n">' + cred + '</div><div class="bar"><i style="width:' + pct + '%"></i></div></div>' +
       '<div class="acc-stats">' +
-        '<div class="acc-stat"><div class="v">' + (s.success_count || 0) + '/' + (s.err_total || 0) + '</div><div class="k">成功/失败</div></div>' +
+        '<div class="acc-stat"><div class="v">' + (function(){var o=s.success_count||0,e=s.err_total||0,t=o+e;return t>0?Math.round(o/t*100)+'%':'—';})() + '</div><div class="k">成功率</div></div>' +
         '<div class="acc-stat"><div class="v">' + (s.in_flight || 0) + '</div><div class="k">在途</div></div>' +
         '<div class="acc-stat"><div class="v">' + req + '</div><div class="k">次数</div></div>' +
         '<div class="acc-stat"><div class="v">' + totalTok + '</div><div class="k">Token</div></div>' +
@@ -796,11 +788,11 @@ async function loadOverview(quiet) {
     $('sHealthy').textContent = d.healthy;
     $('sCooling').textContent = d.cooling;
     $('sDisabled').textContent = d.disabled;
-    // 暂停选号单列（issue #125）：它只关选号、照常签到保活，与禁用是两种状态。
+    // 暂停选号单列（issue #125）：只关选号、照常签到保活，与禁用不同。
     if ($('sPaused')) $('sPaused').textContent = d.paused == null ? '-' : d.paused;
     const remSum = (d.accounts || []).reduce((a, s) => a + (s.credits || 0), 0);
-  const totSum = (d.accounts || []).reduce((a, s) => a + (s.credits_total || 0), 0);
-  $('sCredits').textContent = totSum > 0 ? remSum + ' / ' + totSum : remSum;
+    const totSum = (d.accounts || []).reduce((a, s) => a + (s.credits_total || 0), 0);
+    $('sCredits').textContent = totSum > 0 ? remSum + ' / ' + totSum : remSum;
     $('sSticky').textContent = d.sticky_sessions;
     // 粘性会话详情列表：join accounts 数据显示昵称 + 成本层级。
     const sl = d.sticky_list || [];
@@ -836,11 +828,9 @@ async function loadOverview(quiet) {
     $('navState').textContent = d.healthy > 0 ? '服务正常' : (d.total ? '无可用账号' : '待添加账号');
     const p = $('navPulse');
     p.className = 'pulse' + (d.healthy > 0 ? '' : (d.total ? ' warn' : ' bad'));
-    // 账号池提示行：在途占满 + 未知成本总数（AGENTS.md「Unknown 消解纪律」——
-    // 有 (账号,模型) 成本没摸清时，这里给一句话入口，明细在账号卡片悬停里）。
+    // 账号池提示行：在途占满 + 未知成本总数（明细在账号卡片悬停里）。
     const accNotes = [];
     if (d.in_flight_full) accNotes.push(d.in_flight_full + ' 个账号在途占满');
-    // 未知成本入口（拼接在 unkNoteText()，纯函数可测：frontend_test.go）
     const unkNote = unkNoteText(d.accounts);
     if (unkNote) accNotes.push(unkNote);
     $('accNote').textContent = accNotes.join(' · ');
@@ -848,8 +838,7 @@ async function loadOverview(quiet) {
     $('subMeta').textContent = '运行 ' + (up >= 86400 ? Math.floor(up / 86400) + ' 天 ' : '') + Math.floor(up % 86400 / 3600) + ' 时 ' + Math.floor(up % 3600 / 60) + ' 分';
     renderAccounts(d.accounts || []);
     renderModelLocks(d.model_locks);
-    // 今日用量 KPI：并行拉 24h 窗口 totals，更新首页两个卡。失败静默
-    // （不影响主 overview，也不弹错——这是锦上添花的旁支指标）。
+    // 今日用量 KPI：并行拉 24h 窗口，失败静默（旁支指标不打扰）。
     (async () => {
       try {
         const u = await api('usage?hours=24');
@@ -857,8 +846,7 @@ async function loadOverview(quiet) {
         if ($('sTodayTok')) $('sTodayTok').textContent = fmtTok(u.totals && u.totals.total_tokens || 0);
       } catch (_) { /* 旁支指标失败不打扰 */ }
     })();
-    // 到期卡片跟随首页统计同步刷新（用同一份响应里的到期快照，不额外发请求）。
-    // 已有逐包明细缓存时不再覆盖——明细信息量更大，别把它降级成快照。
+    // 到期卡片跟随首页统计同步刷新（同一份响应快照，不额外发请求）。
     if ($('expBox') && !lastPackages) renderExpirySnapshot(d);
   } catch (e) {
     // 本轮被下一轮 abort（慢响应作废）：静默返回，不报错也不改 UI。
@@ -1483,8 +1471,7 @@ function renderReqDetail() {
   if (closeBtn) closeBtn.onclick = () => { reqDetailRid = null; renderReqDetail(); renderRequestTable(); };
 }
 
-/* reqPagerHtml 生成分页器控件（首页/上一页/页码/下一页/末页）。
-   页码窗口：当前页前后各 2 页，避免 20 页时一排按钮。 */
+/* reqPagerHtml 生成分页器（当前页前后各 2 页窗口）。 */
 function reqPagerHtml(total, page, totalPages) {
   if (totalPages <= 1) return '';
   const btn = (label, target, disabled, on) =>
@@ -1502,9 +1489,7 @@ function reqPagerHtml(total, page, totalPages) {
     '</span>';
 }
 
-/* 请求记录筛选控件。搜索框防抖 150ms：最多 1000 行重渲染，不必每键一次。
-   这段顶层绑定放在 requestLogText 之前，是为了让"纯函数切片"式前端测试
-   （slice requestLogText → fmtBytes）只拿到无副作用的格式化函数。 */
+/* 请求记录筛选：搜索框防抖 150ms（最多 1000 行重渲染）。 */
 let reqQTimer = null;
 if ($('reqQ')) $('reqQ').oninput = () => {
   clearTimeout(reqQTimer);
@@ -1517,8 +1502,7 @@ if ($('reqOutcome')) $('reqOutcome').onchange = () => {
 };
 if ($('reqLimit')) $('reqLimit').onchange = () => { reqPage = 1; loadLogs(); };
 if ($('btnReqReload')) $('btnReqReload').onclick = () => { reqPage = 1; loadLogs(); };
-/* 请求记录导出：导出**当前筛选后**的行（与屏幕所见一致），不是全部 1000 条。
-   列口径与表格一致（时间/结果/模型/账号/来源IP/UA/耗时/Token/积分/请求ID）。 */
+/* 请求记录导出：导出当前筛选后的行（与屏幕所见一致）。 */
 if ($('btnReqExport')) $('btnReqExport').onclick = () => {
   const list = reqEntries.filter(e => reqMatch(e));
   if (!list.length) { toast('当前没有可导出的请求记录', 'err'); return; }
@@ -1941,20 +1925,15 @@ async function saveKeyFromDialog() {
 }
 
 async function toggleKeyEnabled(id, enabled) {
-  const keys = keyData.map(k => {
-    const entry = { id: k.id, enabled: enabled ? true : false };
-    if (k.name) entry.name = k.name;
-    if (k.key) entry.key = k.key;
-    if (k.realm) entry.realm = k.realm;
-    if (Array.isArray(k.models)) entry.models = k.models;
-    return entry;
-  });
-  try {
-    await api('config', { method: 'POST', body: JSON.stringify({ api_keys: keys }) });
-    toast(`Key「${id}」已${enabled ? '启用' : '禁用'}，热生效`, 'ok');
-    loadKeys();
-  } catch (e) { toast('切换失败：' + e.message, 'err'); loadKeys(); }
-}
+  if (keySaving) return;
+  if (toggleKeyEnabled.busy) return; toggleKeyEnabled.busy = true;
+  const orig = keyData.find(k => k.id === id), origEn = orig && orig.enabled;
+  if (orig) { orig.enabled = enabled; renderKeyList(); }
+  const keys = keyData.map(k => { const e = { id: k.id, enabled: k.enabled !== false };
+    ['name','key','realm'].forEach(f => { if (k[f]) e[f] = k[f]; }); if (k.models) e.models = k.models; return e; });
+  try { await api('config', { method: 'POST', body: JSON.stringify({ api_keys: keys }) }); toast(`Key「${id}」已${enabled ? '启用' : '禁用'}，热生效`, 'ok'); }
+  catch (e) { if (orig) { orig.enabled = origEn; renderKeyList(); } toast('切换失败：' + e.message, 'err'); }
+  loadKeys(); toggleKeyEnabled.busy = false; }
 
 function deleteKey(id) {
   const k = keyData.find(x => x.id === id);
@@ -2227,17 +2206,8 @@ const CFG_MAP = {
   alerting_webhook_url: ['alerting', 'webhook_url'],
   alerting_min_credit_threshold: ['alerting', 'min_credit_threshold'],
 };
-/* 「覆盖型」文本字段：空串本身是有意义的取值（= 回落到内置默认），必须照发。
- *
- * 其余文本字段保持「空 = 不下发」的既有语义——那是防误清空的保护，不是 bug：
- * 表单里某个框没填，通常意味着"没改"，把它当成"请清空"会静默抹掉配置。
- *
- * 但覆盖型字段正好相反：清空 = 明确要求回到默认。漏发它们会让面板显示"已保存"
- * 而值其实没变（issue #102 附带发现 2：user_agent 清空后 config.json 里仍是旧值）。
- *
- * 刻意不含 api_key：清空它 = 关闭整个鉴权，误触代价是网关变成无鉴权公开服务。
- * 该字段（以及提示文案"留空 = 不鉴权"与现状不符的问题）单独处理。
- */
+/* 覆盖型字段：空串 = 回落到内置默认（issue #102-2：user_agent 清空后值没变）。
+ * 不含 api_key：清空 = 关闭鉴权，误触代价太大，单独处理。 */
 const CLEARABLE_CFG = new Set(['user_agent', 'prompt_file', 'alerting_webhook_url']);
 
 function dig(obj, path) { return path.reduce((o, k) => (o == null ? undefined : o[k]), obj); }
@@ -2718,16 +2688,8 @@ const SCHOOL_TITLES = {
   task_student_verify: '学生认证 +100c（需真实认证，不做）',
 };
 
-/* ── 精简 QR 编码器（券码二维码用）────────────────────────────────────
-   规格子集：byte 模式、ECC L、版本 1-5（全部单纠错块，免块交织）、固定掩码 0。
-   完整性：规范允许任选掩码（解码器按格式信息位自行去掩码），固定掩码不影响
-   可扫描性；已用 python qrcode 库对多输入多版本做逐像素交叉验证（强制 byte
-   模式 + mask 0，5/5 全部 diff=0）。面板 CSP 只允许 self，外链 QR 服务不可用。 */
-// qr_gen.js —— 精简 QR 编码器（浏览器用 + node 可跑交叉验证）
-// 规格子集：byte 模式、ECC L、版本 1-5（全部单纠错块，免块交织）、固定掩码 0。
-// 完整性说明：规范允许编码器任选掩码（解码器按格式信息位自行去掩码），
-// 固定掩码不影响可扫描性；券码为短文本，v1-5（26 字节起）绰绰有余。
-
+/* ── 精简 QR 编码器（券码二维码用，面板 CSP 只允许 self）────────────
+   规格子集：byte 模式、ECC L、版本 1-5、固定掩码 0。已用 python qrcode 逐像素交叉验证。 */
 // GF(256) 对数/指数表（本原多项式 0x11d）
 const QR_EXP = new Array(512), QR_LOG = new Array(256);
 (() => {
@@ -2952,14 +2914,11 @@ $('btnSchoolVouchers').onclick = loadSchoolVouchers;
 $('btnVcClose').onclick = () => $('vcVeil').classList.remove('on');
 $('btnVcRefresh').onclick = loadSchoolVouchers;
 
-/* 成长任务队列。lastQueueSeq 记录本页启动过的队列代次：执行结束后的残留 items
-   （running=false 但 seq 停在旧值）不再回写视图——否则扫描结果 3 秒后被上一轮
-   队列状态覆盖。 */
+/* 成长任务队列。lastQueueSeq 记录队列代次：执行结束后的残留 items 不回写。 */
 let queueTimer = null, lastQueueSeq = 0;
 const GROWTH_TITLES = {}; // code → 展示名（扫描时从任务列表带出）
 async function runScanAll(btn) {
-  // 停掉队列轮询：显式扫描 = 切到待办视图。否则在途队列的下一 tick 会把扫描
-  // 结果冲掉重渲染回队列视图（服务端执行不受影响，只是不再实时回写本视图）。
+  // 停掉队列轮询：显式扫描 = 切到待办视图（否则在途队列下一 tick 会冲掉结果）。
   if (queueTimer) { clearInterval(queueTimer); queueTimer = null; }
   const b = btn || $('btnScanAll');
   b.disabled = true; b.textContent = '扫描中…';
@@ -3552,8 +3511,7 @@ function renderUsageChart(series) {
            '" text-anchor="end">' + fmtTok(max * i / 4) + '</text>';
   }
 
-  // 均值参考线：一眼看出"这根是不是异常高"，比只给刻度省心。
-  // 标签放左侧：右侧常被峰值柱占用（峰值柱往往就是最后一根），贴左不会被压住。
+  // 均值参考线：标签贴左侧（右侧常被峰值柱占用）。
   if (avg > 0 && avg < max) {
     const y = yOf(avg);
     out += '<line class="avg" x1="' + PL + '" y1="' + y.toFixed(1) + '" x2="' + (W - PR) +
@@ -3569,18 +3527,10 @@ function renderUsageChart(series) {
     const hTot = ih * (p.tt / max);
     const hP = p.tt ? hTot * (p.pt / p.tt) : 0;
     const hC = Math.max(p.tt && p.ct ? 1 : 0, hTot - hP);
-    // 每根柱子包一个 <g>，把 <title> 放进去。
-    //
-    // 为什么必须包裹：SVG 里 <title> 描述的是它的**父元素**。此前 <title> 是
-    // <rect> 的兄弟节点（rect 自闭合，无法包含子节点），于是全部平铺在 <svg>
-    // 根下 —— 整张图只有一个 tooltip（浏览器取第一个），悬停任何柱子都显示同一
-    // 份数据（issue #128）。包进 <g> 后 tooltip 跟随该柱，且堆叠的两段
-    //（prompt + completion）共用同一个提示。
+    // 每根柱子包 <g> 放 <title>：SVG 里 title 描述父元素（issue #128）。
     out += '<g><title>' + esc(p.raw) + '  ' + fmtTok(p.pt) + ' prompt / ' +
            fmtTok(p.ct) + ' completion / ' + p.req + ' 次</title>';
-    // 圆角只给堆叠顶端（贴轴的底边保持方角，柱子才像"立"在基线上）。
-    // 类名用 usbar 而不是 bar：账号池的积分条是 .bar{height:3px}，而 SVG2 里
-    // height 是 rect 的 CSS 几何属性，同名类会把每根柱子压成 3px 高（踩过）。
+    // 圆角只给堆叠顶端（类名用 usbar 避免和账号池积分条 .bar 冲突）。
     if (hP > 0) out += '<rect class="usbar" x="' + x.toFixed(2) + '" y="' + (yBase - hP).toFixed(2) +
       '" width="' + bw.toFixed(2) + '" height="' + hP.toFixed(2) +
       '" fill="url(#usGradP)"' + (hC > 0 ? '' : ' rx="1.5"') + '/>';
@@ -3656,9 +3606,8 @@ async function warmUsageModelRates() {
 
 async function loadUsage() {
   const q = trangeQuery('usRange', true);
-  // 加载骨架：首次进入（还没有数据）时给出 KPI + 图表的形状，避免空白期像卡死。
+  // 首次进入给骨架屏（避免空白期像卡死）。
   if (!usageData) {
-    // 骨架数量与实际渲染对齐：usStats 4 张（请求/Token/成功率/延迟），usCreditStats 5 张。
     $('usStats').innerHTML = skelKpis(4);
     $('usCreditStats').innerHTML = skelKpis(5);
     $('usChart').innerHTML = loadingMsg('正在读取用量…');
@@ -3668,9 +3617,8 @@ async function loadUsage() {
     const d = await api('usage?' + q.toString());
     renderUsage(d);
   } catch (e) {
-    // 失败时三块都要清干净：只改图表会留下上一次窗口的数字，看起来像"刷新成功"。
+    // 失败时清空所有块：只改图表会留下旧数字，看起来像"刷新成功"。
     usageData = null;
-    // 错误态就地给出重试入口（此前只有一行字，重试要滚回顶部找「刷新」）。
     $('usChart').innerHTML = loadErrorHTML('读取用量失败', e.message, '重试');
     $('usChartNote').textContent = '—';
     $('usStats').innerHTML = '';
@@ -3755,10 +3703,7 @@ if ($('btnCreditExport')) $('btnCreditExport').onclick = () => {
 if ($('usRange')) trangeBind('usRange', loadUsage);
 
 /* ── 积分构成 ─────────────────────────────────────────────────────── */
-/* 一个账号的余额是若干积分包之和。包按来源命名（「国内运营裂变包」「拉新权益包」
-   「个人体验版」…），面额从 6 到 1500 不等，且**按次发放**。所以两个任务完成度
-   完全一致的账号，余额可能差上千——差别只在包里。这里把逐包明细摊开，并给每个
-   包名一个稳定配色，跨账号对比时同色即同类。 */
+/* 账号余额 = 若干积分包之和（按次发放，面额 6-1500）。同色即同类，跨账号对比。 */
 
 const PK_COLORS = ['#4f8cff', '#25b08b', '#e8a33d', '#c96bd6', '#e2607a',
                    '#5aa9e6', '#8fbf3f', '#b58b5a', '#7d8fa8', '#d4785c'];
@@ -3784,10 +3729,7 @@ function pkAccountColorMap(list) {
 function pkBySource(packs) {
   const m = new Map();
   for (const p of packs) {
-    // 分组键用 code + name，而不是只 name：上游给「首登赠送」和普通活动包用了
-    // **同一个 PackageName 和同一个 PackageCode**，只按 name 会把两类混成一类，
-    // 那正是当初「两个号为何差 1500」看不出来的原因。这里至少把 code 带进键里，
-    // 并在卡片上显示最早的发放时间。
+    // 分组键用 code + name（上游同 name 可能是不同活动包）。
     const k = (p.package_code || '') + '|' + (p.name || '(未命名)');
     const e = m.get(k) || {
       key: k, name: p.name || '(未命名)', code: p.package_code || '',
@@ -3830,11 +3772,8 @@ function pkExpiryMs(p) {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
-// pkDetailCompare 只服务单账号逐包明细：正余额包先按到期时间挑选默认展示项，
-// 其余正余额包与已用完包分别折叠；同一到期时间按面额降序。主键跟随视图排序
-// 模式（pkSortMode，声明在本区块末尾的绑定块）：end_asc 到期升序、size_desc
-// 面额降序（同面额按到期升序）。typeof 守卫：前端 harness 的区域切片求值里
-// 没有该全局，回落 end_asc（= 上游原有语义，切片测试的期望序不受影响）。
+// pkDetailCompare：正余额包先按到期时间，其余折叠；同到期按面额降序。
+// mode 跟随 pkSortMode（end_asc / size_desc），typeof 守卫回落 end_asc。
 function pkDetailCompare(a, b) {
   const sizeOf = p => {
     const n = Number(p && p.size);
@@ -3928,8 +3867,7 @@ function pkAccountSegments(a, now) {
   });
 }
 
-// summarizeCreditDays 对齐 WorkDaddy：按精确剩余天数逐行聚合，无有效到期时间的余额
-// 不进入图表，也不猜测到期日。账号内先按总余额约束逐包金额，避免上游重复记录膨胀。
+// summarizeCreditDays：按剩余天数聚合，无有效到期时间的余额不进图表。
 function summarizeCreditDays(list, now) {
   const buckets = new Map();
   let unavailable = 0;
@@ -4002,7 +3940,7 @@ function renderPackages(d, detailLimit) {
     return;
   }
 
-  // 包名 → 稳定色号（跨账号一致，方便肉眼对齐）
+  // 包名 → 稳定色号（跨账号一致）
   const names = [];
   for (const a of list) for (const s of pkBySource(a.packages || [])) {
     if (!names.includes(s.key)) names.push(s.key);
@@ -4015,7 +3953,6 @@ function renderPackages(d, detailLimit) {
     return sz(y) - sz(x);
   });
   const colorOf = n => pkColor(names.indexOf(n));
-  // 键 → 展示名，供卡片与明细表共用（同一来源必然同色同名）。
   const labelOf = {};
   for (const a of list) for (const s of pkBySource(a.packages || [])) labelOf[s.key] = s;
 
@@ -4065,7 +4002,7 @@ function renderPackages(d, detailLimit) {
 
   $('pkNote').textContent = list.length + ' 个账号 · 实时查询上游';
 
-  // 逐包明细：每个账号一个表，排序规则由视图顶部的选择器决定（默认到期近的在前）
+  // 逐包明细：排序规则由视图顶部选择器决定（默认到期近的在前）。
   $('pkDetail').innerHTML = list.map(a => {
     if (a.error) return '';
     const groups = pkDetailGroups(a.packages || [], detailLimit);
@@ -4142,15 +4079,8 @@ if ($('pkDetail')) $('pkDetail').addEventListener('click', ev => {
 });
 
 /* ── 逐包明细排序模式 ─────────────────────────────────────────────── */
-/* 逐包明细的排序规则（选择持久化在 localStorage，跨会话记住）：
-   end_asc   到期升序（默认）——快过期的包排最前，提醒优先消耗；无到期时间的
-             包（上游没下发 end_time）没有可比的日期，统一垫底，不掺进日期序里；
-   size_desc 面额降序——原来的展示口径，看「钱从哪来」。
-   行序统一由 pkDetailCompare 实现（明细折叠分组共用同一比较器，切换模式时
-   折叠组内行序同步跟随）。本块整体放在 renderPackages / renderExpiryDistribution
-   之后：前端 harness 按区域切片求值（[PK_ACCOUNT_COLORS, renderExpiryDistribution)
-   与 [PK_DEFAULT_DETAIL_LIMIT, renderPackages)），顶层 localStorage/$ 语句落进
-   切片区会让无 DOM 桩的求值环境 ReferenceError——上游测试的切片边界不动。 */
+/* end_asc 到期升序（默认）、size_desc 面额降序。选择持久化在 localStorage。
+   本块放在 renderPackages 之后：harness 切片求值时顶层 localStorage/$ 语句会 ReferenceError。 */
 const LS_PK_SORT = 'pkSortMode';
 let pkSortMode = localStorage.getItem(LS_PK_SORT) || 'end_asc';
 const PK_SORT_LABELS = { end_asc: '按到期升序 · 近的在前', size_desc: '按面额降序' };
@@ -4171,9 +4101,7 @@ if ($('pkSort')) {
   };
 }
 
-// loadPackages 按需拉取：有缓存（上次任意入口拉到的 packages 数据）先直接渲染，
-// 不再「切进积分构成页就打一次上游」——逐账号实时查询在账号多时既慢又压上游。
-// 无缓存（首次进入）才自动查一次；显式刷新（force=true，点「刷新」按钮）始终实时查。
+// loadPackages 按需拉取：有缓存先渲染，无缓存首次进入才查；显式刷新始终实时查。
 async function loadPackages(force) {
   if (!force && lastPackages) {
     renderPackages(lastPackages, lastDetailLimit);
@@ -4206,10 +4134,7 @@ async function loadPackages(force) {
 }
 
 /* ── 积分到期提醒（首页卡片）────────────────────────────────────────── */
-/* 积分不是永久的：签到/任务发的裂变包约一个月失效。只看「剩余积分 ÷ 日消耗」
-   会系统性偏乐观——用不完的部分到期直接蒸发。这里把「最近要过期的是哪批、
-   有多少、到期前每天要至少消耗多少」顶到首页，数据源与「积分构成」共用
-   （lastPackages 缓存，EXP_FRESH_MS 内复用，不重复打上游）。 */
+/* 裂变包约一个月失效，到期前顶到首页（数据源与「积分构成」共用 lastPackages 缓存）。 */
 
 // expBatches 把某账号的包聚合成「到期日 → 该日作废积分」升序列表。
 // 只统计 remain>0 且有到期时间的包——没余额/长期包到期没有任何影响。
@@ -4233,15 +4158,8 @@ function expDaysLeft(dateStr, today) {
 function renderExpiry(d) {
   const list = (d.accounts || []);
   const today = new Date(); today.setHours(0, 0, 0, 0);
-  // 按「最近到期」升序排（issue #125）。
-  //
-  // 后端 /panel/api/packages 是按**余额降序**返回的，恰好把 CN 账号都排在前面、
-  // global 排在末尾，看起来像"按域分组"，其实只是余额顺序。这里再排一次，让
-  // "最快过期的排最前"这个唯一重要的顺序成立，且不分域。
-  //
-  // 排序键用最早到期批次的日期（expBatches 已按日期升序，故 [0] 即最早）。
-  // 查询失败的账号、以及 7 天内无到期的账号没有可比较的到期时间，统一排在最后，
-  // 保持它们原本的相对顺序（稳定排序）。
+  // 按「最近到期」升序排（issue #125）：后端返回是余额降序，这里重排成最快过期在前。
+  // 无到期时间的账号排最后（稳定排序）。
   const keyed = list.map(a => {
     let key = null;
     if (!a.error) {
@@ -4290,13 +4208,7 @@ function renderExpiry(d) {
       '<span class="exp-rate">≥' + fmtTok(daily) + '/天</span>' +
       '</div>';
   }).join('');
-  // 表头只在有数据时出现：空态/全无到期时表头反而占地方。
-  // 表头字符串在本函数内定义，不提取为模块级常量——frontend_test.go 用 indexOf
-  // 按 expBatches 到 loadExpiry 定位代码段喂给 node/vm，提到函数外的常量会落在
-  // 切片之外导致 ReferenceError。（注意：本注释刻意不写出那两个函数的完整声明
-  // 字面量，否则 indexOf 会先命中注释、把切片从函数中间切断。）
-  // 列名用「距到期 / 该批积分」而非「剩余 / 该批」：第 3 列是**天数**、第 4 列是
-  // **积分数**，叫「剩余」会被读成"剩余积分"而与第 4 列撞义。
+  // 表头只在有数据时出现；列名用「距到期 / 该批积分」避免与第 4 列撞义。
   const head = '<div class="exp-head"><span>账号</span><span>最近到期</span>' +
     '<span>距到期</span><span>该批积分</span><span>日均需耗</span></div>';
   $('expList').innerHTML = (rows ? head + rows : '') || '<div class="empty">没有账号</div>';
@@ -4308,13 +4220,8 @@ function renderExpiry(d) {
   $('expBox').hidden = false;
 }
 
-/* 快照版到期提醒：不查上游，直接用 /overview 已有的 credits_earliest_expiry /
-   credits_earliest_remaining（由签到与余额后台刷新写入 state.json，默认每 5 分钟
-   更新一次）。打开面板即可看到「最近哪批要过期」，成本与首页统计条相同为零。
-
-   与 renderExpiry（逐包明细版）的差异：这里只有**最早一批**的日期与数量，没有
-   后续批次、也没法算「7 天内合计」——那是 packages 接口才有的信息。因此卡片上
-   保留「检查」按钮作为增强入口，用户想要完整明细再显式触发一次上游查询。 */
+/* 快照版到期提醒：不查上游，直接用 /overview 已有数据（默认每 5 分钟更新）。
+   只有最早一批的日期与数量；完整明细点「检查」再触发上游查询。 */
 function renderExpirySnapshot(d) {
   const list = (d && d.accounts) || [];
   const today = new Date(); today.setHours(0, 0, 0, 0);
@@ -4355,10 +4262,6 @@ function renderExpirySnapshot(d) {
       '</div>';
   }).join('');
   // 与 renderExpiry 同款表头：两个数据源切换时列位不跳变。
-  // 同样在函数内定义：测试切的是本快照渲染函数到 loadExpiry 之间的代码，
-  // 与 renderExpiry 那段没有公共前导区，模块级常量无法同时落进两段。
-  // 两处各留一份是这个切片契约下的必然代价。（同上：注释避免写出完整函数声明
-  // 字面量，否则 indexOf 命中的是注释而非函数本身。）
   const head = '<div class="exp-head"><span>账号</span><span>最近到期</span>' +
     '<span>距到期</span><span>该批积分</span><span>日均需耗</span></div>';
   $('expList').innerHTML = (rows ? head + rows : '') || '<div class="empty">没有账号</div>';
@@ -4395,8 +4298,7 @@ if ($('btnPk')) $('btnPk').onclick = () => loadPackages(true);
 initNotifCenter();
 
 /* ── 命令面板（Ctrl+K） ─────────────────────────────────────────── */
-// 跳转命令统一走 cmdGo：与侧栏导航同路径（go() 带 cfgDirty 守卫 + hash 同步）。
-// 此前 action 直接调从未定义的 switchView 函数，点命令会抛 ReferenceError。
+// 跳转命令统一走 cmdGo（与侧栏导航同路径，带 cfgDirty 守卫 + hash 同步）。
 function cmdGo(v) {
   if (go(v)) history.pushState(null, '', '#' + v);
 }
@@ -4455,10 +4357,7 @@ function updateCmdActive() {
 initCmdPalette();
 
 /* ── API 调试台（Playground） ────────────────────────────────────────
-   对标 new-api / ARP 的在线测试：不离开面板即可验证「模型可用吗 / 鉴权对吗 /
-   流式正常吗」。直连本机 /v1/chat/completions（同源 fetch，CSP connect-src
-   'self' 放行），鉴权头复用面板 Bearer key —— 与 /v1/* 同一口径，测的就是
-   客户端实际会走的路径。 */
+   对标 new-api / ARP：不离开面板即可验证模型可用 / 鉴权 / 流式（同源 fetch）。 */
 
 let pgModels = null;   // 模型缓存（首次打开拉一次 /panel/api/models）
 let pgAbort = null;    // 当前请求的 AbortController（停止按钮用）
@@ -4471,8 +4370,7 @@ function pgModelOptions() {
   // 110~133 积分/M）。找不到时保持第一个（不破坏上游目录顺序语义）。
   const pref = pgModels.find(m => /deepseek-v4\.1-flash$/i.test(m.id)) || pgModels[0];
   const prefId = pref && pref.id;
-  // 同名区分：跨域/同域变体共用展示名（实测 cn:hy4-preview 与 cn:hy4-preview-f
-  // 都叫 "Hy4 preview"）。同名时给选项追加完整 id，否则下拉出现两条无法分辨的项。
+  // 同名区分：跨域/同域变体共用展示名时追加完整 id。
   return pgModels.map(m => {
     const tip = m.promo_note || m.description || '';
     const dup = pgModels.some(o => o !== m && String(o.name || o.id || '') === String(m.name || m.id || '')) ? m.id : '';
@@ -4482,9 +4380,7 @@ function pgModelOptions() {
   }).join('');
 }
 
-/* pgModelLabel Playground 模型下拉选项文案（对齐 WorkBuddy「模型名 · 倍率 · 标签」）：倍率=生效价
-   （promo_credits，无促销取牌价 credits），标签照旧；倍率缺失=未知（AGENTS.md 四态）标「倍率未知」，
-   同名区分后缀（完整 id）由 pgModelOptions 拼在末尾。 */
+/* pgModelLabel：模型名 · 倍率 · 标签（倍率缺失标「未知」）。 */
 function pgModelLabel(m) {
   const parts = [String(m.name || m.id || '')];
   const eff = (m.promo_credits != null && m.promo_credits !== '') ? m.promo_credits : m.credits;
