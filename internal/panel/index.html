@@ -871,6 +871,9 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
       <li><a href="#logs" data-view="logs">
         <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2.5 3.5h11M2.5 8h11M2.5 12.5h7"/></svg>
         运行日志</a></li>
+      <li><a href="#opsagent" data-view="opsagent">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M8 1.8 14 5v6L8 14.2 2 11V5z"/><path d="M2 5l6 3.2L14 5M8 8.2v6"/><circle cx="8" cy="8" r="1.5"/></svg>
+        运维 Agent</a></li>
     </ul>
     <div class="sig">
       <div class="row"><span class="pulse" id="navPulse"></span><span id="navState">连接中</span></div>
@@ -972,13 +975,16 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
         </table>
         </div>
       </div>
+    </section>
 
-      <div id="opsagentBox" style="margin-top:12px;padding:10px 12px;border:1px solid var(--border,#333);border-radius:8px">
-        <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
-          <h3 style="margin:0">运维 Agent（观察-建议）</h3>
+    <!-- 运维 Agent（独立视图） -->
+    <section class="view" id="view-opsagent" hidden>
+      <div class="box">
+        <header>
+          <h2>运维 Agent（观察-建议）</h2>
           <button id="opsagentReload" type="button">加载 / 刷新</button>
-        </div>
-        <div id="opsagentBody" style="margin-top:8px;font-size:13px">点击「加载 / 刷新」查看未知台账与最近审计轮。</div>
+        </header>
+        <div id="opsagentBody" style="margin-top:12px;font-size:13px">点击「加载 / 刷新」查看未知台账与最近审计轮。</div>
       </div>
     </section>
 

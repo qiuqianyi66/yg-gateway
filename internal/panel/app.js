@@ -522,7 +522,7 @@ let lastPackagesAt = 0;
 let expFetching = false;                       // 到期卡片在途标记（防重复打上游）
 const EXP_FRESH_MS = 2 * 60 * 1000;            // 缓存新鲜窗口：2 分钟内复用
 
-const TITLES = { accounts: '账号池', usage: '用量', packages: '积分构成', taskscenter: '任务中心', models: '模型与档位', keys: 'API Key 管理', config: '配置', logs: '运行日志' };
+const TITLES = { accounts: '账号池', usage: '用量', packages: '积分构成', taskscenter: '任务中心', models: '模型与档位', keys: 'API Key 管理', config: '配置', logs: '运行日志', opsagent: '运维 Agent' };
 
 /* cfgDirty 配置页未保存标记。
    为什么需要：go() 进配置页会无条件 loadConfig() 重拉并整体回填表单。用户改了
