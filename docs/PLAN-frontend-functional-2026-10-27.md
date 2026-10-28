@@ -24,7 +24,7 @@
 | **F7** | opsagent 独立导航页（A5） | M | **F1** | 面板独立页展示 opsagent 规则状态 / 建议列表 |
 | **F8** | `/v1/responses` 端点 | M | 无 | Codex 客户端经本网关可用（四协议互译） |
 | **F9** | pace 选号模式 | M | 无（config 开关默认关） | config 可配 pace 权重，按"重置前每小时剩余额度"选号 |
-| **F10** | 金样重放 T1–T3 | M | V3-9 harnessrun 已就绪 | `cmd/harnessrun` 跑 T1–T3，产出 run-*.md |
+| **F10** | 金样重放 T1–T3 | M | V3-9 harnessrun 已就绪 | ✅ **已完成（2026-10-28）**：`harnessrun check T1/T2` 实跑通过；T3 漂移狩猎 3/3（AGENTS/README 共 5 处修正）；报告 `docs/agent-eval/run-2026-10-28.md` |
 | **F11** | V3-12 structured-output 真机验证 | XS | ~~V3-3 窗口（10-28 21:41 满）~~ | ✅ **已完成（2026-10-28）**：真机一发，上游认 `json_object` 返回合法 JSON（observation），决策=文档化（见 REQ 与 `.harness/changes/2026-10-28-structured-output-p2/`） |
 | **F12** | V3-14 harness 产品化评估 | S | 无 | ✅ **已完成（2026-10-27，2d39e9c）**：`docs/agent-eval/V3-14-harness-product-eval-2026-10-27.md` |
 
@@ -48,7 +48,7 @@ F12（harness 评估）────── 独立，写文档
 1. **F1 瘦身**（关键路径，解锁 F6/F7）
 2. **F2+F3+F4+F5**（并行，纯前端，立即见效）
 3. **F6/F7**（F1 解锁后）
-4. **F10 金样重放**（V3-9 已就绪，不占前端上下文）
+4. ~~F10 金样重放~~ ✅ 已完成（2026-10-28，见 run-2026-10-28.md）
 5. **F8/F9**（后端类，择机）
 6. ~~F11~~ ✅ 已完成（2026-10-28 真机一发：上游认 json_object，决策=文档化）
 7. ~~F12~~ ✅ 已完成（2026-10-27，2d39e9c）
