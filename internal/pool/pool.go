@@ -78,6 +78,9 @@ type Pool struct {
 	// recentUsageFactor 近期用量衰减因子开关（REQ-routing P2，SetRecentUsageFactor
 	// 注入；默认关 = 零回归，因子恒 1）。半衰期/尺度常量见 pickreason.go。
 	recentUsageFactor bool
+	// paceEnabled pace 选号模式开关（F9，SetPaceMode 注入；默认关 = 零回归，
+	// expiring 加成恒走 expiringVirtualSlots 常量）。公式见 pace.go。
+	paceEnabled bool
 	// maxInFlight 单账号最大在途请求数；0 = 不限（租约关闭）。
 	maxInFlight int
 	// maxInFlightGlobal global 域单账号在途上限分档（WAF 403 修复 P1-1：global 域

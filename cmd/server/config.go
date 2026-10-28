@@ -366,6 +366,10 @@ type Config struct {
 		// 关闭后完全不使用到期信息选号。
 		PreferExpiring    bool `json:"prefer_expiring"`
 		RecentUsageFactor bool `json:"recent_usage_factor"` // 近期用量衰减（REQ-routing P2）：权重×2^(-衰减token/200k)，半衰期 1h，默认关
+		// PaceMode pace 选号（F9）：开启时 expiring 账号的 ×2 常量加成换成按
+		// 「每小时剩余额度」相对池级中位平滑分档（[1,2]，低于半中位不加成）。
+		// 默认 false = 零回归（恒走原常量）。参考 magpie-deep-read §五①。
+		PaceMode bool `json:"pace_mode"`
 		// ExpiringSoon 快过期积分窗口（如 "168h"=7天）：签到/余额刷新时，到期时间在
 		// 此窗口内的批次令账号命中上述 ×3 加权；窗口开大 → 命中账号变多、
 		// 偏好被稀释。空/0 = 禁用该加权门槛。

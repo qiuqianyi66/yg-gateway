@@ -23,7 +23,7 @@
 | **F6** | key RPM 可视化（A3） | M | **F1** | 账号卡片或 KPI 区显示 key RPM 曲线/数值 |
 | **F7** | opsagent 独立导航页（A5） | M | **F1** | 面板独立页展示 opsagent 规则状态 / 建议列表 |
 | **F8** | `/v1/responses` 端点 | M | 无 | ✅ **已完成（2026-10-28）**：转换A/B 复用 chat 管线 + 流式帧转译（upstream 零改动），8 测试全绿；真机 Codex 验证标 unknown（解锁动作②） |
-| **F9** | pace 选号模式 | M | 无（config 开关默认关） | config 可配 pace 权重，按"重置前每小时剩余额度"选号 |
+| **F9** | pace 选号模式 | M | 无（config 开关默认关） | ✅ **已完成（2026-10-28）**：`pool.pace_mode`（默认关）；快过期加成从常量 ×2 平滑为按「每小时剩余额度」相对池级中位分档（[1,2]，半中位以下不加成）；4 个专项测试 + 既有 ×2 常量测试守护零回归 |
 | **F10** | 金样重放 T1–T3 | M | V3-9 harnessrun 已就绪 | ✅ **已完成（2026-10-28）**：`harnessrun check T1/T2` 实跑通过；T3 漂移狩猎 3/3（AGENTS/README 共 5 处修正）；报告 `docs/agent-eval/run-2026-10-28.md` |
 | **F11** | V3-12 structured-output 真机验证 | XS | ~~V3-3 窗口（10-28 21:41 满）~~ | ✅ **已完成（2026-10-28）**：真机一发，上游认 `json_object` 返回合法 JSON（observation），决策=文档化（见 REQ 与 `.harness/changes/2026-10-28-structured-output-p2/`） |
 | **F12** | V3-14 harness 产品化评估 | S | 无 | ✅ **已完成（2026-10-27，2d39e9c）**：`docs/agent-eval/V3-14-harness-product-eval-2026-10-27.md` |

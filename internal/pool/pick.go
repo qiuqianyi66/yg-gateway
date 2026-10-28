@@ -222,10 +222,14 @@ func (p *Pool) pick(tried map[string]bool, reqModel, realm, group string) *auth.
 		cost1k float64
 	}
 	medianLatencyMs := p.poolMedianLatencyMs(cands)
+	medianPace := 0.0
+	if p.paceEnabled {
+		medianPace = p.poolMedianPace(cands, now) // F9：expiring 候选的 pace 中位基准（0=回退常量）
+	}
 	ws := make([]weighted, 0, len(cands))
 	for i, e := range cands {
 		if candTier[i] == bestTier {
-			ws = append(ws, weighted{e: e, w: p.routingWeightOf(e, maxCredits, now, medianLatencyMs), tier: candTier[i], cost1k: candCost[i]})
+			ws = append(ws, weighted{e: e, w: p.routingWeightOf(e, maxCredits, now, medianLatencyMs, medianPace), tier: candTier[i], cost1k: candCost[i]})
 		}
 	}
 	// 等权重洗牌：仅当存在权重相等且候选数超过 top5 时，才对 ws 做 Fisher-Yates
@@ -293,7 +297,7 @@ func (p *Pool) pick(tried map[string]bool, reqModel, realm, group string) *auth.
 			}
 		}
 	} else {
-		e = p.pickWeighted(eligible, maxCredits, medianLatencyMs) // eligible 保序 = top5 降序子集；maxCredits 用全集口径（与截断排序同基准）
+		e = p.pickWeighted(eligible, maxCredits, medianLatencyMs, medianPace) // eligible 保序 = top5 降序子集；maxCredits 用全集口径（与截断排序同基准）
 	}
 	if explored {
 		// 探索事件日志（可观测性）：选中号此时才确定，故在选中点打出。
@@ -455,13 +459,13 @@ var minPickGap = 100 * time.Millisecond
 // 时刻取 p.now()（可注入时钟，见 SetClock）：与 pick 的权重计算共用同一时间口径，
 // 否则两阶段权重（截断排序 vs 抽签）会落在不同时刻上（生产差异在 µs 级，但测试
 // 需要它可冻结）。
-func (p *Pool) pickWeighted(cands []*entry, maxCredits int64, medianLatencyMs float64) *entry {
+func (p *Pool) pickWeighted(cands []*entry, maxCredits int64, medianLatencyMs, medianPace float64) *entry {
 	now := p.now()
 	const scale = 1_000_000 // 定点放大：int64 累加权重大整数抽签
 	weights := make([]int64, len(cands))
 	var total int64
 	for i, e := range cands {
-		w := p.routingWeightOf(e, maxCredits, now, medianLatencyMs)
+		w := p.routingWeightOf(e, maxCredits, now, medianLatencyMs, medianPace)
 		weights[i] = int64(w * scale)
 		total += weights[i]
 	}
@@ -522,7 +526,7 @@ func expiringNow(e *entry, now time.Time) bool {
 // 虚拟实例数量。prefer_expiring=false 或账号无有效快过期批次时，实例数恒为 1；
 // ewma 关闭或样本不足时表现因子恒 1 —— 两者叠加后与旧 weightOf 完全一致（零回归）。
 // medianLatencyMs 为池级延迟中位数（poolMedianLatencyMs 单次计算，两阶段共用）。
-func (p *Pool) routingWeightOf(e *entry, maxCredits int64, now time.Time, medianLatencyMs float64) float64 {
+func (p *Pool) routingWeightOf(e *entry, maxCredits int64, now time.Time, medianLatencyMs, medianPace float64) float64 {
 	w := p.weightOf(e, maxCredits, now)
 	if p.ewmaEnabled {
 		w *= p.ewmaWeightFactor(e, medianLatencyMs)
@@ -536,6 +540,11 @@ func (p *Pool) routingWeightOf(e *entry, maxCredits int64, now time.Time, median
 		w *= e.recentUsageFactorOf(now)
 	}
 	if p.preferExpiring && expiringNow(e, now) {
+		if p.paceEnabled {
+			// F9 pace 选号（默认关 = 零回归）：快过期加成从常量 ×2 换成按
+			// 「每小时剩余额度」相对池级中位平滑分档（pace.go）。
+			return w * paceFactorOf(e, now, medianPace)
+		}
 		return w * expiringVirtualSlots
 	}
 	return w
