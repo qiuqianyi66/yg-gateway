@@ -72,3 +72,39 @@ owner: maintainer
 - 定向测试：带内/带外/硬拦三态权重比、halflife 数值表、idle 模式零回归；
   全量 pre-commit；真机观察一轮（opsagent audit 视图可见 softband 分布）。
 - 回滚：单提交 revert；P2 本身默认关，回滚面更小。
+
+## 真机回填（2026-10-28，48h 窗口 10-26 21:41 起）
+
+> 纯文档回填，零代码改动。数据：生产 /status 快照 + reqlog 10-27/10-28（604 行）。
+> 四态纪律全程标注。明细见 `.harness/changes/2026-10-28-v3-3-backfill/summary.md`。
+
+### 软带命中率 —— 0 命中（observation）
+
+48h 内 5 账号 credits = 2098/2162/350/2641/4103（floor=100），全部远在
+floor×1.5 预筛门槛之上，**无一条 pick_reason 含 softband**。软带行为未被实弹触发。
+
+### bandMult 20k/请求假设 —— 被双峰分布推翻（derivation）
+
+reqlog 成功 596 行 total_tokens 分布：
+
+| 段 | 行数 | 特征 |
+|---|---|---|
+| ≤5k | 383 | 聊天流量，p50 = 762 token |
+| 200-500k | 215 | 全为 `deepseek-harness/0.2.1-rc.3`，单次 prompt 30-32 万 token，credit ≈4.4/次 |
+| >500k | 3 | 同上 |
+
+**结论**：`softBandTypicalTokens = 20_000` 既不贴近聊天（762）也不贴近评测（30 万）。
+按「2 次典型请求定带宽」语义，评测流量单次即吃掉 20k 估算带宽的约 15 倍。
+建议按流量类分口径：聊天场景保持默认；评测流量应走该号近期 P50 实测
+（`softBandUpper` 中位数路径已存在，但评测大请求会拉高 P50）。决策待用户。
+
+### recent_usage_factor —— 默认关，无样本（observation）
+
+生产 config 无 `pool.recent_usage_factor`（默认 false）。1h 半衰期 / 200k scale
+无真机样本，维持 REQ 论证（1h 适配 12h 签到节拍）不推翻。
+
+### count_tokens 精度 —— 无样本（unknown）
+
+48h 内 reqlog 0 次 count_tokens 调用。精度回填需一次带对照的真机调用
+（requires: 客户端真实 count_tokens + 同请求 usage.prompt_tokens 对照）。
+不发起付费真机验证（用户约束）。

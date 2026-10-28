@@ -55,3 +55,14 @@ MVP 的「行动」只有两类白名单：①触发一次成本探索（pick �
   maxFrontendLines 棘轮不受影响）；`pool.AllOpenUnknowns()` 提供全量口径
   （cost 专用键 `unknownSeen` 之外的第二条可见路径）。
   剩余解锁顺序：app.js 瘦身 ≥100 行后可把该视图升级为独立导航页（可选，不阻塞）。
+
+## 真机回填（2026-10-28，48h 窗口）
+
+> 纯文档回填，零代码改动。明细见 `.harness/changes/2026-10-28-v3-3-backfill/summary.md`。
+
+### 建议质量 —— 未启用，无样本（observation）
+
+生产 config.json `opsagent` 段 = null（默认 off，从未开启）。V3-3 换版
+（10-26 21:41 / 10-28 17:44）后 opsagent **未启用**，capacity / 402-contradiction
+规则的真机质量无法回填。解锁动作：生产开 `opsagent.enabled` 后观察一轮
+（本 REQ 解锁动作 ③）。期间规则运行态漂移检测处于空窗。
