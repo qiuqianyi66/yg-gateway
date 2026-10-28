@@ -118,28 +118,54 @@ func nameRateSuffix(raw string) string {
 
 // applyModelInfoFields 把上游模型对象全字段（ModelInfo）按「空值省略」写出规则
 // 合入 /v1/models 条目：name/description/credits/tags/vendor/能力旗标/
-// max_allowed_size/reasoning_effort/reasoning_summary。CN 动态分支与 global
-// 探测命中分支共用（两域模型对象同构），保证输出字段集一致。
+// max_allowed_size/reasoning_effort/reasoning_summary/promo_*。CN 动态分支与
+// global 探测命中分支共用（两域模型对象同构），保证输出字段集一致。
 // 不覆盖 id/object/created/owned_by 及调用方先前写好的基础字段；上游未下发的
 // 字段（零值）整体省略——不编造。
 func applyModelInfoFields(entry map[string]any, mi upstream.ModelInfo) map[string]any {
+	// 生效价：有 PromoCredits（限时折扣/免费）时用生效价，否则用牌价 Credits。
+	// 与 panel.panelModelEntry（app.js:1025）同口径——客户端只渲染 name 字段，
+	// 牌价放进 credits 字段备查，生效价拼进 name 让 Cherry Studio 这类客户端
+	// 在已添加模型列表里直接看到"×0 限时免费"而非过时的牌价"×0.29"。
+	effectiveRate := mi.Credits
+	if strings.TrimSpace(mi.PromoCredits) != "" {
+		effectiveRate = mi.PromoCredits
+	}
 	if mi.Name != "" {
-		// 积分倍率拼进 name（"GLM-5.2 ×0.05"）：第三方客户端多只渲染 name 字段，
-		// 单独的 credits 字段它们看不到（deepseek harness 实测不显示）；面板自身
-		// 走 /panel/api/models（另有倍率列），不受影响。
-		entry["name"] = mi.Name + nameRateSuffix(mi.Credits)
+		// 积分倍率拼进 name（"GLM-5.2 ×0.05" / "Hy4 preview ×0 限时免费"）：
+		// 第三方客户端多只渲染 name 字段，单独的 credits 字段它们看不到；
+		// 面板自身走 /panel/api/models（另有倍率列），不受影响。
+		suffix := nameRateSuffix(effectiveRate)
+		if mi.PromoLabel != "" {
+			suffix += " " + mi.PromoLabel
+		}
+		entry["name"] = mi.Name + suffix
 	}
 	if mi.Description != "" {
-		// 积分倍率前缀：从 "x0.05 credits" / "x0.29" 等格式提取纯数字，
-		// 统一为 "[x0.05 credit]" 前缀拼入 description，方便下游面板直接展示。
-		if mi.Credits != "" {
-			entry["description"] = fmtCreditsPrefix(mi.Credits) + " " + mi.Description
+		// 积分倍率前缀：与 name 同口径用生效价，统一为 "[x0.05 credit]" 前缀。
+		if prefix := fmtCreditsPrefix(effectiveRate); prefix != "" {
+			entry["description"] = prefix + " " + mi.Description
 		} else {
 			entry["description"] = mi.Description // descriptionZh 中文描述
 		}
 	}
 	if mi.Credits != "" {
-		entry["credits"] = mi.Credits // 积分倍率原文（如 "x0.05"），仅展示
+		entry["credits"] = mi.Credits // 牌价倍率原文（如 "x0.29"），仅展示
+	}
+	// 限时优惠透出（与 panel.go:517-526 同口径）：
+	//   promo_factor=0 → 限时免费；0.5 → 五折；nil → 无机器可读折扣（错峰类仅标签）。
+	//   promo_credits 是生效价原文（如 "0x" / "0.50x"）；promo_label 是徽章文案
+	//   （限时免费/夜间折扣/错峰使用）；promo_note 是 hover 说明（含时段）。
+	// 第三方客户端可据此高亮免费/折扣模型，不再把牌价当实时价。
+	if mi.PromoFactor != nil {
+		entry["promo_factor"] = *mi.PromoFactor
+		entry["promo_credits"] = mi.PromoCredits
+	}
+	if mi.PromoLabel != "" {
+		entry["promo_label"] = mi.PromoLabel
+	}
+	if mi.PromoNote != "" {
+		entry["promo_note"] = mi.PromoNote
 	}
 	if len(mi.Tags) > 0 {
 		entry["tags"] = mi.Tags
