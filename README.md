@@ -127,6 +127,7 @@ flowchart LR
 | 提示词体系 | 网关提示词替换客户端 system，从源头消灭内容审核误报；`passthrough` 遇拦截自动降级重试 |
 | 原生工具调用还原 | DeepSeek 系标记文本还原为结构化 `tool_calls` |
 | 结构化输出 | `response_format` 原样透传（金样锚定）；2026-10-28 真机一发实测上游认 `json_object` 并返回合法 JSON（模型 deepseek-v4-flash，observation）；其余模型与 `json_schema` 形态未逐一实测（unknown） |
+| Responses API | `POST /v1/responses`（Codex 默认协议）：input/instructions/tools 转换复用 chat 管线，非流式 response 对象 + 流式事件（response.created→completed），上游协议零改动；协议转换已测（fake upstream 端到端），真机 Codex 客户端未验证（unknown） |
 | 备用上游级联 | CodeBuddy 全挂时自动转发到独立 OpenAI 兼容端点，SSE 透传，用量归因到 `realm=fallback` |
 | 延迟观测 | 全局 + 按模型的 P50/P90/P95/P99（自实现固定分桶，零新依赖） |
 | 用量归因 | 按域 / 账号 / 模型 / **下游 Key** 四维聚合，含积分扣除与缓存命中率 |

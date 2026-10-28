@@ -83,6 +83,11 @@
   P2 真机一发实测**上游认 `json_object`**（observation：deepseek-v4-flash 返回合法 JSON
   `{"ok": true}`，证据见 `.harness/changes/2026-10-28-structured-output-p2/`）；决策=文档化，
   README 能力表已对齐；其余模型与 `json_schema` 形态未测 = unknown。
+- [responses-endpoint-2026-10-28](prd/REQ-responses-endpoint-2026-10-28.md)：/v1/responses
+  端点——**已落地（2026-10-28）**：转换A/B 复用 chat 管线（路由 `POST /v1/responses` +
+  outProto 分支 + 流式帧转译，upstream 零改动）；8 个协议级/端到端测试全绿（见
+  `.harness/changes/2026-10-28-responses-endpoint/`）；真机 Codex 验证 = unknown
+  （解锁动作②，需客户端环境）。
 - [opsagent-2026-10-24](prd/REQ-opsagent-2026-10-24.md)：网关内置运维 agent——
   **MVP 已落地（2026-10-24，默认 off）**：观察-建议闭环 + unknown/evidence 复用 +
   动作白名单护栏（ADR-017）；后续阶段（面板集成 / cost-explore 白名单开放）见 REQ §解锁动作。

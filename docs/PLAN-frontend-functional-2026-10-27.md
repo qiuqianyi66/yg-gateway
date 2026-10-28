@@ -22,7 +22,7 @@
 | **F5** | 空态/取数失败全视图区分 | S | 无 | 各视图"暂无数据"vs"加载失败，请重试"文案与操作区分 |
 | **F6** | key RPM 可视化（A3） | M | **F1** | 账号卡片或 KPI 区显示 key RPM 曲线/数值 |
 | **F7** | opsagent 独立导航页（A5） | M | **F1** | 面板独立页展示 opsagent 规则状态 / 建议列表 |
-| **F8** | `/v1/responses` 端点 | M | 无 | Codex 客户端经本网关可用（四协议互译） |
+| **F8** | `/v1/responses` 端点 | M | 无 | ✅ **已完成（2026-10-28）**：转换A/B 复用 chat 管线 + 流式帧转译（upstream 零改动），8 测试全绿；真机 Codex 验证标 unknown（解锁动作②） |
 | **F9** | pace 选号模式 | M | 无（config 开关默认关） | config 可配 pace 权重，按"重置前每小时剩余额度"选号 |
 | **F10** | 金样重放 T1–T3 | M | V3-9 harnessrun 已就绪 | ✅ **已完成（2026-10-28）**：`harnessrun check T1/T2` 实跑通过；T3 漂移狩猎 3/3（AGENTS/README 共 5 处修正）；报告 `docs/agent-eval/run-2026-10-28.md` |
 | **F11** | V3-12 structured-output 真机验证 | XS | ~~V3-3 窗口（10-28 21:41 满）~~ | ✅ **已完成（2026-10-28）**：真机一发，上游认 `json_object` 返回合法 JSON（observation），决策=文档化（见 REQ 与 `.harness/changes/2026-10-28-structured-output-p2/`） |

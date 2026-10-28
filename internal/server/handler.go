@@ -233,6 +233,7 @@ func NewHandler(cfg Config) *Handler {
 	h.mux.HandleFunc("POST /v1/chat/completions", h.withAuth(h.chatCompletions))
 	h.mux.HandleFunc("POST /v1/messages", h.withAuth(h.anthropicMessages))
 	h.mux.HandleFunc("POST /v1/messages/count_tokens", h.withAuth(h.countTokens)) // ROADMAP v3 V3-1
+	h.mux.HandleFunc("POST /v1/responses", h.withAuth(h.responses))               // F8（REQ-responses-endpoint-2026-10-28）
 	h.mux.HandleFunc("GET /v1/models", h.withAuth(h.rateLimited(h.models)))
 	h.mux.HandleFunc("GET /status", h.withAuth(h.rateLimited(h.status)))
 	// /metrics：Prometheus 文本导出（F-710）。与 /status 同鉴权口径——指标含
@@ -722,6 +723,11 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		peekStream:    prep.peekStream,
 		body:          body,
 		tried:         map[string]bool{},
+	}
+	// F8：/v1/responses 出口标记（转换 B 分支：serveNonStream 转 response 对象；
+	// 流式转译由 responses handler 的 writer 包装层承担）。
+	if isResponsesOut(r) {
+		run.outProto = "responses"
 	}
 	// 在途租约兜底释放：函数出口（含成功 return 与 panic）统一释放。
 	// 与原 defer 语义一致——原实现只 Release 不重置（出口即结束，重置无意义），
