@@ -1012,6 +1012,65 @@ func TestNameRateSuffix(t *testing.T) {
 	}
 }
 
+// TestModelsPromoFields 钉住 /v1/models 对限时优惠（modelPromotions）的透出：
+//   - name 拼生效价（PromoCredits）+ PromoLabel，不是过时的牌价
+//   - credits 字段仍透出牌价原文
+//   - promo_factor/promo_credits/promo_label/promo_note 与面板 panel.go 同口径
+func TestModelsPromoFields(t *testing.T) {
+	up := newFakeUpstream(t, func(authz string) (int, string, bool) {
+		return 200, `{"code":0,"data":{"models":[` +
+			`{"id":"hy4-preview","name":"Hy4 preview","credits":"x0.29","descriptionZh":"混元4预览",` +
+			`"maxInputTokens":131072,"maxOutputTokens":8192}` +
+			`],"modelPromotions":[` +
+			`{"enabled":true,"priority":100,"modelIds":["hy4-preview"],` +
+			`"badge":{"label":"限时免费"},"discount":{"discountedCredits":"0x","factor":0},` +
+			`"hover":{"textZh":"14天免费体验"},"schedule":{"daily":[]}}` +
+			`]}}`, false
+	})
+	h := NewHandler(Config{Pool: testPoolWith(&auth.Auth{UID: "u1", AccessToken: "at", ExpiresAt: 9999999999}), Upstream: up})
+	req := httptest.NewRequest("GET", "/v1/models", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("code=%d", rec.Code)
+	}
+	var resp map[string]any
+	json.Unmarshal(rec.Body.Bytes(), &resp)
+	data := resp["data"].([]any)
+	var hy4 map[string]any
+	for _, m := range data {
+		mm, ok := m.(map[string]any)
+		if !ok {
+			continue
+		}
+		if mm["id"] == "cn:hy4-preview" {
+			hy4 = mm
+			break
+		}
+	}
+	if hy4 == nil {
+		t.Fatal("cn:hy4-preview missing")
+	}
+	if got, want := hy4["name"], "Hy4 preview ×0 限时免费"; got != want {
+		t.Errorf("name 应拼生效价+标签: got %v want %v", got, want)
+	}
+	if got, want := hy4["credits"], "x0.29"; got != want {
+		t.Errorf("credits 应透出牌价原文: got %v want %v", got, want)
+	}
+	if hy4["promo_factor"].(float64) != 0 {
+		t.Errorf("promo_factor 应为 0: %v", hy4["promo_factor"])
+	}
+	if got, want := hy4["promo_credits"], "0x"; got != want {
+		t.Errorf("promo_credits: got %v want %v", got, want)
+	}
+	if got, want := hy4["promo_label"], "限时免费"; got != want {
+		t.Errorf("promo_label: got %v want %v", got, want)
+	}
+	if got, want := hy4["promo_note"], "14天免费体验"; got != want {
+		t.Errorf("promo_note: got %v want %v", got, want)
+	}
+}
+
 func TestModelsDynamic(t *testing.T) {
 	// 假上游返回动态模型（含 agents + maxInputTokens/maxOutputTokens + reasoning 档位）
 	up := newFakeUpstream(t, func(authz string) (int, string, bool) {
