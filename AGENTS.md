@@ -52,7 +52,7 @@ domain/contracts  ←  provider adapters  ←  application  ←  CLI/HTTP adapte
 白名单是**实测生成**的，新增方向必须说明理由并更新脚本。
 
 当前实测方向（冻结基线）：以 `scripts/check-boundaries.ps1` 的 `allow` 表为**唯一真相**
-（18 个源包条目，由 `-Fix` 实测生成）。本文件**不复制**该表——手抄副本必然会漂移。
+（20 个源包条目，`-Fix` 实测生成）。本文件**不复制**该表——手抄副本必然会漂移。
 
 **禁止**：`pool → server`、`upstream → panel`、任何 internal 包反向依赖 `server`（`cmd` 除外）。
 
@@ -142,7 +142,7 @@ Unknown 是**一等公民实体**，不是面板上的一个展示区：
   `GOPROXY=https://goproxy.cn,direct`，`CGO_ENABLED=0`
 - 构建：`go build -trimpath -ldflags="-s -w" -o yg-gateway.exe ./cmd/server`
 - 门禁（五项核心；完整清单见 `scripts/pre-commit.ps1`，本地与 CI 同源）：
-  - `go test ./...`（**23 包：21 ok + 2 no test files**）
+  - `go test ./...`（**25 包：22 ok + 3 no test files**）
   - `go vet ./...`
   - `gofmt -l ./cmd ./internal`（**必须无输出**；漂移已清零，新文件零容忍）
   - `powershell -NoProfile -File scripts/check-boundaries.ps1`（依赖方向，退出码非 0 即违规）
