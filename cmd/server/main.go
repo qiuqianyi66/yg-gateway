@@ -395,6 +395,9 @@ func main() {
 		log.Printf("[reqlog] 请求指标已启用；JSONL 归档已关闭")
 	}
 
+	// keyRPMStatsFn 是 panel 消费 per-key RPM 观测的晚绑定闭包：server.NewHandler
+	// 在 panel.New 之后才创建（main.go:440），用闭包变量先占位后接线（F6）。
+	keyRPMStatsFn := func() any { return nil }
 	pn := panel.New(panel.Config{
 		Pool:            p,
 		Usage:           rec,
@@ -411,6 +414,7 @@ func main() {
 		SessionSnapshot: sessSnapshot,
 		Version:         appVersion,
 		Live:            live,
+		KeyRPMStats:     func() any { return keyRPMStatsFn() }, // F6：handler 创建后接线
 		// 模型上限探测数据（scripts/probe_max_tokens.py --panel-out 写入）：
 		// 与 state 文件同目录，缺省 data/output_probes.json。
 		ProbeFile:  stateSibling(cfg.StateFile, "output_probes.json"),
@@ -483,6 +487,8 @@ func main() {
 		// 协议漂移观测（R-102）：未启用 = nil（/status 省略该键 = 外层 unknown）。
 		Drift: driftMon,
 	})
+	// F6：handler 创建后把 per-key RPM 快照接线给 panel（晚绑定闭包）。
+	keyRPMStatsFn = func() any { return h.KeyRPMStats() }
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

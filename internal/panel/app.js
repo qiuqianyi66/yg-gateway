@@ -784,6 +784,8 @@ async function loadOverview(quiet) {
   try {
     const d = await api('overview', { signal: ctl.signal });
     overviewData = d;
+    // F6：key RPM 实况槽就地刷新（每 5s 轮询路径，不整表重渲）。
+    refreshRpmLive(d.key_rpm);
     $('sTotal').textContent = d.total;
     $('sHealthy').textContent = d.healthy;
     $('sCooling').textContent = d.cooling;
@@ -1626,6 +1628,9 @@ let keyEditing = null;    // 当前编辑中的 Key 对象（null=未编辑）
 let keyIsNew = false;     // true=新增模式, false=编辑模式
 let keySaving = false;    // 提交锁：防连点建重复 Key
 let keyLoadFailed = false; // 取数失败标记（区分空状态）
+// F6：overview.key_rpm 实况索引（key_id → {limit, rpm, total, history[]}）；
+// 无观测时保持 null（不是空对象，区分「未观测」与「观测到 0」）。
+let rpmStatsById = null;
 // 明文缓存：创建/重置后本会话内可找回完整接入配置（刷新即清）。
 // 服务端只存哈希，关弹窗后只有这里还能拿到明文，是「接入配置」弹窗状态 A 的依据。
 let lastKeyPlaintext = null;
@@ -1674,11 +1679,46 @@ function renderKeyList() {
   attachKeyCardEvents();
 }
 
+// rpmLiveHTML F6：RPM 实况槽内容（数值 + 12 点迷你柱状曲线，纯 CSS 无依赖）。
+// 曲线高度相对 max(限额, 历史峰值) 归一；history 尾元素 = 当前窗口（曲线连续）。
+function rpmLiveHTML(s) {
+  const hist = (Array.isArray(s.history) && s.history.length) ? s.history : [s.rpm];
+  let peak = Math.max(s.limit || 0, 1);
+  hist.forEach((v) => { if (v > peak) peak = v; });
+  const bars = hist.map((v) =>
+    `<i style="height:${Math.max(2, Math.round(18 * v / peak))}px" title="${v}"></i>`
+  ).join('');
+  return 'RPM ' + (typeof s.rpm === 'number' ? s.rpm : 0)
+    + (s.limit ? '/' + s.limit : '')
+    + `<span class="rpm-bars">${bars}</span>`;
+}
+
+// refreshRpmLive F6：overview.key_rpm 到达后就地刷新已渲染卡片的实况槽
+// （不整表重渲、不重绑事件）；stats 早于卡片渲染时槽位缺失 → 随 config 重载补渲。
+function refreshRpmLive(list) {
+  rpmStatsById = {};
+  if (Array.isArray(list)) list.forEach((s) => { if (s && s.key_id != null) rpmStatsById[s.key_id] = s; });
+  document.querySelectorAll('.key-card').forEach((card) => {
+    const slot = card.querySelector('[data-rpm-live]');
+    if (!slot) return;
+    const s = rpmStatsById[card.dataset.kid];
+    if (!s) { slot.remove(); return; }
+    const n = (Array.isArray(s.history) && s.history.length) ? s.history.length : 1;
+    slot.title = '最近 ' + n + ' 分钟实际请求/分（含被限流）';
+    slot.innerHTML = rpmLiveHTML(s);
+  });
+}
+
 function keyCardHTML(k) {
   const id = esc(k.id || ''), name = esc(k.name || '') || '—';
   const cfg = !!k.key_configured;
   const en = k.enabled !== false;
   const realm = esc(k.realm || '');
+  // F6：RPM 实况槽（overview.key_rpm 按原始 key_id 匹配；无观测时不渲染槽位，
+  // stats 晚到后由 loadOverview 就地补渲或随 config 重载出现）。
+  const rpmLive = (rpmStatsById && rpmStatsById[k.id])
+    ? `<span class="key-badge rpm-live" data-rpm-live title="最近分钟实际请求/分（含被限流）">${rpmLiveHTML(rpmStatsById[k.id])}</span>`
+    : '';
 
   // realm badge（胶囊式，对齐 hub）
   const realmBadge = realm === 'cn'
@@ -1731,6 +1771,7 @@ function keyCardHTML(k) {
         ${realmBadge}
         ${modelsBadge}
         ${rpmBadge}
+        ${rpmLive}
         ${mqBadge}
         ${grpBadge}
       </div>

@@ -355,6 +355,11 @@ func (h *Handler) withAuth(next http.HandlerFunc) http.HandlerFunc {
 		}
 		// Per-key RPM 限流（P0-3）：在鉴权后、业务前检查。未配置 rpm=0 的 key 恒放行。
 		// 超限返 429 + Retry-After，与上游 429 语义一致（客户端自带退避）。
+		// F6：先 record（统计真实请求速率，含将被 429 的），再 allow 判限额——
+		// 限流语义与旧实现逐位一致（每窗口恰好放行 RPM 次）。
+		if key != nil {
+			h.keyRPM.record(key)
+		}
 		if !h.keyRPM.allow(key) {
 			w.Header().Set("Retry-After", "60")
 			writeOpenAIError(w, http.StatusTooManyRequests, "rate_limited",
@@ -386,6 +391,15 @@ func (h *Handler) withAuth(next http.HandlerFunc) http.HandlerFunc {
 
 // authKeyKey 鉴权命中的 Key 的 context 键（独立于 requestTrace，约束校验用）。
 type authKeyKey struct{}
+
+// KeyRPMStats 返回 per-key 实际 RPM 观测快照（F6，panel overview 消费）。
+// nil = keyRPM 未初始化（理论不可达）；否则返回观测数组（空数组 = 观测到 0 请求）。
+func (h *Handler) KeyRPMStats() []map[string]any {
+	if h.keyRPM == nil {
+		return nil
+	}
+	return h.keyRPM.Snapshot()
+}
 
 // authKeyFrom 从请求上下文读鉴权命中的 Key（withAuth 写入；nil = 未启用鉴权）。
 func authKeyFrom(r *http.Request) *httpauth.Key {
