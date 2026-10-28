@@ -51,6 +51,9 @@ type chatRun struct {
 	declaredTools map[string]bool
 	clientIP      string
 	peekStream    bool
+	// outProto 出站协议（F8）："" = chat（原样）；"responses" = /v1/responses
+	// （serveNonStream 出口把 chat 响应转成 response 对象）。
+	outProto string
 	// degradedApplied 本轮是否套用了降级提示词（阶段③ 置位，循环内可能再置位）。
 	degradedApplied bool
 
@@ -472,7 +475,12 @@ func (run *chatRun) serveNonStream(w http.ResponseWriter, acct *auth.Auth, rc io
 	if st.hasCache {
 		cacheMissWarn.noteCacheTokens(bareModel, st.promptTokens, st.cacheHit, st.cacheMiss)
 	}
-	writeJSON(w, http.StatusOK, resp)
+	if run.outProto == "responses" {
+		// F8：/v1/responses 非流式出口——chat 响应转 response 对象（转换 B）。
+		writeResponsesObject(w, resp, run.bareModel)
+	} else {
+		writeJSON(w, http.StatusOK, resp)
+	}
 	st.status = http.StatusOK
 	st.outcome = reqlog.OutcomeSuccess
 	st.toks = completionTokens(resp)
