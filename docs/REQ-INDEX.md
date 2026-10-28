@@ -92,6 +92,12 @@
   （2026-10-28）**：`pool.pace_mode`（默认关）；快过期加成从常量 ×2 平滑为按
   「每小时剩余额度」相对池级中位分档（[1,2]，半中位以下不加成）；4 个专项测试全绿
   （见 `.harness/changes/2026-10-28-pace-pick-f9/`）；生产开启待人工决策（解锁动作②）。
+- [key-rpm-visualization-2026-10-28](prd/REQ-key-rpm-visualization-2026-10-28.md)：key RPM
+  实况可视化——**已落地（2026-10-28）**：keyRPMGuard 单计数器 record+allow 拆分（含被
+  429 的也计数）+ 12 分钟历史桶；overview 经 `KeyRPMStats` 回调透出 key_rpm（未接线=未
+  观测省略）；面板 Key 卡片 RPM 实况槽（当前/限额 + 纯 CSS 迷你曲线，5s 轮询就地刷新）。
+  5 个专项测试 + panel 透出三态 + 前端特征守护全绿（见
+  `.harness/changes/2026-10-28-key-rpm-visualization-f6/`）。
 - [opsagent-2026-10-24](prd/REQ-opsagent-2026-10-24.md)：网关内置运维 agent——
   **MVP 已落地（2026-10-24，默认 off）**：观察-建议闭环 + unknown/evidence 复用 +
   动作白名单护栏（ADR-017）；后续阶段（面板集成 / cost-explore 白名单开放）见 REQ §解锁动作。

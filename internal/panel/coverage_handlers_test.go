@@ -420,6 +420,48 @@ func TestPanelHandlersOverviewCountsAndSticky(t *testing.T) {
 	}
 }
 
+// TestPanelHandlersOverviewKeyRPM F6：KeyRPMStats 未接线 → overview 省略 key_rpm 键
+// （四态：未观测）；接线 → 恒输出数组（空数组 = 观测到 0 请求，非 unknown）。
+func TestPanelHandlersOverviewKeyRPM(t *testing.T) {
+	// 1) 未接线：键必须省略（不是 null/[]，否则前端会把「未观测」读成「0」）。
+	p := chPanel(t, Config{Pool: pool.New("")})
+	out := chWant(t, chDo(t, p, "GET", "/panel/api/overview", ""), http.StatusOK)
+	if _, ok := out["key_rpm"]; ok {
+		t.Errorf("key_rpm 未接线时不应输出: %+v", out["key_rpm"])
+	}
+
+	// 2) 接线：回调结果原样透出（形状由 server 侧定，panel 只透传）。
+	p2 := chPanel(t, Config{
+		Pool: pool.New(""),
+		KeyRPMStats: func() any {
+			return []map[string]any{
+				{"key_id": "k1", "limit": 10, "rpm": 3, "total": 7, "history": []int{1, 2, 3}},
+			}
+		},
+	})
+	out = chWant(t, chDo(t, p2, "GET", "/panel/api/overview", ""), http.StatusOK)
+	rows := chRows(t, out["key_rpm"])
+	if len(rows) != 1 {
+		t.Fatalf("key_rpm 长度 = %d, want 1", len(rows))
+	}
+	if got := chStr(t, rows[0]["key_id"]); got != "k1" {
+		t.Errorf("key_id = %q, want k1", got)
+	}
+	if got := chNum(t, rows[0]["rpm"]); got != 3 {
+		t.Errorf("rpm = %v, want 3", got)
+	}
+
+	// 3) 接线且零观测：输出空数组（观测到 0，非 unknown）。
+	p3 := chPanel(t, Config{
+		Pool:        pool.New(""),
+		KeyRPMStats: func() any { return []map[string]any{} },
+	})
+	out = chWant(t, chDo(t, p3, "GET", "/panel/api/overview", ""), http.StatusOK)
+	if rows := chRows(t, out["key_rpm"]); len(rows) != 0 {
+		t.Errorf("零观测时 key_rpm = %+v, want []", out["key_rpm"])
+	}
+}
+
 // TestPanelHandlersLogsRing 日志环快照：频道分类（task/chat）+ 行首时间戳剥离后原样透出。
 func TestPanelHandlersLogsRing(t *testing.T) {
 	p := chPanel(t, Config{Pool: pool.New("")})

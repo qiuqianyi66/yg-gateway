@@ -65,6 +65,11 @@ type Config struct {
 	StickyCount func() int
 	// SessionSnapshot 返回当前粘性会话详情列表（key → uid + last_active）；nil 时不返回。
 	SessionSnapshot func() []session.SessionBinding
+	// KeyRPMStats 返回 per-key 实际 RPM 观测快照（F6，[]map 形状由 server 侧定：
+	// key_id/limit/rpm/total/history[]）。nil = 未接线（overview 省略 key_rpm 键，
+	// 四态：未观测）；接线后恒输出（空数组 = 观测到 0 请求，非 unknown）。
+	// 用回调而非类型依赖：panel 不得反向依赖 server（依赖方向红线）。
+	KeyRPMStats func() any
 
 	// OpsAgent 运维 agent 实例（REQ-opsagent 阶段 2）：nil = 未启用，
 	// /panel/api/opsagent/status 返回 {"enabled":false}（前端有引导态）。
@@ -314,7 +319,7 @@ func (p *Panel) overview(w http.ResponseWriter, r *http.Request) {
 			})
 		}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
+	body := map[string]any{
 		"version":         p.cfg.Version,
 		"uptime_sec":      int(time.Since(p.started).Seconds()),
 		"auth_required":   p.authEnabled(),
@@ -331,7 +336,13 @@ func (p *Panel) overview(w http.ResponseWriter, r *http.Request) {
 		// model_locks 模型级限流全清单（哪些模型不能用、锁了几个号、还要锁多久）：
 		// 与 accounts 的账号池视图互补，前端「模型锁池」表直接渲染。无锁时为 null。
 		"model_locks": p.cfg.Pool.ModelLockView(),
-	})
+	}
+	// F6 key RPM 实况：未接线时键省略（未观测）；接线后恒输出（空数组 = 观测到
+	// 零请求，非 unknown）。
+	if p.cfg.KeyRPMStats != nil {
+		body["key_rpm"] = p.cfg.KeyRPMStats()
+	}
+	writeJSON(w, http.StatusOK, body)
 }
 
 // logsHandler 返回日志环形缓冲快照（时间升序，含频道标记 chat/task/sys）。

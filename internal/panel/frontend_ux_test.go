@@ -393,6 +393,32 @@ func TestAppJSPollingHygiene(t *testing.T) {
 	}
 }
 
+// TestAppJSKeyRPMVisualization F6：key RPM 实况槽必须随 overview 轮询就地刷新。
+//
+// 牙齿：删掉 refreshRpmLive 调用 / 去掉 data-rpm-live 槽位 / 去掉曲线 CSS → FAIL。
+func TestAppJSKeyRPMVisualization(t *testing.T) {
+	src := readAppJS(t)
+	for _, want := range []string{
+		"let rpmStatsById = null;",   // 未观测与「观测到 0」分离
+		"refreshRpmLive(d.key_rpm);", // overview 轮询路径接入
+		"function refreshRpmLive(list)",
+		"function rpmLiveHTML(s)",
+		"data-rpm-live",                    // 卡片实况槽
+		"slot.innerHTML = rpmLiveHTML(s);", // 就地更新（不整表重渲）
+	} {
+		if !strings.Contains(src, want) {
+			t.Errorf("F6 实况槽缺失：未找到 %q", want)
+		}
+	}
+	html, err := os.ReadFile("index.html")
+	if err != nil {
+		t.Fatalf("read index.html: %v", err)
+	}
+	if !strings.Contains(string(html), "#view-keys .rpm-bars i") {
+		t.Error("RPM 迷你曲线 CSS 缺失")
+	}
+}
+
 // TestAppJSRequestPagination 请求记录分页：>50 条时必须分页渲染，避免
 // 1000 行 × 10 列全量 DOM 构建卡死面板。
 //
