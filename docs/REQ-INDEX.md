@@ -123,6 +123,13 @@
   `snapshots/YYYY-MM-DD.json`（原子写、R1 无凭证、目录容错）；历史存活/到期曲线的数据
   地基，本版只落盘不消费（unknown + requires 快照积累）。4 个专项测试全绿（见
   `.harness/changes/2026-10-29-snapshot/`）。
+- [benchmark-2026-10-29](prd/REQ-benchmark-2026-10-29.md)：网关级 benchmark——
+  **已落地（2026-10-29）**：三项可验证指标（M1 选号到期偏置 / M2 池健康度 /
+  M3 路由成功率），纯函数 `internal/bench` 零出站零付费，四态标注 + 样本数，
+  不硬对标 GAIA（量纲不同）；`cmd/bench` CLI 读 reqlog 归档 + 最新快照输出
+  JSON。6 测试全绿；生产实跑 2427 事件/7 天窗口（M2 0.6、M3 各模型分桶，
+  M1 unknown 待快照部署）。面板摘要行（G4）暂缓（见
+  `.harness/changes/2026-10-29-benchmark/`）。
 - [opsagent-2026-10-24](prd/REQ-opsagent-2026-10-24.md)：网关内置运维 agent——
   **MVP 已落地（2026-10-24，默认 off）**：观察-建议闭环 + unknown/evidence 复用 +
   动作白名单护栏（ADR-017）；后续阶段（面板集成 / cost-explore 白名单开放）见 REQ §解锁动作。
