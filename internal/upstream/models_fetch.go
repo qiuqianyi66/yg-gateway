@@ -115,11 +115,17 @@ func (m dynModelEntry) modelInfo() ModelInfo {
 }
 
 // nonChatModel 判定是否非对话模型（应从模型列表过滤掉）。
-// 来源：harness buddy.ts:547-555。三类规则：
+// 来源：harness buddy.ts:547-555。四类规则：
 //   - id 前缀 nes-/completion-/codewise-：嵌入/补全/代码专用模型，选了报 code=11102。
 //   - maxOutputTokens ≤ 256：tiny 输出非对话模型。
 //   - tags 含生成类标签（图片/视频）：生成模型走各自专用端点，作为对话模型
 //     选上去只会报 11102，非本网关用途。
+//   - 路由档位别名（routingAliasIDs）：上游下发的"自动/快速/均衡/深度/主档"等
+//     虚拟 id，不是真模型，选了让上游自己挑具体模型。WorkBuddy 官方客户端把这些
+//     做成右下角"自动"按钮、不塞进模型下拉；网关若透传，客户端列表里会混进
+//     Primary/Fast/Balanced/Deep/Auto/Enhance 等一堆条目，且与真模型重名（Hy4 Preview
+//     ×2、Auto ×2）。只过滤目录透出，不过滤 chat 路由——硬编码指定这些 id 发请求
+//     照样能到上游。
 //
 // 生成类标签随上游扩充：早期只有 text-to-image，桌面端目录（2026-10-02 实测）
 // 另有 text-to-video / image-to-video（seedance 系列）与 image-to-image
@@ -132,6 +138,9 @@ func nonChatModel(id string, maxOutputTokens int64, tags []string) bool {
 			return true
 		}
 	}
+	if routingAliasIDs[id] {
+		return true
+	}
 	if maxOutputTokens > 0 && maxOutputTokens <= 256 {
 		return true
 	}
@@ -142,6 +151,18 @@ func nonChatModel(id string, maxOutputTokens int64, tags []string) bool {
 		}
 	}
 	return false
+}
+
+// routingAliasIDs 上游目录里的"路由档位"虚拟 id（不是真模型）：
+// 用户选这些等于让上游按策略自动挑模型。官方客户端不列入模型下拉。
+var routingAliasIDs = map[string]bool{
+	"default-model": true, // Auto
+	"fast-model":    true, // Fast
+	"balanced-model": true, // Balanced
+	"primary-model": true, // Primary
+	"deep-model":    true, // Deep
+	"auto-chat":     true, // Auto（另一个 auto）
+	"enhance-1.0":   true, // Enhance-1.0
 }
 
 // codeBuddyIDEUA /v3/config 要求能解析出 CodeBuddy 版本号的 UA。
