@@ -129,9 +129,16 @@ func TestNonChatModelGenerationTags(t *testing.T) {
 		{"图生视频（本次修复）", "seedance-2.5-pro", 1024, []string{"image-to-video"}, true},
 		{"普通对话模型", "gpt-6-sol", 128000, nil, false},
 		{"新模型无 tags", "grok-4.7", 128000, []string{}, false},
-		{"对话模型带无关 tag", "balanced-model", 32000, []string{"craft"}, false},
 		{"tiny 输出仍剔除", "completion-1.0", 256, nil, true},
 		{"nes 前缀仍剔除", "nes-1.2", 8192, nil, true},
+		// 路由档位别名（2026-10-29）：上游虚拟 id，不是真模型，官方客户端不列下拉。
+		{"路由别名 default-model", "default-model", 32000, nil, true},
+		{"路由别名 fast-model", "fast-model", 32000, []string{"craft"}, true},
+		{"路由别名 balanced-model", "balanced-model", 32000, []string{"craft"}, true},
+		{"路由别名 primary-model", "primary-model", 32000, nil, true},
+		{"路由别名 deep-model", "deep-model", 32000, nil, true},
+		{"路由别名 auto-chat", "auto-chat", 32000, nil, true},
+		{"路由别名 enhance-1.0", "enhance-1.0", 32000, nil, true},
 	}
 	for _, c := range cases {
 		if got := nonChatModel(c.id, c.out, c.tags); got != c.want {
