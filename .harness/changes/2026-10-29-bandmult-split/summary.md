@@ -1,8 +1,7 @@
-# 2026-10-29-bandmult-split — routing bandMult 分口径（M2，设计落档）
+# 2026-10-29-bandmult-split — routing bandMult 分口径（M2）
 
-> 状态：**设计定稿待实现**。本目录只落设计（决策 + 现状实读 + 方案 + 验收），
-> 实现与测试由下个会话按本文件执行。四态纪律：现状结论全部来自代码实读（observation），
-> 分口径参数是 derivation（48h 真机双峰样本）。
+> 状态：**已实现并提交**（设计 + 实现 + 测试同提交）。四态纪律：现状结论全部来自
+> 代码实读（observation），分口径参数是 derivation（48h 真机双峰样本）。
 
 ## 决策（PLAN §四 选项 A，用户 2026-10-29 授权推荐路线）
 
@@ -43,6 +42,28 @@ bandMult 分口径：聊天类保持默认（现状公式）；评测/大请求�
 - 既有 `softband_recent_test.go` 断言同步新语义（原环含评测大额的用例改入 bench 环）。
 - 零回归：默认 class=chat 时 Pick() 无参调用行为不变（面板/调度路径）。
 - pre-commit 11/11；go test 全绿；gofmt 干净；变更追踪三件套（本目录 + review.md 如 L2）。
+
+## 实现与验证（2026-10-29 落地）
+
+- `internal/pool/softband.go`：新增 `RequestClass`（ClassChat/ClassBench）+ `BenchTokenThreshold
+  =50_000`；`softBandUpper/softBandFactorOf` 加 class 参数，`chargesOf` 按类取环。
+- `internal/pool/entry.go`：新增 `recentBenchCharges` 评测扣费环（注释同 recentCharges）。
+- `internal/pool/state.go`：`NoteModelCost` 按 `tokens > BenchTokenThreshold` 分流入评测环
+  /聊天环（同一环形收缩语义）。
+- `internal/pool/pick.go`：`pick/routingWeightOf/pickWeighted` 贯穿 class；新增公开入口
+  `PickExcludingForRealmGroupClass`（其余 5 个方法内部默认 ClassChat，既有调用零改动）。
+- `internal/server/chatrun.go`：`chatRun.requestClass()` 惰性判类（estimateTokensJSON 估算
+  body 规模 >50k → ClassBench，只算一次缓存）；`selectAccount` 改用
+  `PickExcludingForRealmGroupClass`。
+- 测试：`softband_recent_test.go` 改写为分口径语义（双环互不污染核心断言 + 分流 + cap）；
+  ewma/pace/pool/pick_weighted 测试补 ClassChat 参数（默认语义锚定）。
+- 验证：`go build ./...` 0 error；`go test ./internal/pool ./internal/server` 全绿；
+  gofmt 干净；全量 pre-commit 11/11。
+
+## 怎么回滚
+
+单提交 `git revert`（pool ×4 + server ×1 + 测试）。回滚后回到单环 P90 语义（评测大额
+重新进聊天环），生产升级后若无异常无需回滚。
 
 ## 已知 unknown（不改动）
 

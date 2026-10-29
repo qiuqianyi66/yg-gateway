@@ -239,7 +239,12 @@ type entry struct {
 	// 只记 credit>0 的收费请求，cap 见 softBandChargeHistory；不持久化（重启后空 →
 	// softBandUpper 回退 20k 公式，行为与现状一致）。消费方按四态纪律：缺样本 = 回退
 	// 路径（unknown 的"没测过"语义），不是"免费"也不是"带宽 0"。
+	// 分口径（PLAN §四 选项 A）：本环只收聊天类扣费（tokens ≤ BenchTokenThreshold），
+	// 评测/大请求类扣费进 recentBenchCharges——大额不污染聊天带宽。
 	recentCharges []float64
+	// recentBenchCharges 评测/大请求类扣费环（bandMult 分口径）。语义同上，
+	// 仅收 tokens > BenchTokenThreshold 的收费请求；softBandUpper(ClassBench) 取此环。
+	recentBenchCharges []float64
 	// lastCheckinDay 最近一次签到成功的本地日期（"2006-01-02"）。签到成功与上游
 	// 幂等拒绝（"今天已签到"）都算；statusOf 据此输出 CheckinDone 供面板按钮显示
 	// 签到/已签。持久化：跨重启不丢当日状态。

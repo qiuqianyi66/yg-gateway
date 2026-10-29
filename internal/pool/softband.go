@@ -42,6 +42,30 @@ const (
 	softBandChargeHistory = 32
 )
 
+// RequestClass 请求流量类（bandMult 分口径，PLAN §四 选项 A）。
+// 双峰真机分布（derivation，48h reqlog）：聊天 ≤5k token、评测 200k-500k token，
+// 5k-200k 之间无样本。阈值取深谷；样本外语义待真机复核（unknown）。
+type RequestClass int
+
+const (
+	// ClassChat 聊天类：软带上界走聊天扣费环，无环回退 20k 公式（现状语义）。
+	ClassChat RequestClass = iota
+	// ClassBench 评测/大请求类：软带上界走评测扣费环（大额不再污染聊天带宽）。
+	ClassBench
+)
+
+// BenchTokenThreshold 分口径阈值：单次请求 tokens > 此值归 ClassBench。
+// 导出供 server 层在选号入口判类（estimateTokensJSON 估算）。
+const BenchTokenThreshold = 50_000
+
+// chargesOf 按流量类取扣费环（调用方须已持 p.mu）。
+func (p *Pool) chargesOf(e *entry, class RequestClass) []float64 {
+	if class == ClassBench {
+		return e.recentBenchCharges
+	}
+	return e.recentCharges
+}
+
 // softBandP90 扣费环 P90（环非空时调用）。P90 取排序后 ceil(0.9n)-1 索引
 // （保守取上分位；与全局延迟分位的分桶口径不同，这里样本少用精确排序）。
 func softBandP90(charges []float64) float64 {
@@ -60,15 +84,17 @@ func softBandP90(charges []float64) float64 {
 }
 
 // softBandUpper 返回软带上界。creditFloor<=0（保底关闭）时返回 0（带不存在）。
-// 调用方须已持 p.mu（读 e.modelCost / e.recentCharges）。仅在预筛通过（credits ≤ floor×1.5）后调用。
-func (p *Pool) softBandUpper(e *entry, now time.Time) int64 {
+// 调用方须已持 p.mu（读 e.modelCost / 对应类扣费环）。仅在预筛通过（credits ≤ floor×1.5）后调用。
+// class 决定取哪条扣费环（分口径，PLAN §四 选项 A）：评测大额扣费只抬评测带宽，
+// 聊天带宽不被污染。
+func (p *Pool) softBandUpper(e *entry, now time.Time, class RequestClass) int64 {
 	if p.creditFloor <= 0 {
 		return 0
 	}
 	base := int64(float64(p.creditFloor) * softBandMinMult)
 	// 主路径（方案 A）：实测单次扣费环 P90。N=2 语义 = floor + 2×典型最重单次扣费。
-	if len(e.recentCharges) > 0 {
-		if v := p.creditFloor + int64(2*softBandP90(e.recentCharges)); v > base {
+	if charges := p.chargesOf(e, class); len(charges) > 0 {
+		if v := p.creditFloor + int64(2*softBandP90(charges)); v > base {
 			base = v
 		}
 	} else {
@@ -95,16 +121,17 @@ func (p *Pool) softBandUpper(e *entry, now time.Time) int64 {
 
 // softBandFactorOf 报告账号是否处于软带 (floor, upper] 内及权重系数。
 // credits ≤ floor 由既有 floorBlocked 硬拦（本函数不重复判定），带外返回 (1,false)。
+// class 沿 softBandUpper 贯通（分口径）。
 // 热路径口径：先做一行预筛（credits > floor×1.5 恒带外——带宽被 cap 在 floor×0.5），
 // 中位数计算只对预筛通过的近底线号执行。
-func (p *Pool) softBandFactorOf(e *entry, now time.Time) (float64, bool) {
+func (p *Pool) softBandFactorOf(e *entry, now time.Time, class RequestClass) (float64, bool) {
 	if p.creditFloor <= 0 || e.credits <= p.creditFloor {
 		return 1, false
 	}
 	if e.credits > p.creditFloor+int64(float64(p.creditFloor)*(softBandMaxWidthMult+0.01)) {
 		return 1, false // 预筛：物理上不可能带内（带宽 cap = floor×0.5）
 	}
-	if upper := p.softBandUpper(e, now); e.credits <= upper {
+	if upper := p.softBandUpper(e, now, class); e.credits <= upper {
 		return softBandFactor, true
 	}
 	return 1, false

@@ -26,8 +26,8 @@ func TestSoftBandWeightAndReason(t *testing.T) {
 	t0 := time.Date(2026, 10, 25, 12, 0, 0, 0, time.Local)
 	p.byUID["in"].setLastUsed(t0)
 	p.byUID["out"].setLastUsed(t0)
-	wIn := p.routingWeightOf(p.byUID["in"], 300, t0, 0, 0)
-	wOut := p.routingWeightOf(p.byUID["out"], 300, t0, 0, 0)
+	wIn := p.routingWeightOf(p.byUID["in"], 300, t0, 0, 0, ClassChat)
+	wOut := p.routingWeightOf(p.byUID["out"], 300, t0, 0, 0, ClassChat)
 	p.mu.Unlock()
 
 	// 基础权重相同（credits 项被 max 归一差异：in=110/300、out=300/300 —— 先算
@@ -52,8 +52,8 @@ func TestSoftBandWeightAndReason(t *testing.T) {
 	}
 	// 选中 in 的轮次应有标记：重置随机源恒选权重高者（out 权重更高）——改用直查：
 	p.mu.RLock()
-	_, inBand := p.softBandFactorOf(p.byUID["in"], t0)
-	_, outBand := p.softBandFactorOf(p.byUID["out"], t0)
+	_, inBand := p.softBandFactorOf(p.byUID["in"], t0, ClassChat)
+	_, outBand := p.softBandFactorOf(p.byUID["out"], t0, ClassChat)
 	p.mu.RUnlock()
 	if !inBand || outBand {
 		t.Fatalf("softBandFactorOf 判定错：in=%v out=%v", inBand, outBand)
@@ -87,7 +87,7 @@ func TestSoftBandPrescreenCap(t *testing.T) {
 	p.SetCredits("edge", 149, 0) // 恰在预筛线内；无扣费环 → upper=floor×1.2=120 → 带外
 	now := time.Now()
 	p.mu.RLock()
-	_, inEdge0 := p.softBandFactorOf(p.byUID["edge"], now)
+	_, inEdge0 := p.softBandFactorOf(p.byUID["edge"], now, ClassChat)
 	p.mu.RUnlock()
 	if inEdge0 {
 		t.Fatal("无扣费环：149 > 120 应带外（迁移期回退 upper=floor×1.2）")
@@ -98,9 +98,9 @@ func TestSoftBandPrescreenCap(t *testing.T) {
 	p.byUID["edge"].recentCharges = []float64{60.0} // 单次 60：2×60=120 → upper=220 → cap 150
 	p.mu.Unlock()
 	p.mu.RLock()
-	fRich, inRich := p.softBandFactorOf(p.byUID["rich"], now)
-	fEdge, inEdge := p.softBandFactorOf(p.byUID["edge"], now)
-	upperCapped := p.softBandUpper(p.byUID["edge"], now) // 大额扣费直查：验证 cap
+	fRich, inRich := p.softBandFactorOf(p.byUID["rich"], now, ClassChat)
+	fEdge, inEdge := p.softBandFactorOf(p.byUID["edge"], now, ClassChat)
+	upperCapped := p.softBandUpper(p.byUID["edge"], now, ClassChat) // 大额扣费直查：验证 cap
 	p.mu.RUnlock()
 	if inRich || fRich != 1 {
 		t.Fatalf("floor×2 应被预筛为带外（带宽 cap = floor×0.5）")
@@ -114,16 +114,16 @@ func TestSoftBandPrescreenCap(t *testing.T) {
 	// cap 生效的带内案例：credits=130（(100,150] 内）应带内。
 	p.SetCredits("edge", 130, 0)
 	p.mu.RLock()
-	_, in130 := p.softBandFactorOf(p.byUID["edge"], now)
+	_, in130 := p.softBandFactorOf(p.byUID["edge"], now, ClassChat)
 	p.mu.RUnlock()
 	if !in130 {
 		t.Fatal("130 应带内（upper=min(max(120,220),150)=150）")
 	}
 }
 
-// TestSoftBandRecentChargeP90 P90 语义（方案 A 主路径）：混合分布（聊天小额 + 评测
-// 大额）下带宽 = max(floor×1.2, floor + 2×P90(近 N 次单次扣费))，P90 落在评测段——
-// 评测扣费足够大时上限随 P90 抬升（进带号能扛 2 次评测级扣费）。同时验证环 cap
+// TestSoftBandRecentChargeP90 P90 语义（方案 A 主路径 + 分口径）：聊天环小额下
+// 带宽 = base（floor×1.2）主导；评测大额只进评测环，抬 ClassBench 带宽（能扛 2 次
+// 评测级扣费），**不污染聊天带宽**（分口径核心断言）。同时验证环 cap
 // （softBandChargeHistory）与 credit=0 不入环。
 func TestSoftBandRecentChargeP90(t *testing.T) {
 	p := New("")
@@ -132,62 +132,83 @@ func TestSoftBandRecentChargeP90(t *testing.T) {
 	p.mu.Unlock()
 	p.Add(&auth.Auth{UID: "u"})
 	p.SetCredits("u", 130, 0) // 注入环不扣费（与 cap 测试同口径），余额直接落带内验证
-	// 混合分布：聊天小额 10 次（0.2 credit）+ 评测大额 2 次（20 credit）。
-	// 排序后 [0.2×10, 20×2]，ceil(0.9×12)-1 = 10 → P90 = 20。
+	// 分口径双环：聊天环 10 次小额（0.2 credit）；评测环 2 次大额（20 credit）。
+	// 评测大额只抬 ClassBench 上界：P90(bench)=20 → upper = 100+2×20 = 140；
+	// ClassChat 上界不被污染：P90(chat)=0.2 → upper 回落 base=120。
 	p.mu.Lock()
-	p.byUID["u"].recentCharges = []float64{0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 20, 20}
+	p.byUID["u"].recentCharges = []float64{0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2}
+	p.byUID["u"].recentBenchCharges = []float64{20, 20}
 	p.mu.Unlock()
 	p.mu.RLock()
-	upper := p.softBandUpper(p.byUID["u"], time.Now())
-	_, inBand := p.softBandFactorOf(p.byUID["u"], time.Now())
+	upperBench := p.softBandUpper(p.byUID["u"], time.Now(), ClassBench)
+	_, inBench := p.softBandFactorOf(p.byUID["u"], time.Now(), ClassBench)
+	upperChat := p.softBandUpper(p.byUID["u"], time.Now(), ClassChat)
+	_, inChat := p.softBandFactorOf(p.byUID["u"], time.Now(), ClassChat)
 	p.mu.RUnlock()
-	if upper != 140 { // max(120, 100 + 2×20) = 140
-		t.Fatalf("softBandUpper = %d, want 140（P90=20，N=2 语义）", upper)
+	if upperBench != 140 { // max(120, 100 + 2×20) = 140
+		t.Fatalf("ClassBench softBandUpper = %d, want 140（P90=20，N=2 语义）", upperBench)
 	}
-	if !inBand {
-		t.Fatal("credits=130 ≤ 140 应带内（P90 语义：能扛 2 次评测级扣费）")
+	if !inBench {
+		t.Fatal("credits=130 ≤ 140 应带内（评测带宽：能扛 2 次评测级扣费）")
 	}
-	// P90 低于基准时 base（floor×1.2）主导：聊天纯号不会因小额扣费缩带上限。
+	if upperChat != 120 {
+		t.Fatalf("ClassChat softBandUpper = %d, want 120（评测大额不污染聊天带宽）", upperChat)
+	}
+	if inChat {
+		t.Fatal("credits=130 > 120 应带外（聊天带宽 base 主导，未受评测环影响）")
+	}
+	// 聊天环无样本时回退 base（floor×1.2 主导）：纯聊天号不会因小额扣费缩带上限。
 	p.mu.Lock()
 	p.byUID["u"].recentCharges = []float64{0.2, 0.2, 0.2}
+	p.byUID["u"].recentBenchCharges = nil
 	p.mu.Unlock()
 	p.mu.RLock()
-	if upperChat := p.softBandUpper(p.byUID["u"], time.Now()); upperChat != 120 {
+	if upperChatOnly := p.softBandUpper(p.byUID["u"], time.Now(), ClassChat); upperChatOnly != 120 {
 		p.mu.RUnlock()
-		t.Fatalf("纯聊天扣费 softBandUpper = %d, want 120（base 主导，零回归）", upperChat)
+		t.Fatalf("纯聊天扣费 softBandUpper = %d, want 120（base 主导，零回归）", upperChatOnly)
 	}
 	p.mu.RUnlock()
 
-	// NoteModelCost 集成：收费扣费入环 + 扣 credits；免费（credit=0）不入环。
+	// NoteModelCost 集成：收费扣费按 tokens 量级分流入环 + 扣 credits；免费不入环。
 	p.mu.Lock()
 	p.byUID["u"].recentCharges = nil
+	p.byUID["u"].recentBenchCharges = nil
 	p.mu.Unlock()
-	p.NoteModelCost("u", "m", 5.0, 1_000) // 收费：入环
-	p.NoteModelCost("u", "m", 0, 1_000)   // 免费：不入环
+	p.NoteModelCost("u", "m", 5.0, 1_000)   // 收费 1k：入聊天环
+	p.NoteModelCost("u", "m", 0, 1_000)     // 免费：不入环
+	p.NoteModelCost("u", "m", 4.4, 300_000) // 收费 300k：入评测环（>BenchTokenThreshold）
 	p.mu.RLock()
 	e := p.byUID["u"]
 	if n := len(e.recentCharges); n != 1 {
 		p.mu.RUnlock()
-		t.Fatalf("recentCharges len = %d, want 1（仅收费入环）", n)
+		t.Fatalf("recentCharges len = %d, want 1（仅收费 1k 入聊天环）", n)
 	}
 	if e.recentCharges[0] != 5.0 {
 		p.mu.RUnlock()
 		t.Fatalf("recentCharges[0] = %v, want 5.0", e.recentCharges[0])
 	}
-	if got := e.credits; got != 125 { // 130 − 5（0 扣费不入账）
+	if n := len(e.recentBenchCharges); n != 1 {
 		p.mu.RUnlock()
-		t.Fatalf("credits = %d, want 125", got)
+		t.Fatalf("recentBenchCharges len = %d, want 1（300k 大额入评测环）", n)
+	}
+	if e.recentBenchCharges[0] != 4.4 {
+		p.mu.RUnlock()
+		t.Fatalf("recentBenchCharges[0] = %v, want 4.4", e.recentBenchCharges[0])
+	}
+	if got := e.credits; got != 121 { // 130 − 5（1k 收费） − 4（300k 大额，int(4.4+0.5)）；免费不入账
+		p.mu.RUnlock()
+		t.Fatalf("credits = %d, want 121", got)
 	}
 	p.mu.RUnlock()
 
-	// 环 cap：再喂 40 次大额，应只保留最近 softBandChargeHistory=32 条。
+	// 环 cap：再喂 40 次大额，评测环应只保留最近 softBandChargeHistory=32 条。
 	for i := 0; i < 40; i++ {
 		p.NoteModelCost("u", "m", 4.4, 300_000)
 	}
 	p.mu.RLock()
-	if n := len(p.byUID["u"].recentCharges); n != softBandChargeHistory {
+	if n := len(p.byUID["u"].recentBenchCharges); n != softBandChargeHistory {
 		p.mu.RUnlock()
-		t.Fatalf("recentCharges len = %d, want %d（环 cap）", n, softBandChargeHistory)
+		t.Fatalf("recentBenchCharges len = %d, want %d（环 cap）", n, softBandChargeHistory)
 	}
 	p.mu.RUnlock()
 }
@@ -198,7 +219,7 @@ func TestSoftBandDisabledWhenFloorOff(t *testing.T) {
 	p.Add(&auth.Auth{UID: "u"})
 	p.SetCredits("u", 10, 0) // 极低余额但 floor 关
 	p.mu.RLock()
-	f, inBand := p.softBandFactorOf(p.byUID["u"], time.Now())
+	f, inBand := p.softBandFactorOf(p.byUID["u"], time.Now(), ClassChat)
 	p.mu.RUnlock()
 	if inBand || f != 1 {
 		t.Fatalf("floor 关闭不应有软带：f=%v inBand=%v", f, inBand)
@@ -230,9 +251,9 @@ func TestRecentUsageFactor(t *testing.T) {
 	p.SetCredits("u", 100, 0)
 	p.mu.Lock()
 	p.byUID["u"].setLastUsed(now)
-	wOff := p.routingWeightOf(p.byUID["u"], 100, now, 0, 0)
+	wOff := p.routingWeightOf(p.byUID["u"], 100, now, 0, 0, ClassChat)
 	p.recentUsageFactor = true
-	wOn := p.routingWeightOf(p.byUID["u"], 100, now, 0, 0)
+	wOn := p.routingWeightOf(p.byUID["u"], 100, now, 0, 0, ClassChat)
 	p.mu.Unlock()
 	if math.Abs(wOff/(wOn/0.5)-1) > 1e-9 {
 		t.Fatalf("开关行为：off=%v on=%v（on 应为 off×0.5）", wOff, wOn)
