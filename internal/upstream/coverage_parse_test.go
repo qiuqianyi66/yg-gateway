@@ -2231,7 +2231,7 @@ func TestUpstreamParseInjectGlobalChatHeaders(t *testing.T) {
 // TestUpstreamParseDefaultWorkBuddyUA 默认 CN 三段式 UA（R8 报文指纹：不得改名）。
 func TestUpstreamParseDefaultWorkBuddyUA(t *testing.T) {
 	c := &Client{}
-	const want = "WorkBuddy/5.5.4 WorkBuddy/5.5.4 CLI/2.137.1"
+	const want = "WorkBuddy/5.5.6 WorkBuddy/5.5.6 CLI/2.137.1"
 	if got := c.defaultWorkBuddyUA(); got != want {
 		t.Errorf("defaultWorkBuddyUA() = %q want %q", got, want)
 	}
