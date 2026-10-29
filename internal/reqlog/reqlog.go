@@ -296,6 +296,18 @@ func (r *Recorder) ReadArchive(limit int, filter Filter) ([]Event, error) {
 	return r.archive.read(limit, filter)
 }
 
+// ReadAll 返回归档全部匹配事件（时间升序，无条数截断）。
+// 用途：时间序列聚合（AggregateDaily 等）需要全量窗口而非最近 1000 条——
+// 周/月级成功率与账号活跃度按 1000 条截断会系统性丢失早期数据（derivation
+// 样本偏差）。调用方自行承担数据量（归档有 retention + FileMaxBytes 上限）。
+// 空目录 / 未启用归档回空列表（不是 nil，消费方同 requestLogs 口径）。
+func (r *Recorder) ReadAll(filter Filter) ([]Event, error) {
+	if r == nil || r.archive == nil {
+		return []Event{}, nil
+	}
+	return r.archive.readAll(filter)
+}
+
 // Close 刷盘并停止后台归档。
 func (r *Recorder) Close() {
 	if r == nil || r.archive == nil {
@@ -640,6 +652,54 @@ func (w *archiveWriter) read(limit int, filter Filter) ([]Event, error) {
 		out = out[:limit]
 	}
 	return out, nil
+}
+
+// readAll 读取全部匹配事件（时间升序，不截断）。文件级粗筛与行内过滤逻辑
+// 与 read 完全一致（结果集 = read 在 limit=∞ 时的结果），只不裁前 limit 条。
+func (w *archiveWriter) readAll(filter Filter) ([]Event, error) {
+	if !w.enabled() {
+		return []Event{}, nil
+	}
+	fromDay, toDay := "", ""
+	if !filter.From.IsZero() {
+		fromDay = filter.From.Format("2006-01-02")
+	}
+	if !filter.To.IsZero() {
+		toDay = filter.To.Format("2006-01-02")
+	}
+	var out []Event
+	for _, entry := range entriesSortedByName(w.cfg.Dir) {
+		name := entry.Name()
+		if entry.IsDir() || !strings.HasPrefix(name, "requests-") || !strings.HasSuffix(name, ".jsonl") {
+			continue
+		}
+		if fromDay != "" && archiveDay(name) < fromDay {
+			continue
+		}
+		if toDay != "" && archiveDay(name) > toDay {
+			continue
+		}
+		rows, err := readFile(filepath.Join(w.cfg.Dir, name), filter)
+		if err != nil {
+			return out, err
+		}
+		out = append(out, rows...)
+	}
+	// 时间升序（与 read 的倒序相反：聚合消费方按天自然序排列，倒序输入
+	// 会让 AggregateDaily 的排序白白多跑一趟）。
+	sort.SliceStable(out, func(i, j int) bool { return out[i].Time.Before(out[j].Time) })
+	return out, nil
+}
+
+// entriesSortedByName 目录条目按文件名升序（read/readAll 共用；保持稳定输出，
+// 与 read 的 os.ReadDir 无序迭代语义解耦——同名轮转文件顺序由字典序保证）。
+func entriesSortedByName(dir string) []os.DirEntry {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].Name() < entries[j].Name() })
+	return entries
 }
 
 func readFile(path string, filter Filter) ([]Event, error) {
