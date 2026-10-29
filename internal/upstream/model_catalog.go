@@ -239,7 +239,23 @@ func ResetLookupChainForTest() {
 //  3. model.json 缓存（内含种子初值 / models.dev 运行时补充值）；
 //  4. 全链 miss 且非负缓存 → 异步触发 models.dev 拉取（本次返回 DefaultContextWindow
 //     1M，不阻塞；拉到后写 model.json 供下次命中）。
+//
+// 统一下限 floor=DefaultContextWindow(1M)：上游探测到的小值（hy3=192K、gpt-5.x=272K、
+// grok=500K 等）是上游硬限制，但网关作为 OpenAI 兼容代理对外统一显示至少 1M——
+// 客户端（DSH/Claude Code/Codex）按 context_length 提前截断输入，低估会白白丢上下文；
+// 高估代价是用户发超长时上游 11115 拒绝并透传原文（网关已正确分类透传），不浪费请求配额。
+// max_output_tokens 不受影响（输出上限无此安全侧，仍按四级查找原值）。
 func ContextWindowListingV4(model string, remote int64, client *http.Client) int64 {
+	val := contextWindowLookup(model, remote, client)
+	if val < DefaultContextWindow {
+		return DefaultContextWindow
+	}
+	return val
+}
+
+// contextWindowLookup 四级查找链本体（见 ContextWindowListingV4 注释）。
+// 拆出纯查找函数便于 floor 包裹——测试断言原始查找值时可直接调本函数。
+func contextWindowLookup(model string, remote int64, client *http.Client) int64 {
 	if remote > 0 {
 		return remote
 	}
