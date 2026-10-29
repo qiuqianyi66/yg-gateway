@@ -191,11 +191,15 @@ func (c *Client) globalOn(a *auth.Auth) bool {
 const chatCompletionsPath = "/v2/chat/completions"
 
 // chatPaths 返回按 realm 的 chat 路径候选序列：
-// global → [/v2]（#119 固定单路径：/console 挂腾讯云 WAF body 内容规则，反引号
-// printf/whoami 等命令执行特征确定性 403；/v2 同 base 不挂该规则，实测等价端点。
-// 已知取舍：若上游未来关闭 /v2，global chat 整体不可用——届时应重新启用 /console
-// 路径，此注释即"坏了再说"的锚点）；cn → [/v2]（单元素，现状）。
+// global → [/console, /v2]（2026-10-29 实测：国际版上游现在只在 /console 收对话，
+// /v2 返回 400/11128 "request illegal"；/console 同 base 正常 200。404/405 时回退 /v2
+// 兜底，防上游未来切回）；cn → [/v2]（单元素，现状不变）。
+// 仅在 404/405 时 fallback——400/11128 等业务错误不换路径（那是请求内容/账号问题，
+// 换路径也会再错一遍，还多罚一次号）。
 func (c *Client) chatPaths(a *auth.Auth) []string {
+	if c.globalOn(a) {
+		return []string{"/console/chat/completions", chatCompletionsPath}
+	}
 	return []string{chatCompletionsPath}
 }
 
@@ -587,6 +591,12 @@ func (c *Client) ChatStreamContext(ctx context.Context, a *auth.Auth, body []byt
 			raw, rerr := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 			resp.Body.Close()
 			cancel()
+			// 404/405 且还有下一个候选路径：换路径重试（global /console→/v2 回退）。
+			// 其他 ≥400（含 11128/11101/内容审核/账号风控）不换路径——那是请求内容或
+			// 账号问题，换路径也会再错一遍，还多罚一次号。
+			if (resp.StatusCode == 404 || resp.StatusCode == 405) {
+				continue
+			}
 			// body 读失败（掐流/截断）→ 传输层错误：半截 raw 不交回调用方进 Classify，
 			// 否则 handler 侧 applyErrorPolicy 会按误判分类罚号。
 			if rerr != nil {
