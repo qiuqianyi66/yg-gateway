@@ -19,7 +19,7 @@
 # 出站路径与按 realm 的候选序列（顺序即行为：只在首个候选 404 时回落）
   chatCompletionsPath               = /v2/chat/completions
   chatPaths(cn)                     = /v2/chat/completions
-  chatPaths(global)                 = /v2/chat/completions
+  chatPaths(global)                 = /console/chat/completions , /v2/chat/completions
   billingMeterPaths(cn)             = /v2/billing/meter/get-user-resource
   billingMeterPaths(global)         = /billing/meter/get-user-resource , /v2/billing/meter/get-user-resource
   checkinMeterPaths(cn)             = /v2/billing/meter/daily-checkin
