@@ -295,6 +295,8 @@ func main() {
 		GrowthDisabled:     !cfg.Schedule.GrowthEnabled,
 		// 保号类四任务是否覆盖禁用账号（缺省 false = 禁用即跳过，保持既有行为）。
 		IncludeDisabledInTasks: cfg.Schedule.IncludeDisabledInTasks,
+		// 账号现态每日快照（03:00 落盘，历史存活曲线数据地基；目录=state 同目录 snapshots/）。
+		SnapshotDir: stateSibling(cfg.StateFile, "snapshots"),
 	})
 	switch {
 	case !cfg.Schedule.CheckinEnabled:

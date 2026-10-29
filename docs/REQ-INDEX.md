@@ -118,6 +118,11 @@
   视图「时间序列证据」双轴 SVG 图 + 账号现态表，四态纪律（0 请求天 = 无观测、从未成功 =
   unknown）。trends.js 自包含 IIFE（对齐 opsagent.js，app.js 冻结棘轮不再膨胀）；拆分后
   maxFrontendLines 4378→4317、panel.go 971 行（见 `.harness/changes/2026-10-29-trends/`）。
+- [snapshot-2026-10-29](prd/REQ-snapshot-2026-10-29.md)：账号现态每日快照——**已落地
+  （2026-10-29）**：scheduler taskSnapshot 每日 03:00 落盘 `Pool.List()` 全量现态到
+  `snapshots/YYYY-MM-DD.json`（原子写、R1 无凭证、目录容错）；历史存活/到期曲线的数据
+  地基，本版只落盘不消费（unknown + requires 快照积累）。4 个专项测试全绿（见
+  `.harness/changes/2026-10-29-snapshot/`）。
 - [opsagent-2026-10-24](prd/REQ-opsagent-2026-10-24.md)：网关内置运维 agent——
   **MVP 已落地（2026-10-24，默认 off）**：观察-建议闭环 + unknown/evidence 复用 +
   动作白名单护栏（ADR-017）；后续阶段（面板集成 / cost-explore 白名单开放）见 REQ §解锁动作。

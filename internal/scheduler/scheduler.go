@@ -32,6 +32,14 @@ type Config struct {
 	GrowthHours    []int // 默认 [1]：成长任务队列（Sequential 族每日零点解锁一环，
 	// 01:00 自动扫描+执行；避开零点整防解锁竞态）
 
+	// SnapshotHours 账号现态快照时点（默认 [3]，落盘避开签到 9/21、旅行 9/21、
+	// 活跃 10、保活 22、黑猫 23、成长 1）。不进 Reconfigure：时点固定，无需热改。
+	SnapshotHours []int
+	// SnapshotDir 账号现态快照目录（空 = 禁用快照任务）。文件 <dir>/YYYY-MM-DD.json
+	// 每日一份（原子写：tmp+rename），内容 = Pool.List() 全量现态（observation，
+	// 不含任何凭证，R1）。历史存活/到期曲线由跨日文件合成（本版只落盘，不消费）。
+	SnapshotDir string
+
 	// ExpiringSoonWindow 快过期积分窗口：签到/余额刷新查余额时，把到期时间
 	// <= now+window 的套餐余额标记为"快过期"（pool 据此做最早到期优先，见
 	// entry.creditsEarliestExpiry）。<=0 时不做路由门槛；展示仍使用完整逐包数据。
@@ -100,6 +108,9 @@ func New(cfg Config) *Scheduler {
 	}
 	if len(cfg.BlackcatHours) == 0 {
 		cfg.BlackcatHours = []int{23}
+	}
+	if len(cfg.SnapshotHours) == 0 {
+		cfg.SnapshotHours = []int{3}
 	}
 	return &Scheduler{
 		cfg:           cfg,
@@ -223,6 +234,7 @@ const (
 	taskKeepalive
 	taskBlackcat
 	taskGrowth
+	taskSnapshot
 )
 
 // nextWake 返回 now 之后最近的唤醒时刻，以及该时刻需要执行的全部任务。
@@ -236,6 +248,8 @@ func (s *Scheduler) nextWake(now time.Time) (time.Time, []taskKind) {
 	checkinOff, keepaliveOff, blackcatOff := s.cfg.CheckinDisabled, s.cfg.KeepaliveDisabled, s.cfg.BlackcatDisabled
 	growthHours, growthOff := s.cfg.GrowthHours, s.cfg.GrowthDisabled
 	travelOff, activityOff := s.cfg.TravelDisabled, s.cfg.ActivityDisabled
+	snapshotHours := s.cfg.SnapshotHours
+	snapshotDir := s.cfg.SnapshotDir
 	s.schedMu.Unlock()
 
 	type slot struct {
@@ -260,6 +274,9 @@ func (s *Scheduler) nextWake(now time.Time) (time.Time, []taskKind) {
 	}
 	if !growthOff {
 		slots = append(slots, slot{nextFire(now, growthHours), taskGrowth})
+	}
+	if snapshotDir != "" {
+		slots = append(slots, slot{nextFire(now, snapshotHours), taskSnapshot})
 	}
 	var earliest time.Time
 	for _, sl := range slots {
@@ -426,6 +443,8 @@ func (s *Scheduler) runBatch(ctx context.Context, kinds []taskKind) {
 				if hook != nil {
 					hook()
 				}
+			case taskSnapshot:
+				s.RunSnapshotNow()
 			}
 		}(k)
 	}
