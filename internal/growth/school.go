@@ -1,18 +1,10 @@
-// school.go 开学季活动（school-season，活动期 2026-09-13 ~ 09-24）纯 API 自动化。
-//
-// 判据（2026-09-13 小程序 MCP 逆向 + 三账号实测，protocol.md §7.11）：
-//   - share_invite（每日 +100c +1抽奖）：POST /tasks/share-complete {channel:"wechat"}
-//     即点亮——纯前端上报，服务端不校验真实分享回执。本模块的主目标。
-//   - chat_3_times / expert_use：判据绑定小程序原生沙箱会话（e2b runtime），
-//     webchat 普通会话不计数，纯 API 不做（需小程序内人工对话）。
-//   - 抽奖：POST /wheel/draw {draw_uuid}（前端生成 uuid，消耗 1 chance）。
-//
-// 端点基址 www.codebuddy.cn（billing 同域）；信封 {code,msg,data}，code=0 成功。
-package upstream
+// school.go 「开学季/校园日」学院活动：school 域券码（SchoolVouchers）、
+// 小程序埋点上报（ReportMPEvent）与判据事件构造（SchoolChatTimesEvents 等）。
+// 从 upstream 拆出（ADR-018）：请求构造委托 transport.DoSchool / DoReportMP；
+// 事件构造为纯函数（报文内容零改动，R8 金样持续断言）。
+package growth
 
 import (
-	"bytes"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"time"
@@ -20,52 +12,42 @@ import (
 	"yg-gateway/internal/auth"
 )
 
+// schoolBase 学院活动端点前缀（school 域挂 billingBase 下）。
 const schoolBase = "/portal/activity/school"
 
-// schoolJSON 学院活动 API 请求（剥信封，业务 code≠0 返回带 msg 的 error）。
-func (c *Client) schoolJSON(a *auth.Auth, method, path string, body map[string]any, out any) error {
-	var raw []byte
-	if body != nil {
-		// R10：marshal 失败必须上报，不能静默发空 body——那会把「参数不可序列化」
-		// 伪装成上游拒绝，排障时全查错方向。同文件 ReportMPEvent 同口径。
-		b, err := json.Marshal(body)
-		if err != nil {
-			return fmt.Errorf("序列化 school-season 请求体失败（请求未发出）: %w", err)
-		}
-		raw = b
-	}
-	req, err := http.NewRequest(method, c.billingBase(a)+schoolBase+path, bytes.NewReader(raw))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Authorization", "Bearer "+a.AccessTokenValue())
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json")
-	if a.UID != "" {
-		req.Header.Set("X-User-Id", a.UID)
-	}
-	data, err := c.doJSON(req)
-	if err != nil {
-		return err
-	}
-	if out != nil {
-		return json.Unmarshal(data, out)
-	}
-	return nil
-}
-
-//   - chat_3_times：3 条 chat_request_send 即 3/3（conversationId 任意、桌面/mp
-//     头族均可计数，无需真实沙箱会话）。
-//   - expert_use：mp 指纹事件链 expert_summon_click + expert_summoned +
-//     expert_actual_use + chat_request_send（开学季分类专家）即点亮。
-
+// mpReportPath 小程序埋点上报端点（BillingBaseCN 固定）。
 const mpReportPath = "/v2/report"
 
 // schoolOpenDayActivityID 开学季/校园日活动 id（事件 activityId 字段值，两域共用）。
 const schoolOpenDayActivityID = "school_open_day_2026"
 
-// mpEventBase 小程序埋点公共指纹（appservice wQ()+Ao() 对齐）。
-func mpEventBase(a *auth.Auth) map[string]any {
+// SchoolVoucher 开学季抽奖抽中的第三方券（KFC/瑞幸/酷狗等）。
+// 字段结构按真实响应样本：GET /vouchers 单次拉全（无分页），data.items[]。
+type SchoolVoucher struct {
+	GrantID   int64  `json:"grant_id"`
+	DrawUUID  string `json:"draw_uuid,omitempty"`
+	SKUCode   string `json:"sku_code,omitempty"`   // kfc_ice_cream / voucher_luckin / voucher_kugou …
+	PrizeName string `json:"prize_name,omitempty"` // 肯德基冰淇淋
+	Code      string `json:"code"`                 // 券码本体（复制给店员核销）
+	ValidFrom string `json:"valid_from,omitempty"` // 上游常为空
+	ValidTo   string `json:"valid_to,omitempty"`   // "2026-10-24"
+	GrantedAt string `json:"granted_at,omitempty"` // RFC3339
+}
+
+// SchoolVouchers 查询账号的开学季券码列表（只读）。
+// 抽到积分的记录不在此端点（那是 /rewards 的 type=credit 条目）。
+func (c *Client) SchoolVouchers(a *auth.Auth) ([]SchoolVoucher, error) {
+	var out struct {
+		Items []SchoolVoucher `json:"items"`
+	}
+	if err := c.t.DoSchool(a, http.MethodGet, "/vouchers", nil, &out); err != nil {
+		return nil, err
+	}
+	return out.Items, nil
+}
+
+// MPEventBase 小程序埋点公共指纹（appservice wQ()+Ao() 对齐）。
+func MPEventBase(a *auth.Auth) map[string]any {
 	return map[string]any{
 		"timestamp":    time.Now().UnixMilli(),
 		"ideType":      "WorkBuddy_MP",
@@ -90,7 +72,7 @@ func (c *Client) ReportMPEvent(a *auth.Auth, events ...map[string]any) error {
 	if len(events) == 0 {
 		return fmt.Errorf("mp report: no events")
 	}
-	base := mpEventBase(a)
+	base := MPEventBase(a)
 	arr := make([]map[string]any, 0, len(events))
 	for _, ev := range events {
 		m := map[string]any{}
@@ -102,26 +84,7 @@ func (c *Client) ReportMPEvent(a *auth.Auth, events ...map[string]any) error {
 		}
 		arr = append(arr, m)
 	}
-	raw, err := json.Marshal(arr)
-	if err != nil {
-		return err
-	}
-	req, err := http.NewRequest(http.MethodPost, c.BillingBaseCN+mpReportPath, bytes.NewReader(raw))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Authorization", "Bearer "+a.AccessTokenValue())
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json")
-	if a.UID != "" {
-		req.Header.Set("X-User-Id", a.UID)
-	}
-	req.Header.Set("X-Client-Product", "workbuddy-mp")
-	req.Header.Set("X-Client-Version", "2.4.0")
-	req.Header.Set("X-Client-Platform", "mp-weixin")
-	req.Header.Set("X-Platform", "wechatmp")
-	_, err = c.doJSON(req)
-	return err
+	return c.t.DoReportMP(a, mpReportPath, arr)
 }
 
 // SchoolChatTimesEvents 构造一条 chat_request_send 事件（chat_3_times 计数）。
@@ -218,31 +181,4 @@ func MiniPlaybookEvents(caseID, caseName string) []map[string]any {
 		send[k] = v
 	}
 	return []map[string]any{cta, send}
-}
-
-// ---- 我的券码（#/prizes?tab=vouchers，2026-09-16 接入）----
-
-// SchoolVoucher 开学季抽奖抽中的第三方券（KFC/瑞幸/酷狗等）。
-// 字段结构按真实响应样本：GET /vouchers 单次拉全（无分页），data.items[]。
-type SchoolVoucher struct {
-	GrantID   int64  `json:"grant_id"`
-	DrawUUID  string `json:"draw_uuid,omitempty"`
-	SKUCode   string `json:"sku_code,omitempty"`   // kfc_ice_cream / voucher_luckin / voucher_kugou …
-	PrizeName string `json:"prize_name,omitempty"` // 肯德基冰淇淋
-	Code      string `json:"code"`                 // 券码本体（复制给店员核销）
-	ValidFrom string `json:"valid_from,omitempty"` // 上游常为空
-	ValidTo   string `json:"valid_to,omitempty"`   // "2026-10-24"
-	GrantedAt string `json:"granted_at,omitempty"` // RFC3339
-}
-
-// SchoolVouchers 查询账号的开学季券码列表（只读）。
-// 抽到积分的记录不在此端点（那是 /rewards 的 type=credit 条目）。
-func (c *Client) SchoolVouchers(a *auth.Auth) ([]SchoolVoucher, error) {
-	var out struct {
-		Items []SchoolVoucher `json:"items"`
-	}
-	if err := c.schoolJSON(a, http.MethodGet, "/vouchers", nil, &out); err != nil {
-		return nil, err
-	}
-	return out.Items, nil
 }

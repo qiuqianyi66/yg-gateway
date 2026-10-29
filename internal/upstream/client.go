@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"yg-gateway/internal/auth"
+	"yg-gateway/internal/growth"
 	"yg-gateway/internal/logfmt"
 )
 
@@ -82,6 +83,11 @@ type Client struct {
 	// **零值即生产行为**：New() 不得预置实现（有用例钉住这一点）。
 	// 装配阶段写入、运行期只读——与 HTTP/ChatBaseCN 等同族字段同一约定。
 	nightChatSleep func(time.Duration)
+
+	// growthOnce/gc growth 养号活动域委托（ADR-018）：惰性构造，sync.Once 防并发
+	// 首调竞争（面板/调度多路并发）。零值 nil：调用 growth 方法时才初始化。
+	growthOnce sync.Once
+	gc         *growth.Client
 
 	// UserAgent 出站 User-Agent 显式覆盖（非空时全路径生效，优先于默认三段式）。
 	// 空 = 默认官方形态：chat/refresh/FetchModels 走

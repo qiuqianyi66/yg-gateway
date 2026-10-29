@@ -4,27 +4,29 @@
 // 发 credit/energy/补签卡/**抽奖次数**；抽奖（POST /activity/growth/lottery/draw）每次消耗
 // 1 次 chances。未解锁兑换返回 HTTP 403「连续登录天数不足」。
 // client_token 为前端生成的幂等令牌（randomUUID）。
-package upstream
+//
+// 从 upstream 拆出（ADR-018）：逻辑逐字保留，请求构造委托 transport.DoChat。
+package growth
 
 import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
-
 	"fmt"
 	"net/http"
+
 	"yg-gateway/internal/auth"
 )
 
-// streakRedeemPath / lottery 路径（growth 域，growthJSON 走 www.workbuddy.cn）。
+// streakRedeemPath / lottery 路径（growth 域）。
 const (
 	streakRedeemPath   = "/activity/growth/redeem"
 	lotterySummaryPath = "/activity/growth/lottery/summary"
 	lotteryDrawPath    = "/activity/growth/lottery/draw"
 )
 
-// clientToken 幂等令牌（前端 randomUUID 同款语义）。
-func clientToken() string {
+// newClientToken 幂等令牌（前端 randomUUID 同款语义）。
+func newClientToken() string {
 	b := make([]byte, 16)
 	// 忽略：crypto/rand.Read 自 Go 1.24 起契约保证填满且永不返回错误，失败无路径，不影响幂等令牌（判据④）。
 	_, _ = rand.Read(b)
@@ -63,7 +65,7 @@ type StreakFull struct {
 
 // GrowthStreakFull 拉取连登完整状态。
 func (c *Client) GrowthStreakFull(a *auth.Auth) (*StreakFull, error) {
-	data, err := c.growthJSON(a, http.MethodGet, streakPath, nil)
+	data, err := c.t.DoChat(a, http.MethodGet, streakPath, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -77,14 +79,14 @@ func (c *Client) GrowthStreakFull(a *auth.Auth) (*StreakFull, error) {
 // GrowthRedeemTier 兑换连登档位（tier: "7d"|"14d"|"28d"）。
 // 未解锁返回 *Error（HTTP 403「连续登录天数不足」），调用方按 locked 状态跳过即可。
 func (c *Client) GrowthRedeemTier(a *auth.Auth, tier string) error {
-	_, err := c.growthJSON(a, http.MethodPost, streakRedeemPath,
+	_, err := c.t.DoChat(a, http.MethodPost, streakRedeemPath,
 		map[string]any{"tier": tier, "client_token": clientToken()})
 	return err
 }
 
 // LotteryChances 当前抽奖次数（GET /activity/growth/lottery/summary）。
 func (c *Client) LotteryChances(a *auth.Auth) (int, error) {
-	data, err := c.growthJSON(a, http.MethodGet, lotterySummaryPath, nil)
+	data, err := c.t.DoChat(a, http.MethodGet, lotterySummaryPath, nil)
 	if err != nil {
 		return 0, err
 	}
@@ -102,6 +104,23 @@ func (c *Client) LotteryChances(a *auth.Auth) (int, error) {
 
 // LotteryDraw 抽奖一次，返回原始奖品载荷（prize 字段形状由活动期决定，透传给调用方）。
 func (c *Client) LotteryDraw(a *auth.Auth) (json.RawMessage, error) {
-	return c.growthJSON(a, http.MethodPost, lotteryDrawPath,
+	return c.t.DoChat(a, http.MethodPost, lotteryDrawPath,
 		map[string]any{"client_token": clientToken()})
+}
+
+// GrowthStreak 查询连登天数（travel.go 迁移前的轻量查询；缺字段零值）。
+func (c *Client) GrowthStreak(a *auth.Auth) (int, error) {
+	data, err := c.t.DoChat(a, http.MethodGet, streakPath, nil)
+	if err != nil {
+		return 0, err
+	}
+	var resp struct {
+		Streak struct {
+			Days int `json:"days"`
+		} `json:"streak"`
+	}
+	if err := json.Unmarshal(data, &resp); err != nil {
+		return 0, err
+	}
+	return resp.Streak.Days, nil
 }
