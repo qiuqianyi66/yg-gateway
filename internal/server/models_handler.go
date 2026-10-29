@@ -14,20 +14,22 @@ import (
 
 // hiddenGlobalListingIDs 从 /v1/models 默认列表里隐藏的 global 模型 id（裸名，不带前缀/后缀）。
 //
-// 为什么隐藏而不是删除：这些是上游目录里真实存在、但当前号池账号无权限（Pro Only /
-// 未开通）的模型——2026-10-29 全量探针实测：当前池 global 号一发这些 id 就上游 403/402。
-// 开源项目要保留完整目录能力：手动指定 model=global:<id> 仍可路由（号升级 Pro 后立即可用），
-// 只是默认下拉不列出来避免用户选了 503。号池升级 Pro 后从此集合删掉对应 id 即恢复可见。
+// 为什么隐藏而不是删除：这些 id 出现在上游 models 目录探测结果里，但实际 chat 接口对
+// 当前池所有 global 号都返回 11102 "service info not found"——上游目录与后端部署不一致，
+// 不是账号权限问题（2026-10-29 直连 qiuqiayi66/yanhang 双号实测，两个号都 11102）。
+// 开源项目保留完整目录能力：手动指定 model=global:<id> 仍可路由（若未来某号后端部署了
+// 该模型立即可用），只是默认下拉不列出来避免用户选了 11102。某 id 未来上游部署后从此
+// 集合删掉即恢复可见。
 var hiddenGlobalListingIDs = map[string]bool{
-	"gpt-6-astra":          true, // Pro Only
-	"gpt-5.6-sol":          true, // Pro Only
-	"gpt-6-sol":            true, // Pro Only
-	"gpt-6.1-sol":          true, // Pro Only
-	"kimi-k3":              true, // Pro Only
-	"kimi-k3.1-pro":        true, // Pro Only
-	"kimi-k3.1-pro-highspeed": true, // Pro Only
-	"minimax-m3.1-flash":   true, // 当前号池无权限（CN 域同 id 可用）
-	"o4-mini":              true, // 当前号池无权限
+	"gpt-6-astra":            true, // 11102 service info not found（双号实测）
+	"gpt-5.6-sol":            true, // 11102
+	"gpt-6-sol":              true, // 11102
+	"gpt-6.1-sol":            true, // 11102
+	"kimi-k3":                true, // 11102
+	"kimi-k3.1-pro":          true, // 11102
+	"kimi-k3.1-pro-highspeed": true, // 11102
+	"minimax-m3.1-flash":     true, // global 域 11102（CN 域同 id 可用）
+	"o4-mini":                true, // global 域 11102
 }
 
 // modelsCache 动态模型目录的进程内缓存：id 目录 + 10min TTL + 5min 失败负缓存。
