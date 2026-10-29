@@ -368,7 +368,15 @@ func (h *Handler) prepareOutbound(
 	//     粘性 key 进程内稳定生成；粘性 key 也空时走轮级兜底（TurnKey/TurnRequestID），
 	//     无 user 消息时退化成本请求级随机——轮转内捕获一次即共享；
 	//   - messageID 在 ChatHeaders 内每条消息生成（消息级独立，无需外部可见）。
-	chatMeta := upstream.ChatMeta{ConversationID: session.ResolveConversationIDView(reqView)}
+	// 缓存键会话段：显式会话标识优先；无会话标识时回退**内容派生键**（不受
+	// DisableSessionDerive 影响——路由打散归路由，缓存复用归缓存）。否则
+	// deepseek-harness 等无会话标识客户端同账号所有请求共用定值键，多个
+	// 子会话互相覆盖缓存 → 间歇性整段 miss（2026-10-15 计划 Task 3 识别未落地）。
+	convID := session.ResolveConversationIDView(reqView)
+	if convID == "" {
+		convID = session.CacheConversationFallback(reqView)
+	}
+	chatMeta := upstream.ChatMeta{ConversationID: convID}
 	switch {
 	case conversationReqHeader != "":
 		chatMeta.ConversationRequestID = conversationReqHeader

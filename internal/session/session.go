@@ -538,6 +538,27 @@ func deriveKeyView(v *RequestView) string {
 	return derivedKeyPrefix + hex.EncodeToString(sum[:16])
 }
 
+// CacheConversationFallback 在显式会话标识缺失时，为网关注入的 prompt_cache_key
+// 提供内容派生会话段：SHA-256(system + 首条 user)（与 deriveKeyView 同口径）。
+//
+// 为什么独立于路由粘性键（ExtractKeyOptView）的 DisableSessionDerive 开关：
+//   - 路由键关闭派生是 anti-monopoly 契约——防"固定 system + 短开场"把无关对话
+//     误判为同一会话、全量钉到同一个账号（影响账号选择）；
+//   - 缓存键不参与账号选择，只决定上游前缀缓存槽位。关闭派生只应打散路由，
+//     不应连带牺牲缓存复用——否则无会话标识客户端（deepseek-harness 等）同账号
+//     所有请求共用定值键，多个子会话互相覆盖缓存 → 间歇性整段 miss
+//     （2026-10-15 计划 Task 3 识别、未落地；见 chatflow.prepareOutbound 调用点）。
+//
+// 返回值形态与派生键相同（"d-" + 32 hex）；显式会话标识由调用方先取
+// （ResolveConversationIDView），本函数仅在 convID=="" 时被调用。无 user 消息
+// 或 body 不可解析时返回 ""（调用方保持原有空会话语义，退化为账号定值键）。
+func CacheConversationFallback(v *RequestView) string {
+	if v == nil {
+		return ""
+	}
+	return deriveKeyView(v)
+}
+
 // messageTextRaw 取 content 原始字节的文本表示（字符串 / 数组 parts 的 text 字段），
 // 与 messageText(any) 同口径。
 func messageTextRaw(raw json.RawMessage) string {
