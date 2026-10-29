@@ -1973,12 +1973,14 @@ func TestUpstreamParseResetLookupChainForTest(t *testing.T) {
 
 // TestUpstreamParseContextWindowListingV4 四级查找链优先级：
 // remote > 静态种子表 > model.json > models.dev 进程内索引 > 1M 兜底。
+// 注意：V4 对外层有 floor=1M 统一放大（见 contextWindowLookup 注释），
+// 本测试用 contextWindowLookup 验证查找链分级本身，另加 floor 子测试验证对外层。
 func TestUpstreamParseContextWindowListingV4(t *testing.T) {
 	upstreamparseResetModelsDev(t)
 
 	t.Run("remote 权威", func(t *testing.T) {
 		upstreamparseResetCatalog(t)
-		if got := ContextWindowListingV4("glm-5.1", 4242, nil); got != 4242 {
+		if got := contextWindowLookup("glm-5.1", 4242, nil); got != 4242 {
 			t.Errorf("＝ %d want 4242", got)
 		}
 	})
@@ -1999,13 +2001,13 @@ func TestUpstreamParseContextWindowListingV4(t *testing.T) {
 		}`)
 		loadModelCatalogAt(path)
 
-		if got := ContextWindowListingV4("glm-5.1", 0, nil); got != 200000 {
+		if got := contextWindowLookup("glm-5.1", 0, nil); got != 200000 {
 			t.Errorf("glm-5.1 = %d want 200000（静态表权威，不取 model.json 的 123456）", got)
 		}
-		if got := ContextWindowListingV4("catalog-only", 0, nil); got != 333333 {
+		if got := contextWindowLookup("catalog-only", 0, nil); got != 333333 {
 			t.Errorf("catalog-only = %d want 333333（第 3 级）", got)
 		}
-		if got := ContextWindowListingV4("out-zero", 0, nil); got != 555555 {
+		if got := contextWindowLookup("out-zero", 0, nil); got != 555555 {
 			t.Errorf("out-zero = %d want 555555", got)
 		}
 	})
@@ -2016,12 +2018,32 @@ func TestUpstreamParseContextWindowListingV4(t *testing.T) {
 		modelsDev.doc = map[string]modelsDevEntry{"doc-only": {Context: 777777, Output: 12345}}
 		modelsDev.mu.Unlock()
 
-		if got := ContextWindowListingV4("doc-only", 0, nil); got != 777777 {
+		if got := contextWindowLookup("doc-only", 0, nil); got != 777777 {
 			t.Errorf("＝ %d want 777777", got)
 		}
 		e, ok := modelCatalogGet("doc-only")
 		if !ok || e.ContextLength != 777777 || e.MaxOutputTokens != 12345 {
 			t.Errorf("未写回 model.json: %+v ok=%v", e, ok)
+		}
+	})
+
+	t.Run("对外 floor：小 remote 被抬到 1M", func(t *testing.T) {
+		upstreamparseResetCatalog(t)
+		// remote=192000（hy3 实测）→ V4 对外抬到 1M
+		if got := ContextWindowListingV4("hy3", 192000, nil); got != DefaultContextWindow {
+			t.Errorf("hy3 remote=192000 → V4 = %d want %d（floor 抬到 1M）", got, DefaultContextWindow)
+		}
+		// remote=272000（gpt-5.4 实测）→ V4 对外抬到 1M
+		if got := ContextWindowListingV4("gpt-5.4", 272000, nil); got != DefaultContextWindow {
+			t.Errorf("gpt-5.4 remote=272000 → V4 = %d want %d", got, DefaultContextWindow)
+		}
+		// remote=200000（glm-5.1 静态表）→ V4 对外抬到 1M
+		if got := ContextWindowListingV4("glm-5.1", 0, nil); got != DefaultContextWindow {
+			t.Errorf("glm-5.1 静态表 200K → V4 = %d want %d", got, DefaultContextWindow)
+		}
+		// 本来就 >=1M 的 remote 不缩
+		if got := ContextWindowListingV4("gpt-5.5", 1050000, nil); got != 1050000 {
+			t.Errorf("remote=1050000 → V4 = %d want 1050000（不缩）", got)
 		}
 	})
 
