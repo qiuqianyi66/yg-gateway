@@ -946,8 +946,10 @@ func TestModelsEndpoint(t *testing.T) {
 			t.Errorf("能力旗标 %s 透出丢失: %v", k, glm[k])
 		}
 	}
-	if glm["context_length"].(float64) != 131072 || glm["max_output_tokens"].(float64) != 8192 {
-		t.Errorf("上下文窗口透出错误: ctx=%v out=%v", glm["context_length"], glm["max_output_tokens"])
+	// context_length 现在对外 floor 到 1M（用户要求统一最大窗口）：remote=131072 被抬到 1M。
+	// max_output_tokens 不受 floor 影响（输出上限不高估）。
+	if glm["context_length"].(float64) != 1000000 || glm["max_output_tokens"].(float64) != 8192 {
+		t.Errorf("上下文窗口透出错误: ctx=%v out=%v（期望 ctx floor 到 1M）", glm["context_length"], glm["max_output_tokens"])
 	}
 	tags, _ := glm["tags"].([]any)
 	if len(tags) != 2 || tags[0] != "badge:限时免费" {
@@ -1102,8 +1104,9 @@ func TestModelsDynamic(t *testing.T) {
 		mm := m.(map[string]any)
 		switch mm["id"] {
 		case "dyn-model-a":
-			if mm["context_length"].(float64) != 65536 {
-				t.Errorf("dyn-model-a context_length=%v want 65536", mm["context_length"])
+			// context_length 对外 floor 到 1M：remote=65536 被抬到 1M。
+			if mm["context_length"].(float64) != 1000000 {
+				t.Errorf("dyn-model-a context_length=%v want 1000000（floor 到 1M）", mm["context_length"])
 			}
 			if mm["max_output_tokens"].(float64) != 8192 {
 				t.Errorf("dyn-model-a max_output_tokens=%v want 8192", mm["max_output_tokens"])
@@ -1125,8 +1128,9 @@ func TestModelsDynamic(t *testing.T) {
 				t.Errorf("dyn-model-b default_effort should be omitted")
 			}
 		case "glm-9.9":
-			if mm["context_length"].(float64) != 262144 {
-				t.Errorf("glm-9.9 context_length=%v want 262144", mm["context_length"])
+			// context_length 对外 floor 到 1M：remote=262144 被抬到 1M。
+			if mm["context_length"].(float64) != 1000000 {
+				t.Errorf("glm-9.9 context_length=%v want 1000000（floor 到 1M）", mm["context_length"])
 			}
 			if mm["max_output_tokens"].(float64) != 32768 {
 				t.Errorf("glm-9.9 max_output_tokens=%v want 32768", mm["max_output_tokens"])

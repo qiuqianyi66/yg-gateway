@@ -102,10 +102,22 @@ const (
 
 // models 返回模型列表：纯动态（缓存 10min），失败/无号返回空列表（无静态兜底——
 // 拉不出目录即意味着上游不可用，假名单只会让客户端选到 11102 的模型）。
+// 按 API key 的 realm 约束过滤：realm=cn 的 key 只看 cn:*，realm=global 的只看 global:*，
+// 空=不限。与 chat/completions 的 checkKeyConstraints 同口径，避免「列表看到了但一发就
+// realm_mismatch」的分裂体验。
 func (h *Handler) models(w http.ResponseWriter, r *http.Request) {
+	key, ok := h.authenticate(r)
+	if !ok {
+		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": map[string]any{"message": "unauthorized"}})
+		return
+	}
+	realmFilter := ""
+	if key != nil {
+		realmFilter = key.Realm
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"object": "list",
-		"data":   h.modelList(),
+		"data":   h.modelList(realmFilter),
 	})
 }
 
@@ -243,8 +255,11 @@ func applyModelInfoFields(entry map[string]any, mi upstream.ModelInfo) map[strin
 // modelList 模型列表：CN 模型输出统一加 "cn:" 前缀（gateway 路由协议，与 resolveModel
 // 对称）；global.enabled=true 时追加 global: 前缀的国际版名单。
 // 纯动态：动态拉取失败/无号 → 该域空列表，无静态兜底。
-func (h *Handler) modelList() []map[string]any {
+// realmFilter 非空时只输出该域（"cn" / "global"）；空 = 两域都输出（未限制 key）。
+func (h *Handler) modelList(realmFilter string) []map[string]any {
 	out := make([]map[string]any, 0)
+	// CN 域列表
+	if realmFilter == "" || realmFilter == "cn" {
 	for _, mi := range h.fetchDynamicModels() {
 		// id 拼生效倍率后缀（"cn:hy3 ×0"）：弹窗列表只渲染 id，这样用户在
 		// Cherry Studio 的"获取模型"弹窗里直接看到倍率。resolveModel 收到请求
@@ -283,9 +298,10 @@ func (h *Handler) modelList() []map[string]any {
 		}
 		out = append(out, entry)
 	}
+	}
 	// global 模型名单：仅 GlobalEnabled=true 时列出（逃生门）。
 	// 名单 = 纯动态探测结果（fetchGlobalModels，失败/无号 → 空）。
-	if h.cfg.GlobalEnabled {
+	if h.cfg.GlobalEnabled && (realmFilter == "" || realmFilter == "global") {
 		// global 域 effort 能力三级查找：探测下发桶（权威）→ 静态兜底表 → 省略。
 		// 先 fetchGlobalModels（内部探测并落 effort 桶），再按 id 取快照。
 		globalIDs, globalAccount := h.fetchGlobalModels()
