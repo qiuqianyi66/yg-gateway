@@ -177,10 +177,12 @@ func (p *Panel) routes() {
 	p.mux.HandleFunc("GET /panel/acl_notice.js", p.aclNoticeScript)
 	p.mux.HandleFunc("GET /panel/savings_note.js", p.savingsNoteScript)
 	p.mux.HandleFunc("GET /panel/opsagent.js", p.opsAgentScript)
+	p.mux.HandleFunc("GET /panel/trends.js", p.trendsScript)
 	p.mux.HandleFunc("GET /panel/api/opsagent/status", p.withAuth(p.opsAgentStatus))
 	p.mux.HandleFunc("GET /panel/api/overview", p.withAuth(p.overview))
 	p.mux.HandleFunc("GET /panel/api/logs", p.withAuth(p.logsHandler))
 	p.mux.HandleFunc("GET /panel/api/request_metrics", p.withAuth(p.requestMetrics))
+	p.mux.HandleFunc("GET /panel/api/trends", p.withAuth(p.trends))
 	p.mux.HandleFunc("GET /panel/api/request_logs", p.withAuth(p.requestLogs))
 	p.mux.HandleFunc("GET /panel/api/models", p.withAuth(p.models))
 	p.mux.HandleFunc("POST /panel/api/login/start", p.withAuth(p.loginStart))
@@ -358,6 +360,8 @@ func (p *Panel) requestMetrics(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, p.cfg.RequestLog.Snapshot())
 }
+
+// trends handler 见 trends.go（独立文件，避免 panel.go 超行棘轮）。
 
 // requestLogs 从 JSONL 归档读取最近请求；limit 默认 200、最大 1000。
 // 支持按 outcome/account/model/client_ip/user_agent 过滤（字符串字段为包含匹配）、

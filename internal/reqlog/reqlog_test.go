@@ -117,10 +117,103 @@ func TestArchiveRotationReadAndFilter(t *testing.T) {
 	}
 }
 
-// ReadArchive 的契约是「按事件时间倒序返回最近记录」，与归档文件的 mtime 无关。
-// 快速轮转（FileMaxBytes 很小）时同一秒内会写出多个文件，Linux 下这些文件的 mtime
-// 可能完全相同；把归档目录整体拷贝 / 恢复备份也会打乱 mtime。此用例把所有归档文件的
-// mtime 改成与事件时间相反的顺序，钉住「只能按事件时间排序」。
+// TestReadAllFullWindow 全量读取契约：跨多个归档文件、无条数截断、
+// 时间升序、按 filter 过滤。与 ReadArchive（倒序+截断）对比钉住差异。
+func TestReadAllFullWindow(t *testing.T) {
+	dir := t.TempDir()
+	r := New(Config{Enabled: true, Dir: dir, FileMaxBytes: 1, MaxBytes: 1 << 20, RetentionDays: 7})
+	base := time.Now().Add(-2 * time.Hour)
+	const n = 12
+	for i := 0; i < n; i++ {
+		r.Record(Event{
+			Time:      base.Add(time.Duration(i) * time.Second),
+			RequestID: "ev-" + string(rune('a'+i)),
+			Model:     "glm-5.3",
+			Account:   "账号(uid8)",
+			Status:    200,
+			OK:        true,
+			Outcome:   OutcomeSuccess,
+		})
+	}
+	r.Record(Event{
+		Time:      base.Add(30 * time.Second),
+		RequestID: "other",
+		Model:     "other-model",
+		Status:    500,
+		OK:        false,
+		Outcome:   OutcomeHTTPError,
+	})
+	r.Close()
+
+	// 全量：12+1 条全回，升序（第一条是最早写入的 ev-a）。
+	all, err := r.ReadAll(Filter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all) != n+1 {
+		t.Fatalf("ReadAll len = %d, want %d（无截断）", len(all), n+1)
+	}
+	if all[0].RequestID != "ev-a" || all[len(all)-1].RequestID != "other" {
+		t.Fatalf("ReadAll 应时间升序：first=%s last=%s", all[0].RequestID, all[len(all)-1].RequestID)
+	}
+
+	// 过滤 + 升序仍成立。
+	filtered, err := r.ReadAll(Filter{Model: "glm"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(filtered) != n || filtered[0].RequestID != "ev-a" || filtered[len(filtered)-1].RequestID != "ev-l" {
+		t.Fatalf("filtered = %d 条, first=%s last=%s", len(filtered), filtered[0].RequestID, filtered[len(filtered)-1].RequestID)
+	}
+
+	// 对照：ReadArchive 同 filter 是倒序+截断。
+	recent, err := r.ReadArchive(5, Filter{Model: "glm"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recent) != 5 || recent[0].RequestID != "ev-l" {
+		t.Fatalf("ReadArchive = %+v, want 5 条倒序", recent)
+	}
+
+	// 未启用归档 → 空列表（不是 nil）。
+	r2 := New(Config{})
+	empty, err := r2.ReadAll(Filter{})
+	if err != nil || empty == nil || len(empty) != 0 {
+		t.Fatalf("未启用 ReadAll = %v err=%v, want 空列表", empty, err)
+	}
+}
+
+// TestReadAllAggregateDaily 端到端：全量读回 → 按天聚合，跨文件跨天归组正确。
+func TestReadAllAggregateDaily(t *testing.T) {
+	dir := t.TempDir()
+	r := New(Config{Enabled: true, Dir: dir, FileMaxBytes: 1, MaxBytes: 1 << 20, RetentionDays: 7})
+	d1 := time.Now().Add(-26 * time.Hour)
+	d2 := time.Now().Add(-2 * time.Hour)
+	r.Record(Event{Time: d1, RequestID: "a1", Account: "acc1", OK: true})
+	r.Record(Event{Time: d1.Add(time.Minute), RequestID: "a2", Account: "acc1", OK: false})
+	r.Record(Event{Time: d2, RequestID: "b1", Account: "acc2", OK: true})
+	r.Close()
+
+	all, err := r.ReadAll(Filter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	days := AggregateDaily(all)
+	if len(days) != 2 {
+		t.Fatalf("days = %d, want 2（跨两天）", len(days))
+	}
+	// 升序：d1 组在前。
+	if days[0].Date != d1.Local().Format("2006-01-02") || days[1].Date != d2.Local().Format("2006-01-02") {
+		t.Fatalf("day order = %v, %v", days[0].Date, days[1].Date)
+	}
+	if days[0].Requests != 2 || days[0].Succeeded != 1 || days[0].Failed != 1 || days[0].ActiveAccounts != 1 {
+		t.Fatalf("d1 = %+v", days[0])
+	}
+	if days[1].Requests != 1 || days[1].Succeeded != 1 || days[1].Failed != 0 || days[1].ActiveAccounts != 1 {
+		t.Fatalf("d2 = %+v", days[1])
+	}
+}
+
 func TestReadArchiveOrdersByEventTimeNotFileMtime(t *testing.T) {
 	dir := t.TempDir()
 	r := New(Config{Enabled: true, Dir: dir, FileMaxBytes: 1, MaxBytes: 1 << 20, RetentionDays: 7})

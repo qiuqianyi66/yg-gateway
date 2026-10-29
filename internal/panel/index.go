@@ -5,6 +5,8 @@
 //   - app.js           全部前端逻辑（独立文件而非内联，为了启用无需 unsafe-inline 的严格 CSP）
 //   - acl_notice.js    F-101 凭证 ACL 自动收紧的面板显式提示（R-101）
 //   - savings_note.js  R-106 OpenRouter 费率折算的 inference 标注与「未估算」展示
+//   - opsagent.js      REQ-opsagent 运维 agent 可观测视图
+//   - trends.js        REQ-trends 时间序列证据视图（独立嵌入同 opsagent.js）
 //
 // 安全头对"面板页面与全部 /panel/api/* 响应"统一生效：CSP 限制脚本只能来自本服务，
 // 禁止被 iframe 嵌套（防点击劫持），禁 MIME 嗅探，并声明不泄露 Referer 出去。
@@ -29,6 +31,9 @@ var savingsNoteJS []byte
 
 //go:embed opsagent.js
 var opsAgentJS []byte
+
+//go:embed trends.js
+var trendsJS []byte
 
 // csp 内容安全策略（严格版，无需 unsafe-inline）：
 //   - default-src 'none'        默认全禁，逐个开口
@@ -96,4 +101,13 @@ func (p *Panel) opsAgentScript(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	// 忽略：静态资源全量写回，写失败即客户端断连，无可恢复语义（与 appScript 同口径）。
 	_, _ = w.Write(opsAgentJS)
+}
+
+// trendsScript 输出时间序列证据视图脚本（REQ-trends-2026-10-29，独立嵌入同 opsagent.js）。
+func (p *Panel) trendsScript(w http.ResponseWriter, r *http.Request) {
+	setSecurityHeaders(w)
+	w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	// 忽略：静态资源全量写回，写失败即客户端断连，无可恢复语义（与 appScript 同口径）。
+	_, _ = w.Write(trendsJS)
 }
