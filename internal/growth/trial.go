@@ -1,7 +1,8 @@
 // trial.go global 专属「一次性 trial 加油包」领取：POST {billingBase}/billing/ide/trial。
 // 仅 global 账号适用（CN 无此端点）；幂等码 14051 = 已领过（视为正常，非错误）。
 // 这是 global 唯一天然的积分增益动作（无签到/任务中心，见 PLAN D4）。
-package upstream
+// 从 upstream 拆出（ADR-018）：请求构造委托 transport.DoBilling。
+package growth
 
 import (
 	"errors"
@@ -27,10 +28,10 @@ func (c *Client) ClaimTrial(a *auth.Auth) (claimed bool, err error) {
 	if a == nil || a.Realm() != "global" {
 		return false, fmt.Errorf("claim trial: only global accounts")
 	}
-	_, err = c.billingJSON(a, http.MethodPost, trialPath, nil)
+	_, err = c.t.DoBilling(a, http.MethodPost, trialPath, nil)
 	if err != nil {
-		var ue *Error
-		if errors.As(err, &ue) && trialAlreadyErr(ue.Msg) {
+		var ge *Error
+		if errors.As(err, &ge) && TrialAlreadyErr(ge.Msg) {
 			return false, nil // 已领过：幂等成功，非错误
 		}
 		return false, err
@@ -38,8 +39,8 @@ func (c *Client) ClaimTrial(a *auth.Auth) (claimed bool, err error) {
 	return true, nil
 }
 
-// trialAlreadyErr 判定错误 Msg 是否携带幂等码 14051（已领取过）。
-func trialAlreadyErr(msg string) bool {
+// TrialAlreadyErr 判定错误 Msg 是否携带幂等码 14051（已领取过）。
+func TrialAlreadyErr(msg string) bool {
 	for _, m := range trialAlreadyMarkers {
 		if strings.Contains(msg, m) {
 			return true

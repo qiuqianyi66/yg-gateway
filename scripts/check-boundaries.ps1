@@ -67,7 +67,10 @@ $allow = @{
     # 装配期闭包注入（依赖倒置），本包不直接 import 它们
     'opsagent' = @('evidence','logfmt','unknown')
     # 出站适配层：依赖凭证、日志脱敏、会话键解析（实测）
-    'upstream' = @('auth','logfmt','session')
+    # + growth：实现 growth.Transport + 委托字段（ADR-018，growth 域业务搬出后接线）
+    'upstream' = @('auth','growth','logfmt','session')
+    # 养号活动域（ADR-018 拆出）：只依赖凭证类型（Auth）；transport 由 upstream 注入
+    'growth'   = @('auth')
     # 会话键派生：依赖 redisstore（粘性绑定持久化）（实测）
     'session'  = @('redisstore')
     # 面板：只读运维视图，可依赖领域包但不可反向被依赖（实测）

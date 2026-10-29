@@ -3,8 +3,10 @@
 // 判据（WorkBuddy-Daily 项目实测口径 + 本网关验证）：black_cat 要求在
 // **23:00–08:00（本地时区）窗口内**完成 3 次 glm-5.2 对话并上报 chat 事件链；
 // 窗口外行为不计分。真实对话走网关既有 ChatStream（glm-5.2），事件链用
-// ReportChatActivityModel（chat_5 同款上报形状）。
-package upstream
+// ReportActivity（chat_5 同款上报形状）。
+// 从 upstream 拆出（ADR-018）：ChatStream/上报/等待注入经 transport；等待字段
+// 持有在实现侧（upstream.Client.nightChatSleep），生产默认 time.Sleep。
+package growth
 
 import (
 	"encoding/json"
@@ -15,12 +17,6 @@ import (
 
 	"yg-gateway/internal/auth"
 )
-
-// InNightWindow 当前是否处于夜猫子计数窗口（23:00–08:00 本地时区）。
-func InNightWindow(now time.Time) bool {
-	h := now.Hour()
-	return h >= 23 || h < 8
-}
 
 // BlackcatNeed 查 black_cat 任务剩余差额（需要再完成几次对话）。
 // 任务不存在返回 0（无可做）；拉取失败返回错误。
@@ -52,14 +48,14 @@ const nightChatGap = 4 * time.Second
 // 注入的函数**会收到生产默认时长**（nightChatGap），因此测试既能跳过真实等待，
 // 又能断言默认值本身没有被改小。传 nil = 恢复生产默认（time.Sleep）。
 func (c *Client) SetNightChatSleep(fn func(time.Duration)) {
-	c.nightChatSleep = fn
+	c.t.SetNightSleep(fn)
 }
 
 // sleepNightChat 执行一次夜间对话间隔等待：生产默认 time.Sleep(nightChatGap)，
 // 测试注入时走注入实现。
 func (c *Client) sleepNightChat() {
-	if c.nightChatSleep != nil {
-		c.nightChatSleep(nightChatGap)
+	if fn := c.t.NightSleep(); fn != nil {
+		fn(nightChatGap)
 		return
 	}
 	time.Sleep(nightChatGap)
@@ -79,7 +75,7 @@ func (c *Client) RunNightChats(a *auth.Auth, need int) (int64, error) {
 			"messages": []map[string]any{{"role": "user", "content": "1+1等于几？直接回答。"}},
 			"stream":   true,
 		})
-		rc, status, respBody, err := c.ChatStream(a, body, "", ChatMeta{})
+		rc, status, respBody, err := c.t.Stream(a, body, "")
 		if err != nil || status >= 400 {
 			if rc != nil {
 				rc.Close()
@@ -89,7 +85,7 @@ func (c *Client) RunNightChats(a *auth.Auth, need int) (int64, error) {
 		// 忽略：排干 body 是回收连接前的清理路径，失败随即随 rc.Close 释放，不影响主流程（判据②）。
 		_, _ = io.Copy(io.Discard, io.LimitReader(rc, 1<<20))
 		rc.Close()
-		if err := c.ReportChatActivityModel(a, fmt.Sprintf("wb2api-night-%d-%d", time.Now().UnixMilli(), i), "", "glm-5.2", "GLM-5.2"); err != nil {
+		if err := c.t.ReportActivity(a, fmt.Sprintf("wb2api-night-%d-%d", time.Now().UnixMilli(), i), "", "glm-5.2", "GLM-5.2"); err != nil {
 			return ok, fmt.Errorf("第 %d 次上报失败: %w", i+1, err)
 		}
 		ok++
@@ -102,7 +98,7 @@ func (c *Client) RunNightChats(a *auth.Auth, need int) (int64, error) {
 
 // ClaimGift 领取新手礼包（每号一次，已领返回业务错误）。
 func (c *Client) ClaimGift(a *auth.Auth) (int64, error) {
-	data, err := c.billingJSON(a, http.MethodPost, "/billing/meter/claim-gift", map[string]any{})
+	data, err := c.t.DoBilling(a, http.MethodPost, "/billing/meter/claim-gift", map[string]any{})
 	if err != nil {
 		return 0, err
 	}
@@ -111,7 +107,7 @@ func (c *Client) ClaimGift(a *auth.Auth) (int64, error) {
 
 // ClaimCompensation 领取活动补偿（有则领，无则业务错误）。
 func (c *Client) ClaimCompensation(a *auth.Auth) (int64, error) {
-	data, err := c.billingJSON(a, http.MethodPost, "/billing/meter/claim-compensation", map[string]any{})
+	data, err := c.t.DoBilling(a, http.MethodPost, "/billing/meter/claim-compensation", map[string]any{})
 	if err != nil {
 		return 0, err
 	}
@@ -148,7 +144,7 @@ func claimCredit(data []byte, op string) (int64, error) {
 // HeatmapYesterdayMissed 检查昨日是否漏签（heatmap cell score==0）。
 func (c *Client) HeatmapYesterdayMissed(a *auth.Auth) (bool, error) {
 	yesterday := time.Now().AddDate(0, 0, -1).Format("2006-01-02")
-	data, err := c.growthJSON(a, http.MethodGet, "/activity/growth/heatmap", nil)
+	data, err := c.t.DoChat(a, http.MethodGet, "/activity/growth/heatmap", nil)
 	if err != nil {
 		return false, err
 	}
@@ -171,7 +167,7 @@ func (c *Client) HeatmapYesterdayMissed(a *auth.Auth) (bool, error) {
 
 // UseMakeupCard 对指定日期使用补签卡（保住连登连续天数；无卡返回业务错误）。
 func (c *Client) UseMakeupCard(a *auth.Auth, date string) error {
-	_, err := c.growthJSON(a, http.MethodPost, "/activity/growth/makeup-cards/use",
+	_, err := c.t.DoChat(a, http.MethodPost, "/activity/growth/makeup-cards/use",
 		map[string]any{"target_date": date})
 	return err
 }
