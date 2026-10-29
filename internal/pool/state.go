@@ -251,6 +251,13 @@ func (p *Pool) NoteModelCost(uid, model string, credit float64, tokens int) {
 				e.creditsEarliestRemaining -= d
 			}
 		}
+		// 软带带宽环（PLAN-softband-recalibration 方案 A）：实测单次扣费入环。
+		// credit 是合格观察证据（不是推断）；≤0 免费/失败请求不入环（unknown 不当 0 记）。
+		e.recentCharges = append(e.recentCharges, credit)
+		if len(e.recentCharges) > softBandChargeHistory {
+			// 环形收缩：丢最旧，保留最近 softBandChargeHistory 条。
+			e.recentCharges = e.recentCharges[len(e.recentCharges)-softBandChargeHistory:]
+		}
 	}
 	if e.modelCost == nil {
 		e.modelCost = make(map[string]modelCostEntry)
