@@ -1140,6 +1140,18 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
         </div>
       </div>
 
+      <div class="box" id="agentProfileBox">
+        <header>
+          <h3>流量画像 · Agent 构成</h3>
+          <span class="grow"></span>
+          <span class="note" id="agProfileNote">—</span>
+          <button class="xs" id="btnAgentProfile">刷新</button>
+        </header>
+        <div class="pad">
+          <div id="agProfileHost" class="uschart-body"></div>
+        </div>
+      </div>
+
       <div class="box">
         <header>
           <h3>用量总览</h3>
@@ -1875,5 +1887,6 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
 <script src="savings_note.js"></script>
 <script src="opsagent.js"></script>
 <script src="trends.js"></script>
+<script src="agent_profile.js"></script>
 </body>
 </html>

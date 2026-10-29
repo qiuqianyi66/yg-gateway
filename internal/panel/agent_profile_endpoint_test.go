@@ -125,3 +125,20 @@ func TestPanelAgentProfileNoRequestLog(t *testing.T) {
 		t.Fatalf("err = %q", got)
 	}
 }
+
+// TestPanelAgentProfileRouteWired 经完整路由（mux）可达：防止未来改动把路由
+// 注册弄丢（handler 直达测试测不到接线）。
+func TestPanelAgentProfileRouteWired(t *testing.T) {
+	dir := t.TempDir()
+	rl := reqlog.New(reqlog.Config{Enabled: true, Dir: dir, FileMaxBytes: 1 << 20, MaxBytes: 4 << 20, RetentionDays: 7})
+	t.Cleanup(rl.Close)
+	rl.Record(reqlog.Event{Time: time.Now(), Account: "u1", Model: "m", Kind: reqlog.KindChat, OK: true,
+		SessionFP: "fpX", AgentKind: "browser", PromptTokens: 1})
+	rl.Close()
+
+	p := chPanel(t, Config{Pool: pool.New(""), RequestLog: rl})
+	out := chWant(t, chDo(t, p, "GET", "/panel/api/agent_profile", ""), http.StatusOK)
+	if !apBool(t, out["present"]) {
+		t.Fatalf("present = false, want true（路由已接线且数据可见）")
+	}
+}
