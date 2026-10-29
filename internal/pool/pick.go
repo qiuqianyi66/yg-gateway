@@ -15,35 +15,43 @@ import (
 // Pick 单一选号入口（无请求级轮换、无 realm 过滤，模型感知缺省账号级）。
 // 需要请求级轮换（tried）或分池（realm）时用 PickExcludingForRealm。
 func (p *Pool) Pick() *auth.Auth {
-	return p.pick(nil, "", "", "")
+	return p.pick(nil, "", "", "", ClassChat)
 }
 
 // PickExcluding 同上，但跳过 tried 中的 uid（请求级轮换）。
 // 挑选策略：healthy 账号中按权重取前 5 名，再在 Top5 内按同一权重加权随机抽签，
 // 意图是打散热点，避免永远打同一个账号。
 func (p *Pool) PickExcluding(tried map[string]bool) *auth.Auth {
-	return p.pick(tried, "", "", "")
+	return p.pick(tried, "", "", "", ClassChat)
 }
 
 // PickExcludingForModel 模型感知选号：等同 PickExcluding，但对「6004 模型级冷却中的
 // 账号」进行模型豁免——请求模型与其 trigger 模型不同时视为可用（issue #31）。
 // reqModel 为空时即普通 PickExcluding（不影响既有调用语义）。
 func (p *Pool) PickExcludingForModel(tried map[string]bool, reqModel string) *auth.Auth {
-	return p.pick(tried, reqModel, "", "")
+	return p.pick(tried, reqModel, "", "", ClassChat)
 }
 
 // PickExcludingForRealm 模型感知 + 分池选号：候选集先按 Realm()==realm 过滤
 // （realm 空 = 不过滤，退化为 PickExcludingForModel），再按模型健康口径判定。
 // 供 handler 在 global/cn 双域下分流（global 模型请求只路由 global 账号）。
 func (p *Pool) PickExcludingForRealm(tried map[string]bool, reqModel, realm string) *auth.Auth {
-	return p.pick(tried, reqModel, realm, "")
+	return p.pick(tried, reqModel, realm, "", ClassChat)
 }
 
 // PickExcludingForRealmGroup 模型感知 + 分池选号 + 账号组过滤（P1-B）。
 // group 非空时候选集再叠加 Auth.Group == group 过滤：同一把 key 只能用自己组的账号。
 // group 为空时退化为 PickExcludingForRealm（零回归）。
 func (p *Pool) PickExcludingForRealmGroup(tried map[string]bool, reqModel, realm, group string) *auth.Auth {
-	return p.pick(tried, reqModel, realm, group)
+	return p.pick(tried, reqModel, realm, group, ClassChat)
+}
+
+// PickExcludingForRealmGroupClass 同 PickExcludingForRealmGroup，但显式带流量类
+// （bandMult 分口径，PLAN §四 选项 A）：chat 链路在选号入口按请求 tokens 规模判类，
+// 评测/大请求（>BenchTokenThreshold）走 ClassBench——软带上界按评测扣费环算，
+// 不被聊天扣费样本干扰。其余方法无请求上下文，默认 ClassChat（零回归）。
+func (p *Pool) PickExcludingForRealmGroupClass(tried map[string]bool, reqModel, realm, group string, class RequestClass) *auth.Auth {
+	return p.pick(tried, reqModel, realm, group, class)
 }
 
 // pick 在 healthy 候选集中按权重加权随机选出账号，并记录 lastUsed（防并发撞号）。
@@ -59,7 +67,7 @@ func (p *Pool) PickExcludingForRealmGroup(tried map[string]bool, reqModel, realm
 // 第 2..N 个进入者看到 lastUsed 已更新）；由 handler 的 Acquire 租约 + tried
 // 轮换自愈（Acquire 失败即换号，不产生上游请求），且 per-account 在途上限
 // 天然限流，不构成正确性问题（防撞号窗口对「下一个进入者」继续生效）。
-func (p *Pool) pick(tried map[string]bool, reqModel, realm, group string) *auth.Auth {
+func (p *Pool) pick(tried map[string]bool, reqModel, realm, group string, class RequestClass) *auth.Auth {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	now := p.now()
@@ -229,7 +237,7 @@ func (p *Pool) pick(tried map[string]bool, reqModel, realm, group string) *auth.
 	ws := make([]weighted, 0, len(cands))
 	for i, e := range cands {
 		if candTier[i] == bestTier {
-			ws = append(ws, weighted{e: e, w: p.routingWeightOf(e, maxCredits, now, medianLatencyMs, medianPace), tier: candTier[i], cost1k: candCost[i]})
+			ws = append(ws, weighted{e: e, w: p.routingWeightOf(e, maxCredits, now, medianLatencyMs, medianPace, class), tier: candTier[i], cost1k: candCost[i]})
 		}
 	}
 	// 等权重洗牌：仅当存在权重相等且候选数超过 top5 时，才对 ws 做 Fisher-Yates
@@ -297,7 +305,7 @@ func (p *Pool) pick(tried map[string]bool, reqModel, realm, group string) *auth.
 			}
 		}
 	} else {
-		e = p.pickWeighted(eligible, maxCredits, medianLatencyMs, medianPace) // eligible 保序 = top5 降序子集；maxCredits 用全集口径（与截断排序同基准）
+		e = p.pickWeighted(eligible, maxCredits, medianLatencyMs, medianPace, class) // eligible 保序 = top5 降序子集；maxCredits 用全集口径（与截断排序同基准）
 	}
 	if explored {
 		// 探索事件日志（可观测性）：选中号此时才确定，故在选中点打出。
@@ -308,7 +316,7 @@ func (p *Pool) pick(tried map[string]bool, reqModel, realm, group string) *auth.
 	}
 	// 原子写回（ADR-005 D-500）：读锁下用 atomic 标记选中，不写普通字段。
 	e.setLastUsed(now)
-	_, inBand := p.softBandFactorOf(e, now)
+	_, inBand := p.softBandFactorOf(e, now, class)
 	e.setPickReason(&pickReason{Mode: pickMode, Tier: bestTier, Explored: explored,
 		Probe:    p.breakerProbeGap > 0 && !e.breakerUntil.IsZero() && now.After(e.breakerUntil) && e.retryCount > 0,
 		Softband: inBand, At: now})
@@ -459,13 +467,13 @@ var minPickGap = 100 * time.Millisecond
 // 时刻取 p.now()（可注入时钟，见 SetClock）：与 pick 的权重计算共用同一时间口径，
 // 否则两阶段权重（截断排序 vs 抽签）会落在不同时刻上（生产差异在 µs 级，但测试
 // 需要它可冻结）。
-func (p *Pool) pickWeighted(cands []*entry, maxCredits int64, medianLatencyMs, medianPace float64) *entry {
+func (p *Pool) pickWeighted(cands []*entry, maxCredits int64, medianLatencyMs, medianPace float64, class RequestClass) *entry {
 	now := p.now()
 	const scale = 1_000_000 // 定点放大：int64 累加权重大整数抽签
 	weights := make([]int64, len(cands))
 	var total int64
 	for i, e := range cands {
-		w := p.routingWeightOf(e, maxCredits, now, medianLatencyMs, medianPace)
+		w := p.routingWeightOf(e, maxCredits, now, medianLatencyMs, medianPace, class)
 		weights[i] = int64(w * scale)
 		total += weights[i]
 	}
@@ -526,13 +534,14 @@ func expiringNow(e *entry, now time.Time) bool {
 // 虚拟实例数量。prefer_expiring=false 或账号无有效快过期批次时，实例数恒为 1；
 // ewma 关闭或样本不足时表现因子恒 1 —— 两者叠加后与旧 weightOf 完全一致（零回归）。
 // medianLatencyMs 为池级延迟中位数（poolMedianLatencyMs 单次计算，两阶段共用）。
-func (p *Pool) routingWeightOf(e *entry, maxCredits int64, now time.Time, medianLatencyMs, medianPace float64) float64 {
+func (p *Pool) routingWeightOf(e *entry, maxCredits int64, now time.Time, medianLatencyMs, medianPace float64, class RequestClass) float64 {
 	w := p.weightOf(e, maxCredits, now)
 	if p.ewmaEnabled {
 		w *= p.ewmaWeightFactor(e, medianLatencyMs)
 	}
 	// 软带（REQ-routing P1）：floor 带内 ×0.5 降档不硬拦（悬崖→坡道）。
-	if f, inBand := p.softBandFactorOf(e, now); inBand {
+	// class 分口径（PLAN §四 选项 A）：评测流量按评测扣费环判带。
+	if f, inBand := p.softBandFactorOf(e, now, class); inBand {
 		w *= f
 	}
 	// 近期用量衰减（REQ-routing P2，默认关）：刚服务过大量 token 的号让位。

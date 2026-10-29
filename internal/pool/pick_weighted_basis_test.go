@@ -33,7 +33,7 @@ func TestPickWeightedSharesFullSetMaxCredits(t *testing.T) {
 	if a == nil || b == nil {
 		t.Fatal("账号未入池")
 	}
-	pickWeighted := p.pickWeighted([]*entry{a, b}, 1000 /* 全集 maxCredits */, 0, 0)
+	pickWeighted := p.pickWeighted([]*entry{a, b}, 1000 /* 全集 maxCredits */, 0, 0, ClassChat)
 	if pickWeighted != a {
 		t.Fatalf("r=0 应命中权重最高的 a")
 	}
