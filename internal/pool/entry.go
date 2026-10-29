@@ -234,6 +234,12 @@ type entry struct {
 	// RecordTokenUsage（p.mu 写锁），读于 pick 读锁——锁互斥保证安全，不持久化。
 	recentTokens   float64
 	recentTokensAt time.Time
+	// recentCharges 近期实测单次扣费环（REQ-routing P1 校准，PLAN-softband-recalibration
+	// 方案 A）：写于 NoteModelCost（p.mu 写锁），读于 softBandUpper（pick 读锁）。
+	// 只记 credit>0 的收费请求，cap 见 softBandChargeHistory；不持久化（重启后空 →
+	// softBandUpper 回退 20k 公式，行为与现状一致）。消费方按四态纪律：缺样本 = 回退
+	// 路径（unknown 的"没测过"语义），不是"免费"也不是"带宽 0"。
+	recentCharges []float64
 	// lastCheckinDay 最近一次签到成功的本地日期（"2006-01-02"）。签到成功与上游
 	// 幂等拒绝（"今天已签到"）都算；statusOf 据此输出 CheckinDone 供面板按钮显示
 	// 签到/已签。持久化：跨重启不丢当日状态。
