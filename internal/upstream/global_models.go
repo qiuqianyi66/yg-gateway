@@ -133,17 +133,29 @@ func (c *Client) fetchGlobalModelsOnce(a *auth.Auth) (names []string, infos []Mo
 	// global 域 effort 能力：探测下发的 supportedEfforts/defaultEffort 权威写入 global 桶
 	// （raw remote，不并入静态表——静态兜底在 prepareBody 的 globalEffortMap 与
 	// /v1/models 的 EffortListing 里按需 fallback）。空探测不写（防清既有桶）。
+	// 写桶前先剔路由档位别名：v3 三路已在 probeV3 里 nonChatModel 过滤，
+	// 但 enterprise 路（/v2/enterprises/personal/models）解析时不过滤，
+	// 别名会从该路绕进并集——此处统一兜底，否则 /v1/models 仍混入 Primary/Fast 等。
+	for _, id := range names {
+		if nonChatModel(id, 0, nil) {
+			delete(efforts, id)
+			delete(defaults, id)
+		}
+	}
 	if len(efforts) > 0 || len(defaults) > 0 {
 		c.storeEfforts("global", efforts, defaults)
 	}
 	c.storeModelRates("global", infos)
 
-	// 成功：探测结果去重。names/infos 均落缓存；倍率等选号敏感字段只透出展示，
-	// 不注入 costTier。
+	// 成功：探测结果去重 + 剔路由档位别名（nonChatModel 黑名单，与 v3 路同口径）。
+	// names/infos 均落缓存；倍率等选号敏感字段只透出展示，不注入 costTier。
 	seen := make(map[string]bool, len(names))
 	merged := make([]string, 0, len(names))
 	for _, id := range names {
 		if id == "" || seen[id] {
+			continue
+		}
+		if nonChatModel(id, 0, nil) {
 			continue
 		}
 		seen[id] = true
