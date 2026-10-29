@@ -142,14 +142,17 @@ func applyModelInfoFields(entry map[string]any, mi upstream.ModelInfo) map[strin
 		effectiveRate = mi.PromoCredits
 	}
 	if mi.Name != "" {
-		// name 只放显示名 + 促销标签；倍率后缀拼在 id 上（见 modelList），
-		// 这样 Cherry Studio 等客户端的"获取模型"弹窗（只渲染 id 字段）
-		// 直接显示 "cn:hy3 ×0 限时免费"，不用点进去才看得到价格。
-		suffix := ""
+		// name 拼「显示名 + 生效倍率后缀 + 促销标签」：
+		//   - 渲染 id 的客户端（Cherry Studio 弹窗）→ id 上的 " ×N" 已可见；
+		//   - 渲染 name 的客户端（DSH 预览版等）→ 之前只看到裸名 GPT-5.5、没有倍率，
+		//     现在 name 上同样带 " ×N"，两类客户端列表都直接显示价格。
+		// 后缀与 id 同口径（nameRateSuffix(effectiveRateRaw)，生效价优先 promo）；
+		// 上游未给倍率 → nameRateSuffix 返回 ""，不编造（四态：没覆盖=未知）。
+		name := mi.Name + nameRateSuffix(effectiveRateRaw(mi))
 		if mi.PromoLabel != "" {
-			suffix = " " + mi.PromoLabel
+			name += " " + mi.PromoLabel
 		}
-		entry["name"] = mi.Name + suffix
+		entry["name"] = name
 	}
 	if mi.Description != "" {
 		// 积分倍率前缀：与 name 同口径用生效价，统一为 "[x0.05 credit]" 前缀。

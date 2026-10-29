@@ -932,8 +932,8 @@ func TestModelsEndpoint(t *testing.T) {
 	if glm["credits"] != "x0.05 credits" {
 		t.Errorf("credits 应原样透出: %v", glm["credits"])
 	}
-	if glm["name"] != "GLM-5.2" {
-		t.Errorf("name 应为纯显示名（倍率拼在 id 上）: got %v", glm["name"])
+	if glm["name"] != "GLM-5.2 ×0.05" {
+		t.Errorf("name 应为显示名+生效倍率后缀（与 id 同口径）: got %v", glm["name"])
 	}
 	if got, want := glm["description"], "[x0.05 credit] 智谱旗舰"; got != want {
 		t.Errorf("description 应带积分倍率前缀: got %v want %v", got, want)
@@ -1051,8 +1051,8 @@ func TestModelsPromoFields(t *testing.T) {
 	if hy4 == nil {
 		t.Fatal("cn:hy4-preview missing")
 	}
-	if got, want := hy4["name"], "Hy4 preview 限时免费"; got != want {
-		t.Errorf("name 应为显示名+促销标签（倍率在 id 上）: got %v want %v", got, want)
+	if got, want := hy4["name"], "Hy4 preview ×0 限时免费"; got != want {
+		t.Errorf("name 应为显示名+生效倍率(promo 价)+促销标签: got %v want %v", got, want)
 	}
 	if got, want := hy4["credits"], "x0.29"; got != want {
 		t.Errorf("credits 应透出牌价原文: got %v want %v", got, want)
