@@ -542,6 +542,22 @@ func Classify(status int, body string) ErrKind {
 			return ErrSessionDead
 		}
 	}
+	// 11128 "request illegal" 在 global 域是**请求形态问题**（首条非 system / 出站路径错 /
+	// 渠道校验未过），不是账号故障——同一 body 换任何号都 11128（2026-10-29 实测：网关错打
+	// /v2 路径，两个健康 global 号全部 11128，换 /console 后同 body 直接 200）。必须先于
+	// accountFaultMarkers 判——否则 "request illegal" 文案子串匹配会把这类路径/报文事故
+	// 误归 ErrAccountFault，健康号被反复冷却熔断。11140 的 "request illegal" 才是真账号风控，
+	// 由下方 accountFaultMarkers 子串匹配兜底（它 msg 同文但 code 不同，本处已按 code 分流）。
+	// 例外：body 同时带内容审核文案（blocked by security policy / unapproved channel）时，
+	// 仍是 content_blocked——那是上游按内容误杀，不是请求形态错。
+	if status == http.StatusBadRequest && hasBusinessCode(body, "11128") {
+		for _, m := range contentBlockedMarkers {
+			if strings.Contains(lower, m) {
+				return ErrContentBlocked
+			}
+		}
+		return ErrBadParams
+	}
 	for _, m := range accountFaultMarkers {
 		if strings.Contains(lower, strings.ToLower(m)) || strings.Contains(body, m) {
 			return ErrAccountFault
