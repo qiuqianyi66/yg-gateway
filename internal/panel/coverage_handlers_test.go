@@ -1213,8 +1213,10 @@ func TestPanelHandlersModels(t *testing.T) {
 	if got := chStr(t, m["id"]); got != "cn:glm-5.2" {
 		t.Errorf("id = %q, want cn:glm-5.2（realm 前缀即调用值）", got)
 	}
-	if got := chNum(t, m["context_length"]); got != 200000 {
-		t.Errorf("context_length = %v, want 200000（远端权威）", got)
+	// ContextWindowListingV4 对外 floor 到 DefaultContextWindow(1M)（f8d8460）：
+	// 上游探测小值统一抬到 1M，客户端不提前截断。max_output_tokens 不受影响。
+	if got := chNum(t, m["context_length"]); got != 1000000 {
+		t.Errorf("context_length = %v, want 1000000（远端权威 200000 被 floor 到 1M）", got)
 	}
 	if got := chNum(t, m["max_output_tokens"]); got != 8192 {
 		t.Errorf("max_output_tokens = %v, want 8192", got)
