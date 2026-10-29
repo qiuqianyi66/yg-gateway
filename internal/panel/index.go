@@ -35,6 +35,9 @@ var opsAgentJS []byte
 //go:embed trends.js
 var trendsJS []byte
 
+//go:embed agent_profile.js
+var agentProfileJS []byte
+
 // csp 内容安全策略（严格版，无需 unsafe-inline）：
 //   - default-src 'none'        默认全禁，逐个开口
 //   - script-src 'self'         只跑同源脚本（app.js）；页面无内联事件处理器/内联脚本
@@ -110,4 +113,13 @@ func (p *Panel) trendsScript(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	// 忽略：静态资源全量写回，写失败即客户端断连，无可恢复语义（与 appScript 同口径）。
 	_, _ = w.Write(trendsJS)
+}
+
+// agentProfileScript 输出流量画像视图脚本（REQ-agent-profile-ui-2026-10-29，独立嵌入同 trends.js）。
+func (p *Panel) agentProfileScript(w http.ResponseWriter, r *http.Request) {
+	setSecurityHeaders(w)
+	w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	// 忽略：静态资源全量写回，写失败即客户端断连，无可恢复语义（与 appScript 同口径）。
+	_, _ = w.Write(agentProfileJS)
 }
