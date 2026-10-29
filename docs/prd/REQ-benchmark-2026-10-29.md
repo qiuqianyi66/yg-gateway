@@ -73,5 +73,12 @@
     每日分桶 0.92/0.03/1/1/0.97/1/1；M3 cn:deepseek-v4.1-flash 1.0
     (1398 样本)、cn:glm-5.3-flash 0.97(37)、cn:glm-5.2 0.83(6)；
     M1 为 unknown（快照未部署，生产部署被并行会话脏工作区阻塞，属预期）。
-  - 验收：G1/G2/G3 达成；G5 依赖快照部署后 ≥2 天数据；G4（面板摘要行）
-    暂缓——见「后续项」。
+  - 验收：G1/G2/G3 达成；G5 依赖快照部署后 ≥2 天数据。
+- 2026-10-29：G4 达成（216a0c4 已推 origin/main，待部署生产）——
+  - 端点 `GET /panel/api/benchmark`（internal/panel/bench.go）复用 bench.Eval，
+    读 reqlog 归档 + Pool.List() 现态投影，零出站零付费；
+  - 前端 bench.js 自包含 IIFE + index.html「网关 benchmark」区块（M1/M2/M3
+    摘要，四态徽标 + 样本数，unknown 显示「—」）；
+  - bench_endpoint_test.go 2 测试全绿，前端闸门全绿，pre-commit 11/11；
+  - 同步两处并行会话语义变更未同步的既有测试断言（context_length→1M、
+    legacy effort 测试改用 glm-4.5）。

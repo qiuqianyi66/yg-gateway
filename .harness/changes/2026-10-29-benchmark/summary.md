@@ -43,12 +43,32 @@
 
 - 不硬对标 GAIA / LLM 榜单（不同量纲，违反四态纪律，已纠偏）。
 - 不发起付费评测调用（用户约束）。
-- G4（面板摘要行，复用 trends 区块 + 零 app.js 改动）暂缓——trends 线
-  完成后排期。
 - G5（M2 历史趋势分桶）依赖快照部署后 ≥2 天数据。
+
+## G4 面板摘要行（2026-10-29 追加，已随 216a0c4 合入）
+
+- 端点 `GET /panel/api/benchmark`（internal/panel/bench.go）：复用 bench.Eval
+  纯函数，读 reqlog 归档 + Pool.List() 现态投影，零出站零付费（R1 无凭证）。
+- 前端 `internal/panel/bench.js`：自包含 IIFE（对齐 trends.js 模式，esc()
+  转义、无内联事件、CSP 合规）；index.html 用量视图挂「网关 benchmark」
+  区块（#benchBox/#benchNote/#btnBench/#benchHost）：M1 到期偏置 / M2
+  成功率+健康占比 / M3 路由成功率表，四态徽标 + 样本数，unknown 显示「—」
+  不做 0 美化。
+- 测试 `bench_endpoint_test.go` 2 个：全链路 JSON 字段断言 + 未接线归档回
+  501（与 trends 同口径）；前端闸门（TestAppJSSyntax/TestIndexHTMLNoInlineScript
+  /TestAppJSTopLevelSmoke）全绿。
+- 边界白名单收录 panel → bench（只读调用评测层）。
+- 同步两处并行会话语义变更未同步的既有测试断言（消除 CI 红）：
+  coverage_handlers_test.go context_length 200000→1000000（f8d8460 floor
+  语义）；client_test.go legacy effort 测试改用非别名模型 glm-4.5
+  （487dc4e 起 auto 路由别名被过滤）。
+- 验证：bench/panel/upstream 全绿；pre-commit 全量 11/11 通过；已推
+  origin/main（216a0c4）。
 
 ## 怎么回滚
 
 - 纯新增（internal/bench、cmd/bench、bench_test.go、REQ、summary），无既有
   行为改动；回滚 = revert 提交并删除产物文件 bench-report.json（工作区产物，
-  未入库）。
+  未入库）。G4 追加项同纯新增（internal/panel/bench.go/bench.js/
+  bench_endpoint_test.go + 端点接线）；回滚 = revert 216a0c4（其中两处既有
+  测试断言同步随本提交一并 revert 亦可，语义见各自注释）。
