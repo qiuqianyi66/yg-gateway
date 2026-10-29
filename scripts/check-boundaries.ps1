@@ -89,6 +89,10 @@ $allow = @{
     'reqlog'     = @()
     'metrics'    = @()
     'logfmt'     = @()
+    # 网关级 benchmark（REQ-benchmark-2026-10-29）：纯离线评测层，只读 reqlog
+    # 归档（脱敏叶子包）+ 自投影快照结构（不 import pool，避免向上依赖）；
+    # 被 cmd/bench 装配调用。依赖方向：bench → reqlog（叶子）合法。
+    'bench'      = @('reqlog')
     # 告警外发：webhook body 需按 R2 口径截断完整 UID → 依赖 logfmt（纯脱敏 helper 叶子包）。
     # 2026-10-22 体检 C-2 引入，-Fix 实测生成；无反向依赖风险。
     'alerting'   = @('logfmt')
