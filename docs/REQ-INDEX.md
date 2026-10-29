@@ -72,6 +72,20 @@
   chat/probe/farming + 归档精确过滤 + `/panel/api/request_logs` kind 参数；
   缺失=未知（历史行三值兼容）。probe/farming 为占位词表值（这两类流量目前
   直连 upstream 不经 reqlog）。V3-10 agent 流量画像的地基。
+- **V3-10 agent 流量画像**（[REQ-agent-traffic-profile-2026-10-26](prd/REQ-agent-traffic-profile-2026-10-26.md)
+  在仓）——**已落地（2026-10-26，`f3385f4`）**：reqlog.Event 加 `session_fp`（会话键盐哈希）+
+  `agent_kind`（UA 闭词表），`/status` 出 `agent_profile` 聚合块（by_agent/top_sessions，
+  键缺失=未观测）；面板 UI 待 V3-6 解锁，未做（可选增强，见 PLAN-v3-remaining R5）。
+- **V3-13 README 三护城河**（[REQ-readme-three-moats-2026-10-26](prd/REQ-readme-three-moats-2026-10-26.md)
+  在仓）——**已落地（2026-10-26，`cbf1399` + `bde24a4`）**：三护城河小节 + Magpie/CC
+  Switch 配合章节；同类现状措辞按 magpie 八维对比实证，禁「唯一/首家」类词。
+- **V3-1 count_tokens / V3-2 key 级用量告警**——**已落地（2026-10-26，`a07727c`）**：
+  `/v1/messages/count_tokens` 启发式估算（derivation 标注）+ `api_keys[].usage_alert_threshold`
+  阈值告警（只告警不拦截）。**无独立 REQ**（P0 轮执行期债，范围见 ROADMAP §三）；
+  count_tokens 精度回填 = unknown（requires: 一次带对照的真机调用，用户约束不发起）。
+- **V3-7 opsagent 规则心跳（canary）**——**已落地（2026-10-26，`4931e4b`）**：
+  CanaryRound 合成观察自检（规则静默死亡运行态探测）。**无独立 REQ**（同上，范围见
+  ROADMAP §三 V3-7）。
 - [routing-improvements-2026-10-25](prd/REQ-routing-improvements-2026-10-25.md)：选号路由改进——
   **主体落地（2026-10-25）**：P1 credit_floor 软带（带内 ×0.5 降权 + pickReason softband，
   带宽按实测扣费定义）+ P2 近期用量衰减因子（1h 半衰期 token 账，`pool.recent_usage_factor`
