@@ -68,9 +68,9 @@ func TestPaceModeWeightsAndCap(t *testing.T) {
 	p.SetCreditsDetailed("none", 100, 100, 0, time.Time{}, 0)
 
 	p.mu.Lock()
-	wf0 := p.routingWeightOf(p.byUID["fast"], 100, now, 0, 0)
-	ws0 := p.routingWeightOf(p.byUID["slow"], 100, now, 0, 0)
-	wn0 := p.routingWeightOf(p.byUID["none"], 100, now, 0, 0)
+	wf0 := p.routingWeightOf(p.byUID["fast"], 100, now, 0, 0, ClassChat)
+	ws0 := p.routingWeightOf(p.byUID["slow"], 100, now, 0, 0, ClassChat)
+	wn0 := p.routingWeightOf(p.byUID["none"], 100, now, 0, 0, ClassChat)
 	p.mu.Unlock()
 	if wf0 != wn0*expiringVirtualSlots || ws0 != wn0*expiringVirtualSlots {
 		t.Fatalf("pace off must keep ×2 constant: fast=%v slow=%v none=%v", wf0, ws0, wn0)
@@ -79,9 +79,9 @@ func TestPaceModeWeightsAndCap(t *testing.T) {
 	p.SetPaceMode(true)
 	p.mu.Lock()
 	medianPace := p.poolMedianPace([]*entry{p.byUID["fast"], p.byUID["slow"]}, now)
-	wf := p.routingWeightOf(p.byUID["fast"], 100, now, 0, medianPace)
-	ws := p.routingWeightOf(p.byUID["slow"], 100, now, 0, medianPace)
-	wn := p.routingWeightOf(p.byUID["none"], 100, now, 0, medianPace)
+	wf := p.routingWeightOf(p.byUID["fast"], 100, now, 0, medianPace, ClassChat)
+	ws := p.routingWeightOf(p.byUID["slow"], 100, now, 0, medianPace, ClassChat)
+	wn := p.routingWeightOf(p.byUID["none"], 100, now, 0, medianPace, ClassChat)
 	p.mu.Unlock()
 	if medianPace <= 0 {
 		t.Fatalf("medianPace=%v want >0", medianPace)
@@ -108,8 +108,8 @@ func TestPaceModeSingleExpiringFallback(t *testing.T) {
 	p.SetPaceMode(true)
 	p.mu.Lock()
 	mp := p.poolMedianPace([]*entry{p.byUID["a"], p.byUID["b"]}, now)
-	w := p.routingWeightOf(p.byUID["a"], 100, now, 0, mp)
-	wn := p.routingWeightOf(p.byUID["b"], 100, now, 0, mp)
+	w := p.routingWeightOf(p.byUID["a"], 100, now, 0, mp, ClassChat)
+	wn := p.routingWeightOf(p.byUID["b"], 100, now, 0, mp, ClassChat)
 	p.mu.Unlock()
 	if mp != 0 {
 		t.Fatalf("single expiring: medianPace=%v want 0", mp)

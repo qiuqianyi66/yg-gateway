@@ -251,6 +251,21 @@ func (p *Pool) NoteModelCost(uid, model string, credit float64, tokens int) {
 				e.creditsEarliestRemaining -= d
 			}
 		}
+		// 软带带宽环（PLAN-softband-recalibration 方案 A + 分口径）：实测单次扣费入环。
+		// credit 是合格观察证据（不是推断）；≤0 免费/失败请求不入环（unknown 不当 0 记）。
+		// 按 tokens 量级分环：> BenchTokenThreshold 归评测环（recentBenchCharges），
+		// 否则聊天环（recentCharges）——评测大额只抬评测带宽，聊天带宽不被污染。
+		var ring *[]float64
+		if tokens > BenchTokenThreshold {
+			ring = &e.recentBenchCharges
+		} else {
+			ring = &e.recentCharges
+		}
+		*ring = append(*ring, credit)
+		if len(*ring) > softBandChargeHistory {
+			// 环形收缩：丢最旧，保留最近 softBandChargeHistory 条。
+			*ring = (*ring)[len(*ring)-softBandChargeHistory:]
+		}
 	}
 	if e.modelCost == nil {
 		e.modelCost = make(map[string]modelCostEntry)
