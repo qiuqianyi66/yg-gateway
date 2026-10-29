@@ -76,7 +76,8 @@ $allow = @{
     # 面板：只读运维视图，可依赖领域包但不可反向被依赖（实测）
     # + opsagent：运维 agent 审计/unknown 全量的只读展示（REQ-opsagent 阶段 2）
     # + unknown：unknown 条目的只读列表（registry 全量，同上）
-    'panel'    = @('auth','httpauth','livecfg','logfmt','opsagent','pool','reqlog',
+    # + bench：面板 benchmark 摘要端点只读调用评测层（REQ-benchmark G4，bench→reqlog 已收录）
+    'panel'    = @('auth','bench','httpauth','livecfg','logfmt','opsagent','pool','reqlog',
                    'scheduler','session','unknown','upstream','usage')
     # 调度：依赖凭证、日志、池、上游（实测）
     'scheduler'= @('auth','logfmt','pool','upstream')

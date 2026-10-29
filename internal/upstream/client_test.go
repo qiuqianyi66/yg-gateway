@@ -546,13 +546,15 @@ func TestChatHTTPNilFallsBackToHTTP(t *testing.T) {
 }
 
 func TestFetchModelsDefaultEffortDualKeyAndSizes(t *testing.T) {
-	// 上游双键：老模型 reasoning.effort（auto），新模型（glm-5.3 系）只有 reasoning.defaultEffort；
+	// 上游双键：老模型 reasoning.effort（glm-4.5），新模型（glm-5.3 系）只有 reasoning.defaultEffort；
 	// credits/maxAllowedSize/canDisableThinking/supportsReasoning 等尺寸与能力字段应一并透出。
+	// 注：auto 是路由档位别名（routingAliasIDs，487dc4e 起 /v1/models 过滤），
+	// 此处用非别名老模型 glm-4.5 覆盖 legacy effort 键路径。
 	c := testClient(func(r *http.Request) (*http.Response, error) {
 		return jsonResp(200, `{"code":0,"data":{"models":[
 			{"id":"glm-5.3","maxInputTokens":1000000,"maxOutputTokens":48000,"maxAllowedSize":1000000,"credits":"x0.79","supportsReasoning":true,"reasoning":{"defaultEffort":"high","canDisableThinking":true,"supportedEfforts":["low","high","max"]}},
-			{"id":"auto","maxInputTokens":168000,"maxOutputTokens":32000,"supportsReasoning":true,"reasoning":{"effort":"high"}}
-		],"agents":[{"name":"cli","models":["glm-5.3","auto"]}]}}`), nil
+			{"id":"glm-4.5","maxInputTokens":168000,"maxOutputTokens":32000,"supportsReasoning":true,"reasoning":{"effort":"high"}}
+		],"agents":[{"name":"cli","models":["glm-5.3","glm-4.5"]}]}}`), nil
 	})
 	a := &auth.Auth{AccessToken: "at", UID: "u1"}
 	infos, err := c.FetchModels(a)
@@ -578,8 +580,8 @@ func TestFetchModelsDefaultEffortDualKeyAndSizes(t *testing.T) {
 	if got := c.ModelRate("cn", "glm-5.3"); got != "0.79" {
 		t.Errorf("glm-5.3 ModelRate=%q want 0.79", got)
 	}
-	if au := byID["auto"]; au.DefaultEffort != "high" {
-		t.Errorf("auto DefaultEffort=%q want high (from legacy effort key)", au.DefaultEffort)
+	if au := byID["glm-4.5"]; au.DefaultEffort != "high" {
+		t.Errorf("glm-4.5 DefaultEffort=%q want high (from legacy effort key)", au.DefaultEffort)
 	}
 }
 
