@@ -153,16 +153,21 @@ func nonChatModel(id string, maxOutputTokens int64, tags []string) bool {
 	return false
 }
 
-// routingAliasIDs 上游目录里的"路由档位"虚拟 id（不是真模型）：
+// routingAliasIDs 上游目录里的虚拟 id（不是真模型）：
 // 用户选这些等于让上游按策略自动挑模型。官方客户端不列入模型下拉。
+// 除路由档位外，也装同模型的冗余节点入口（如 -sg 新加坡站，国际站已覆盖）。
 var routingAliasIDs = map[string]bool{
-	"default-model": true, // Auto
-	"fast-model":    true, // Fast
+	// CN/global 通用路由档位
+	"default-model":  true, // Auto（global 域）
+	"auto":           true, // Auto（CN 域）
+	"fast-model":     true, // Fast
 	"balanced-model": true, // Balanced
-	"primary-model": true, // Primary
-	"deep-model":    true, // Deep
-	"auto-chat":     true, // Auto（另一个 auto）
-	"enhance-1.0":   true, // Enhance-1.0
+	"primary-model":  true, // Primary
+	"deep-model":     true, // Deep
+	"auto-chat":      true, // Auto（global 另一路）
+	"enhance-1.0":    true, // Enhance-1.0
+	// 冗余节点入口：同模型多区域，主入口已在列表里，不列第二个
+	"deepseek-v4.1-flash-sg": true, // 新加坡站，国际站 deepseek-v4.1-flash 已覆盖（且促销免费）
 }
 
 // codeBuddyIDEUA /v3/config 要求能解析出 CodeBuddy 版本号的 UA。

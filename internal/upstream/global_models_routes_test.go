@@ -139,6 +139,8 @@ func TestNonChatModelGenerationTags(t *testing.T) {
 		{"路由别名 deep-model", "deep-model", 32000, nil, true},
 		{"路由别名 auto-chat", "auto-chat", 32000, nil, true},
 		{"路由别名 enhance-1.0", "enhance-1.0", 32000, nil, true},
+		{"路由别名 auto（CN 域）", "auto", 32000, nil, true},
+		{"冗余节点 deepseek-v4.1-flash-sg", "deepseek-v4.1-flash-sg", 32000, nil, true},
 	}
 	for _, c := range cases {
 		if got := nonChatModel(c.id, c.out, c.tags); got != c.want {
