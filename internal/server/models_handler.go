@@ -116,6 +116,16 @@ func nameRateSuffix(raw string) string {
 	return " ×" + s
 }
 
+// effectiveRateRaw 返回模型当前生效倍率原文（有 PromoCredits 用它，否则牌价 Credits）。
+// 供 id 后缀拼接用；与 upstream.effectiveModelRate 的区别是不做 normalize，保留
+// "0x" / "x0.29" 原文格式以喂给 nameRateSuffix。
+func effectiveRateRaw(mi upstream.ModelInfo) string {
+	if strings.TrimSpace(mi.PromoCredits) != "" {
+		return mi.PromoCredits
+	}
+	return mi.Credits
+}
+
 // applyModelInfoFields 把上游模型对象全字段（ModelInfo）按「空值省略」写出规则
 // 合入 /v1/models 条目：name/description/credits/tags/vendor/能力旗标/
 // max_allowed_size/reasoning_effort/reasoning_summary/promo_*。CN 动态分支与
@@ -132,12 +142,12 @@ func applyModelInfoFields(entry map[string]any, mi upstream.ModelInfo) map[strin
 		effectiveRate = mi.PromoCredits
 	}
 	if mi.Name != "" {
-		// 积分倍率拼进 name（"GLM-5.2 ×0.05" / "Hy4 preview ×0 限时免费"）：
-		// 第三方客户端多只渲染 name 字段，单独的 credits 字段它们看不到；
-		// 面板自身走 /panel/api/models（另有倍率列），不受影响。
-		suffix := nameRateSuffix(effectiveRate)
+		// name 只放显示名 + 促销标签；倍率后缀拼在 id 上（见 modelList），
+		// 这样 Cherry Studio 等客户端的"获取模型"弹窗（只渲染 id 字段）
+		// 直接显示 "cn:hy3 ×0 限时免费"，不用点进去才看得到价格。
+		suffix := ""
 		if mi.PromoLabel != "" {
-			suffix += " " + mi.PromoLabel
+			suffix = " " + mi.PromoLabel
 		}
 		entry["name"] = mi.Name + suffix
 	}
@@ -213,8 +223,12 @@ func applyModelInfoFields(entry map[string]any, mi upstream.ModelInfo) map[strin
 func (h *Handler) modelList() []map[string]any {
 	out := make([]map[string]any, 0)
 	for _, mi := range h.fetchDynamicModels() {
+		// id 拼生效倍率后缀（"cn:hy3 ×0"）：弹窗列表只渲染 id，这样用户在
+		// Cherry Studio 的"获取模型"弹窗里直接看到倍率。resolveModel 收到请求
+		// 时会剥掉第一个空格之后的部分，还原成裸模型名路由。
+		idSuffix := nameRateSuffix(effectiveRateRaw(mi))
 		entry := map[string]any{
-			"id":       "cn:" + mi.ID,
+			"id":       "cn:" + mi.ID + idSuffix,
 			"object":   "model",
 			"created":  1753600000,
 			"owned_by": "workbuddy",
@@ -261,17 +275,22 @@ func (h *Handler) modelList() []map[string]any {
 		}
 		globalEfforts, globalDefaults := h.cfg.Upstream.GlobalEffortSnapshot()
 		for _, id := range globalIDs {
+			// 先取富字段条目，算 id 后缀（同 CN 分支口径）。
+			var remoteCtx, remoteOut int64
+			var idSuffix string
+			if mi, ok := globalInfos[id]; ok {
+				idSuffix = nameRateSuffix(effectiveRateRaw(mi))
+				remoteCtx, remoteOut = mi.ContextWindow, mi.MaxTokens
+			}
 			entry := map[string]any{
-				"id":       "global:" + id,
+				"id":       "global:" + id + idSuffix,
 				"object":   "model",
 				"created":  1753600000,
 				"owned_by": "workbuddy",
 			}
 			// context_length / max_output_tokens 四级查找（与 CN 动态分支同口径）。
-			var remoteCtx, remoteOut int64
 			if mi, ok := globalInfos[id]; ok {
 				entry = applyModelInfoFields(entry, mi)
-				remoteCtx, remoteOut = mi.ContextWindow, mi.MaxTokens
 			}
 			entry["context_length"] = upstream.ContextWindowListingV4(id, remoteCtx, h.cfg.Upstream.HTTP)
 			if mo, ok := upstream.MaxOutputTokensListingV4(id, remoteOut, h.cfg.Upstream.HTTP); ok {

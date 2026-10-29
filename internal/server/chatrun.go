@@ -80,6 +80,25 @@ type chatRun struct {
 	imageViewOK  bool
 	imageReqView *session.RequestView
 	imageRawBody []byte
+
+	// requestClassDone/Val 流量类惰性判定（bandMult 分口径）：选号入口按原始 body
+	// 的估算 tokens 判聊天/评测类。body 可能被降级改写，故首次调用即缓存（只算一次）。
+	requestClassDone bool
+	requestClassVal  pool.RequestClass
+}
+
+// requestClass 按请求体估算规模判流量类（>BenchTokenThreshold = 评测/大请求）。
+// estimateTokensJSON 是启发式（CJK÷1 + 其余÷4 向上取整），与上游真实计数存在
+// 偏差——但双峰间隙（5k vs 200k）远大于启发式误差，判类稳健（derivation）。
+func (r *chatRun) requestClass() pool.RequestClass {
+	if !r.requestClassDone {
+		r.requestClassDone = true
+		r.requestClassVal = pool.ClassChat
+		if r.body != nil && estimateTokensJSON(r.body) > pool.BenchTokenThreshold {
+			r.requestClassVal = pool.ClassBench
+		}
+	}
+	return r.requestClassVal
 }
 
 // hasImage 惰性判定请求是否携带图片（gateway_hint 用）。
@@ -542,7 +561,7 @@ func (run *chatRun) selectAccount(i int, r *http.Request) (*auth.Auth, selectOut
 		if authKey != nil {
 			group = authKey.Group
 		}
-		acct = h.cfg.Pool.PickExcludingForRealmGroup(tried, bareModel, realm, group)
+		acct = h.cfg.Pool.PickExcludingForRealmGroupClass(tried, bareModel, realm, group, run.requestClass())
 	}
 	if acct == nil {
 		st.status = http.StatusServiceUnavailable
