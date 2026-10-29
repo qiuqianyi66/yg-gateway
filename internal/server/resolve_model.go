@@ -13,13 +13,25 @@ import "strings"
 func resolveModel(model string) (realm, bare string) {
 	idx := strings.IndexByte(model, ':')
 	if idx < 0 {
-		return "cn", model
+		return "cn", stripRateSuffix(model)
 	}
 	prefix := model[:idx]
 	if prefix != "cn" && prefix != "global" {
-		return "cn", model
+		return "cn", stripRateSuffix(model)
 	}
-	return prefix, model[idx+1:]
+	return prefix, stripRateSuffix(model[idx+1:])
+}
+
+// stripRateSuffix 剥掉 /v1/models 在 id 上拼的展示倍率后缀。
+// 网关返回 "cn:hy3 ×0"，Cherry Studio 弹窗据此直接显示倍率；客户端勾选后发请求，
+// model 字段带 " ×0" 后缀，这里剥掉还原成上游认识的裸模型名 "hy3"。
+// 旧客户端发不带后缀的 id（"cn:hy3"）不受影响——找不到空格就原样返回。
+// 上游模型 id 均为 [a-z0-9-]+ 不含空格，按第一个空格截断安全。
+func stripRateSuffix(bare string) string {
+	if i := strings.IndexByte(bare, ' '); i >= 0 {
+		return bare[:i]
+	}
+	return bare
 }
 
 // ResolveModel 是 resolveModel 的导出面（跨包调用）。
