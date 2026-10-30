@@ -21,15 +21,15 @@ import (
 // 该模型立即可用），只是默认下拉不列出来避免用户选了 11102。某 id 未来上游部署后从此
 // 集合删掉即恢复可见。
 var hiddenGlobalListingIDs = map[string]bool{
-	"gpt-6-astra":            true, // 11102 service info not found（双号实测）
-	"gpt-5.6-sol":            true, // 11102
-	"gpt-6-sol":              true, // 11102
-	"gpt-6.1-sol":            true, // 11102
-	"kimi-k3":                true, // 11102
-	"kimi-k3.1-pro":          true, // 11102
+	"gpt-6-astra":             true, // 11102 service info not found（双号实测）
+	"gpt-5.6-sol":             true, // 11102
+	"gpt-6-sol":               true, // 11102
+	"gpt-6.1-sol":             true, // 11102
+	"kimi-k3":                 true, // 11102
+	"kimi-k3.1-pro":           true, // 11102
 	"kimi-k3.1-pro-highspeed": true, // 11102
-	"minimax-m3.1-flash":     true, // global 域 11102（CN 域同 id 可用）
-	"o4-mini":                true, // global 域 11102
+	"minimax-m3.1-flash":      true, // global 域 11102（CN 域同 id 可用）
+	"o4-mini":                 true, // global 域 11102
 }
 
 // modelsCache 动态模型目录的进程内缓存：id 目录 + 10min TTL + 5min 失败负缓存。
@@ -260,44 +260,44 @@ func (h *Handler) modelList(realmFilter string) []map[string]any {
 	out := make([]map[string]any, 0)
 	// CN 域列表
 	if realmFilter == "" || realmFilter == "cn" {
-	for _, mi := range h.fetchDynamicModels() {
-		// id 拼生效倍率后缀（"cn:hy3 ×0"）：弹窗列表只渲染 id，这样用户在
-		// Cherry Studio 的"获取模型"弹窗里直接看到倍率。resolveModel 收到请求
-		// 时会剥掉第一个空格之后的部分，还原成裸模型名路由。
-		idSuffix := nameRateSuffix(effectiveRateRaw(mi))
-		entry := map[string]any{
-			"id":       "cn:" + mi.ID + idSuffix,
-			"object":   "model",
-			"created":  1753600000,
-			"owned_by": "workbuddy",
-		}
-		// context_length / max_output_tokens 四级查找（upstream.model_catalog）：
-		// 上游动态值（maxInputTokens/maxOutputTokens）权威 → 静态种子表 →
-		// model.json 本地缓存 → models.dev 按需拉取（异步不阻塞本次响应，拉到后
-		// 写 model.json 供下次命中）→ 1M 兜底 / max_output_tokens 省略。
-		// 上游零值不再透出假 131072（误导 Codex/ZCode 等按 context_length 提前
-		// 截断、白白丢上下文）。
-		entry["context_length"] = upstream.ContextWindowListingV4(mi.ID, mi.ContextWindow, h.cfg.Upstream.HTTP)
-		if mo, ok := upstream.MaxOutputTokensListingV4(mi.ID, mi.MaxTokens, h.cfg.Upstream.HTTP); ok {
-			entry["max_output_tokens"] = mo
-		}
-		// 上游模型对象全字段透出（name/描述/标签/倍率/能力旗标等，空值省略）。
-		entry = applyModelInfoFields(entry, mi)
-		// effort 能力透出——远端 supportedEfforts 权威，缺失落到 CN 静态兜底表
-		// （客户端可发现档位，不再盲传）。无档位 → 省略字段。
-		// 双字段名兼容：reasoning_supported_efforts（既有名）+ supported_efforts
-		// （部分客户端只认裸名，缺失时其内置表把模型当「不校验 effort」处理，
-		// 弹「该模型不校验该参数」）。别名同值，消费方按字段名偏好自取。
-		if efforts, def := upstream.EffortListing("cn", mi.ID, mi.Efforts, mi.DefaultEffort); efforts != nil {
-			entry["reasoning_supported_efforts"] = efforts
-			entry["supported_efforts"] = efforts
-			if def != "" {
-				entry["reasoning_default_effort"] = def
-				entry["default_effort"] = def
+		for _, mi := range h.fetchDynamicModels() {
+			// id 拼生效倍率后缀（"cn:hy3 ×0"）：弹窗列表只渲染 id，这样用户在
+			// Cherry Studio 的"获取模型"弹窗里直接看到倍率。resolveModel 收到请求
+			// 时会剥掉第一个空格之后的部分，还原成裸模型名路由。
+			idSuffix := nameRateSuffix(effectiveRateRaw(mi))
+			entry := map[string]any{
+				"id":       "cn:" + mi.ID + idSuffix,
+				"object":   "model",
+				"created":  1753600000,
+				"owned_by": "workbuddy",
 			}
+			// context_length / max_output_tokens 四级查找（upstream.model_catalog）：
+			// 上游动态值（maxInputTokens/maxOutputTokens）权威 → 静态种子表 →
+			// model.json 本地缓存 → models.dev 按需拉取（异步不阻塞本次响应，拉到后
+			// 写 model.json 供下次命中）→ 1M 兜底 / max_output_tokens 省略。
+			// 上游零值不再透出假 131072（误导 Codex/ZCode 等按 context_length 提前
+			// 截断、白白丢上下文）。
+			entry["context_length"] = upstream.ContextWindowListingV4(mi.ID, mi.ContextWindow, h.cfg.Upstream.HTTP)
+			if mo, ok := upstream.MaxOutputTokensListingV4(mi.ID, mi.MaxTokens, h.cfg.Upstream.HTTP); ok {
+				entry["max_output_tokens"] = mo
+			}
+			// 上游模型对象全字段透出（name/描述/标签/倍率/能力旗标等，空值省略）。
+			entry = applyModelInfoFields(entry, mi)
+			// effort 能力透出——远端 supportedEfforts 权威，缺失落到 CN 静态兜底表
+			// （客户端可发现档位，不再盲传）。无档位 → 省略字段。
+			// 双字段名兼容：reasoning_supported_efforts（既有名）+ supported_efforts
+			// （部分客户端只认裸名，缺失时其内置表把模型当「不校验 effort」处理，
+			// 弹「该模型不校验该参数」）。别名同值，消费方按字段名偏好自取。
+			if efforts, def := upstream.EffortListing("cn", mi.ID, mi.Efforts, mi.DefaultEffort); efforts != nil {
+				entry["reasoning_supported_efforts"] = efforts
+				entry["supported_efforts"] = efforts
+				if def != "" {
+					entry["reasoning_default_effort"] = def
+					entry["default_effort"] = def
+				}
+			}
+			out = append(out, entry)
 		}
-		out = append(out, entry)
-	}
 	}
 	// global 模型名单：仅 GlobalEnabled=true 时列出（逃生门）。
 	// 名单 = 纯动态探测结果（fetchGlobalModels，失败/无号 → 空）。

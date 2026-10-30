@@ -57,7 +57,7 @@ param(
 $ErrorActionPreference = 'Continue'
 $repoRoot = Split-Path -Parent $PSScriptRoot
 
-if (-not $LogDir) { $LogDir = $env:TEMP }
+if (-not $LogDir) { $LogDir = Join-Path $ProdDir 'data\logs' }
 if (-not (Test-Path -LiteralPath $LogDir)) { New-Item -ItemType Directory -Force -Path $LogDir | Out-Null }
 
 $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
@@ -608,7 +608,7 @@ try {
 
     # 借 cmd 落日志的启动命令对路径字符敏感：`&`/`^`/`%`/`!` 是 cmd 元字符，末尾反斜杠会吃掉
     # 右引号。生产路径本来不含这些，但 -Exe/-ProdDir/-LogDir 是**调用方参数**（-LogDir 默认
-    # `$env:TEMP`，含用户名），所以这里是真检查而不是假设。
+    # `<ProdDir>\data\logs`），所以这里是真检查而不是假设。
     foreach ($p in @($Exe, $ProdDir, $LogDir)) {
         if ($p -match '[&^%!]') {
             Write-Bad ('路径含 cmd 元字符（& ^ % !），会破坏启动命令的重定向：' + $p)

@@ -594,7 +594,7 @@ func (c *Client) ChatStreamContext(ctx context.Context, a *auth.Auth, body []byt
 			// 404/405 且还有下一个候选路径：换路径重试（global /console→/v2 回退）。
 			// 其他 ≥400（含 11128/11101/内容审核/账号风控）不换路径——那是请求内容或
 			// 账号问题，换路径也会再错一遍，还多罚一次号。
-			if (resp.StatusCode == 404 || resp.StatusCode == 405) {
+			if resp.StatusCode == 404 || resp.StatusCode == 405 {
 				continue
 			}
 			// body 读失败（掐流/截断）→ 传输层错误：半截 raw 不交回调用方进 Classify，
