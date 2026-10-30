@@ -196,6 +196,7 @@ func main() {
 	p.SetWeights(cfg.Pool.IdleWeightPerHour, cfg.Pool.IdleWeightMax)
 	p.SetPreferExpiring(cfg.Pool.PreferExpiring)
 	p.SetEwma(cfg.Pool.Ewma.Enabled, cfg.Pool.Ewma.Alpha, cfg.Pool.Ewma.MinSamples) // EWMA 表现回灌（ADR-005 D-502，默认关 = 零回归）
+	p.SetFailureWindow(cfg.FailureWindowDur)                                        // 账号级故障窗（P0-2，默认 30s；0 关闭）
 	p.SetRecentUsageFactor(cfg.Pool.RecentUsageFactor)                              // 近期用量衰减（REQ-routing P2，默认关）
 	p.SetPaceMode(cfg.Pool.PaceMode)                                                // pace 选号（F9，默认关 = 零回归）
 
@@ -765,6 +766,7 @@ func saveConfig(raw []byte, path string, live *livecfg.Holder, p *pool.Pool, up 
 	p.SetWeights(newCfg.Pool.IdleWeightPerHour, newCfg.Pool.IdleWeightMax)
 	p.SetPreferExpiring(newCfg.Pool.PreferExpiring)
 	p.SetEwma(newCfg.Pool.Ewma.Enabled, newCfg.Pool.Ewma.Alpha, newCfg.Pool.Ewma.MinSamples) // EWMA 表现回灌热生效（ADR-005 D-502）
+	p.SetFailureWindow(newCfg.FailureWindowDur)                                              // 账号级故障窗热生效（P0-2）
 	p.SetPaceMode(newCfg.Pool.PaceMode)                                                      // pace 选号热生效（F9）
 	sch.SetExpiringSoonWindow(newCfg.ExpiringSoonDur)
 	sch.Reconfigure(

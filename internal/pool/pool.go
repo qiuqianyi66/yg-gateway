@@ -102,6 +102,12 @@ type Pool struct {
 	// 熔断号到期后不再一次性全量放回，而是每 gap 至多放行 1 次试探；成功即全量恢复。
 	// 0 = 关闭 half-open（退化为既有的「到期即全量」行为，零回归）。
 	breakerProbeGap time.Duration
+	// failureWindow 账号级故障窗（P0-2）：最近一次失败（lastErr，NoteError/
+	// NoteFailures 喂入）落在窗口内时，该账号临时退出 normal 选号候选，防止
+	// 抖动号被连续打（EWMA alpha 收敛慢、连败降权需满阈值才触发）。0 = 关闭
+	// （零回归）。只挡 normal：全池皆窗内时走 pickEarliestExpiry 兜底（失败
+	// 成本仅一轮换），不产生 503 新语义。
+	failureWindow time.Duration
 	// globalMaxInFlight 全局在途上限（ADR-003 D-401）：所有账号在途请求总数上限，
 	// 超限立即 429 不排队。0 = 不限（默认，零回归）。经 globalInFlight 原子计数判定。
 	globalMaxInFlight int
@@ -231,6 +237,18 @@ func (p *Pool) SetBreakerProbeGap(d time.Duration) {
 		d = 0
 	}
 	p.breakerProbeGap = d
+}
+
+// SetFailureWindow 注入账号级故障窗时长（main 从 config 解析后调用，P0-2）。
+// 0（或负）= 关闭（零回归，失败后账号立即回候选）。热生效（与 pool.* 其余
+// Set* 同口径）。
+func (p *Pool) SetFailureWindow(d time.Duration) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if d < 0 {
+		d = 0
+	}
+	p.failureWindow = d
 }
 
 // SetGlobalMaxInFlight 注入全局在途上限（ADR-003 D-401）。0（或负）= 不限。

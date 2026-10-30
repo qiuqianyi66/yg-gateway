@@ -158,7 +158,7 @@ func (p *Pool) NoteError(uid string) {
 	defer p.mu.Unlock()
 	if e, ok := p.byUID[uid]; ok {
 		e.errTotal++
-		e.lastErr = time.Now()
+		e.lastErr = p.now()            // P0-2 故障窗判定（pick 读 p.now()）两侧须同一时钟口径，同 recordBreakerFailureLocked 先例
 		e.noteEwmaFailure(p.ewmaAlpha) // ADR-005 D-502：失败事件压低成功率信号
 		p.recordBreakerFailureLocked(e)
 		p.dirty.Store(true)

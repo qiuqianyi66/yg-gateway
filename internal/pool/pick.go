@@ -81,9 +81,18 @@ func (p *Pool) pick(tried map[string]bool, reqModel, realm, group string, class 
 		}
 		return true
 	}
-	healthyOf := func(e *entry) bool { return realmOK(e) && e.healthy(now) }
+	// 故障窗（P0-2）：最近失败在窗内的账号临时退出 normal 候选，防止抖动号被
+	// 连续打。只挡 normal：全池皆窗内时走 pickEarliestExpiry 兜底（失败成本仅
+	// 一轮换）。healthy() 不加本判定——兜底/粘性路径复用 healthy()，加进去会
+	// 让全池窗内时兜底也失效（行为退化）。
+	failureWindowBlocked := func(e *entry) bool {
+		return p.failureWindow > 0 && !e.lastErr.IsZero() && now.Sub(e.lastErr) < p.failureWindow
+	}
+	healthyOf := func(e *entry) bool {
+		return realmOK(e) && !failureWindowBlocked(e) && e.healthy(now)
+	}
 	if reqModel != "" {
-		healthyOf = func(e *entry) bool { return realmOK(e) && e.healthyForModel(now, reqModel) }
+		healthyOf = func(e *entry) bool { return realmOK(e) && !failureWindowBlocked(e) && e.healthyForModel(now, reqModel) }
 	}
 	// floorBlocked 积分保底拦截判定（实现在 floorBlockedForRealmModel，与粘性路径共用）：
 	// 触底 + 收费（本地实测台账 或 上游目录倍率）即拦；免费/未知倍率不受限。
@@ -394,6 +403,7 @@ func (p *Pool) floorBlockedForRealmModel(e *entry, model, realm string, now time
 // 兜底是**最后一道**选号路径，保底在它之前挡不住就等于没挡。
 func (p *Pool) pickEarliestExpiryLocked(tried map[string]bool, now time.Time, realm, model string) *auth.Auth {
 	var best *entry
+	var bestExp time.Time
 	for uid, e := range p.byUID {
 		if tried != nil && tried[uid] {
 			continue
@@ -414,17 +424,23 @@ func (p *Pool) pickEarliestExpiryLocked(tried map[string]bool, now time.Time, re
 			continue
 		}
 		exp := e.expiry(now)
+		if exp.IsZero() && p.failureWindow > 0 && !e.lastErr.IsZero() && now.Sub(e.lastErr) < p.failureWindow {
+			// 故障窗内号（P0-2）：expiry 零值（无冷却/熔断/降权）但仍在窗内 →
+			// 兜底可见，恢复时刻 = lastErr + 窗。全池窗内时选最早失败者，不 503。
+			exp = e.lastErr.Add(p.failureWindow)
+		}
 		if exp.IsZero() {
 			continue
 		}
-		if best == nil || exp.Before(best.expiry(now)) {
+		if best == nil || exp.Before(bestExp) {
 			best = e
+			bestExp = exp
 		}
 	}
 	if best == nil {
 		return nil
 	}
-	log.Printf("WARN: [pool] fallback_earliest_expiry acct=%s until=%s kind=%s", logfmt.Label(best.a.UID, best.a.Nickname), best.expiry(now).Format(time.RFC3339), best.fallbackKind(now))
+	log.Printf("WARN: [pool] fallback_earliest_expiry acct=%s until=%s kind=%s", logfmt.Label(best.a.UID, best.a.Nickname), bestExp.Format(time.RFC3339), best.fallbackKind(now))
 	// 原子写回（ADR-005 D-500）：同 pick 正常路径口径（本函数经 pick 读锁路径调用）。
 	// 兜底同样是「选中」，必须与 pick() 正常路径、粘性命中路径（PickByUIDForModel）
 	// 一样推进 usedSeq/pickSeq：否则被兜底反复选中的账号 usedSeq 恒为 0，在 pick 的

@@ -25,6 +25,7 @@ func (p *Pool) NoteFailures(uid string) {
 		return
 	}
 	e.consecutiveFails++
+	e.lastErr = p.now()            // P0-2 故障窗喂入：未知失败同样计入「最近失败时刻」（与 pick 窗判定同时钟口径）
 	e.noteEwmaFailure(p.ewmaAlpha) // ADR-005 D-502：未知原因失败同样压低成功率信号
 	if e.consecutiveFails < p.degradeThreshold {
 		p.dirty.Store(true)

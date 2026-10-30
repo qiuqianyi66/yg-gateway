@@ -389,6 +389,11 @@ type Config struct {
 		// 选号加权。默认关闭（零回归）；开启后因子被钳制在温和区间，不会把账号
 		// 权重清零（饿死防护）。字段均热生效（SetEwma），改配置无需重启。
 		Ewma EwmaConfig `json:"ewma"`
+		// FailureWindow 账号级故障窗（P0-2）：账号最近一次失败（NoteError/
+		// NoteFailures）落在窗口内时，该账号临时退出 normal 选号候选（兜底路径
+		// 不受影响），防止抖动号被连续打。默认 "30s"；"0" 关闭（零回归）。
+		// 字段热生效（SetFailureWindow），改配置无需重启。
+		FailureWindow string `json:"failure_window"`
 	} `json:"pool"`
 
 	SessionSticky struct {
@@ -409,7 +414,9 @@ type Config struct {
 	BreakerCooldownDur  time.Duration `json:"-"`
 	BreakerCooldownMaxD time.Duration `json:"-"`
 	// BreakerProbeGapDur 解析后的 half-open 试探间隔（ADR-003 D-400）；0 = 关闭。
-	BreakerProbeGapDur  time.Duration `json:"-"`
+	BreakerProbeGapDur time.Duration `json:"-"`
+	// FailureWindowDur 解析后的账号级故障窗（P0-2）；0 = 关闭。
+	FailureWindowDur    time.Duration `json:"-"`
 	DegradeCooldownDur  time.Duration `json:"-"`
 	DegradeCooldownMaxD time.Duration `json:"-"`
 	SessionTTL          time.Duration `json:"-"`
@@ -860,6 +867,16 @@ func (c *Config) normalize() error {
 	}
 	if c.CostExploreIntervalDur < 0 {
 		c.CostExploreIntervalDur = 0
+	}
+	// 故障窗（P0-2）：空回落默认 30s；"0" 显式关闭；负值钳 0（= 关闭）。
+	if c.Pool.FailureWindow == "" {
+		c.Pool.FailureWindow = "30s"
+	}
+	if c.FailureWindowDur, err = time.ParseDuration(c.Pool.FailureWindow); err != nil {
+		return fmt.Errorf("pool.failure_window: %w", err)
+	}
+	if c.FailureWindowDur < 0 {
+		c.FailureWindowDur = 0
 	}
 	// 积分保底：负值钳 0（= 关闭）。0 是合法默认（关闭），无需空值回落。
 	if c.Pool.CreditFloor < 0 {

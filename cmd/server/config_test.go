@@ -160,6 +160,9 @@ func TestNewPoolConfigDefaults(t *testing.T) {
 	if c.Pool.Ewma.Alpha != 0.1 || c.Pool.Ewma.MinSamples != 5 {
 		t.Errorf("pool.ewma 默认值=%v/%v want 0.1/5", c.Pool.Ewma.Alpha, c.Pool.Ewma.MinSamples)
 	}
+	if c.FailureWindowDur.Seconds() != 30 {
+		t.Errorf("pool.failure_window 默认=%v want 30s", c.FailureWindowDur)
+	}
 	if c.SoftRateMaxDur.Hours() != 2 {
 		t.Errorf("soft_rate_max=%v want 2h", c.SoftRateMaxDur)
 	}
@@ -282,6 +285,39 @@ func TestPoolEwmaNormalize(t *testing.T) {
 	os.WriteFile(fp, []byte(`{"pool":{"ewma":{"alpha":1.5}}}`), 0o600)
 	if _, err := Load(fp); err == nil {
 		t.Fatal("alpha>1 应报错")
+	}
+}
+
+// TestPoolFailureWindowNormalize pool.failure_window 归一（P0-2）：空回落默认 30s、
+// "0" 显式关闭（0 时长）、非法时长报错。归一失效 → 非法配置悄悄生效 → 本测试 FAIL。
+func TestPoolFailureWindowNormalize(t *testing.T) {
+	dir := t.TempDir()
+	fp := filepath.Join(dir, "c.json")
+
+	// 键缺席 → 回落默认 30s。
+	os.WriteFile(fp, []byte(`{}`), 0o600)
+	c, err := Load(fp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.FailureWindowDur.Seconds() != 30 {
+		t.Fatalf("failure_window 缺省应回落 30s, got %v", c.FailureWindowDur)
+	}
+
+	// 显式 "0" → 关闭（0 = 零回归）。
+	os.WriteFile(fp, []byte(`{"pool":{"failure_window":"0"}}`), 0o600)
+	c, err = Load(fp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.FailureWindowDur != 0 {
+		t.Fatalf("failure_window=\"0\" 应关闭, got %v", c.FailureWindowDur)
+	}
+
+	// 非法时长 → 报错。
+	os.WriteFile(fp, []byte(`{"pool":{"failure_window":"oops"}}`), 0o600)
+	if _, err := Load(fp); err == nil {
+		t.Fatal("failure_window 非法时长应报错")
 	}
 }
 
