@@ -121,6 +121,12 @@ type Event struct {
 	// 三态：空 = 未采集（开关关/UA 空，unknown）；"other" = 采到了但词表不认识；
 	// 具体词表值 = inference（UA 客户端可控可伪造，分类概率正确，非 observation）。
 	AgentKind string `json:"agent_kind,omitempty"`
+	// GuardrailHit 上下文护栏命中标记（REQ-context-guardrail-2026-10-31 / ADR-019）。
+	// 三值纪律与 SessionFP 同族：空 = 未命中（unknown 表达，wire 不产出空键）；
+	// "warn" = 超 context_warn_tokens（不阻断，仅打标 + 响应头）；
+	// "blocked" = 超 context_max_tokens（413 拒绝）或会话限流（429，session_rate_limit）。
+	// 估算值本身是 derivation；「命中阈值」是 observation（四态纪律）。
+	GuardrailHit string `json:"guardrail_hit,omitempty"`
 }
 
 // Filter 用于从归档中筛选最近记录。字符串字段一律「包含」匹配（大小写不敏感），

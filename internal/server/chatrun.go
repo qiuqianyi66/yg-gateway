@@ -85,6 +85,10 @@ type chatRun struct {
 	// 的估算 tokens 判聊天/评测类。body 可能被降级改写，故首次调用即缓存（只算一次）。
 	requestClassDone bool
 	requestClassVal  pool.RequestClass
+	// guardrailEst 护栏估算的 prompt token（REQ-context-guardrail）。warn/blocked 命中
+	// 时由 chatCompletions 挂点置位；上游返回实际 usage 后经 RecordCalibration 补对照
+	// 样本（估算 vs 上游，供权重真机校准；unknown 不冒充 0）。
+	guardrailEst int64
 }
 
 // requestClass 按请求体估算规模判流量类（>BenchTokenThreshold = 评测/大请求）。

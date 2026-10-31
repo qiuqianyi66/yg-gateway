@@ -378,6 +378,9 @@ type requestTrace struct {
 	// 与出站 X-Conversation-Request-ID 同源（session.RequestIDForKey），
 	// 归档里按它聚合即可还原「一个 agent 会话吃了多少 token」。
 	sessionFP string
+	// guardrailHit 上下文护栏命中标记（REQ-context-guardrail）："" = 未命中；
+	// "warn" / "blocked" / "session_rpm"。由 chatCompletions 护栏挂点写入。
+	guardrailHit string
 }
 
 // setSessionFP 记录会话键的盐哈希。调用方在 deriveSessionKeys 拿到 sessKey 后
@@ -388,6 +391,15 @@ func (t *requestTrace) setSessionFP(sessKey string) {
 		return
 	}
 	t.sessionFP = session.RequestIDForKey(sessKey)
+}
+
+// setGuardrailHit 记录上下文护栏命中标记（warn / blocked / session_rpm）。
+// 空值不写（omitempty 三值纪律：未命中 = unknown，不产出空键）。
+func (t *requestTrace) setGuardrailHit(hit string) {
+	if t == nil || hit == "" {
+		return
+	}
+	t.guardrailHit = hit
 }
 
 // setKey 记录鉴权命中的 Key 的归因字段（id/name，不含明文、不含约束对象）。
@@ -487,6 +499,8 @@ func (t *requestTrace) event(status int) reqlog.Event {
 	// AgentKind 从 UA 派生：UA 空（开关关/UA 空）→ ClassifyAgentKind 返回 ""，
 	// omitempty 自然省略；采到了但不认识 → "other"。
 	e.AgentKind = ClassifyAgentKind(t.userAgent)
+	// 护栏命中标记：空 = 未命中（omitempty 省略，三值纪律）。
+	e.GuardrailHit = t.guardrailHit
 	if e.Outcome == "" {
 		if status >= 200 && status < 300 {
 			e.Outcome = reqlog.OutcomeSuccess

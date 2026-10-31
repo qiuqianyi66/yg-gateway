@@ -444,6 +444,18 @@ func main() {
 	// /status 暴露状态；探测 goroutine 在校验循环外启动（下方）。
 	driftMon := buildDriftMonitor(cfg)
 
+	// 上下文护栏（REQ-context-guardrail-2026-10-31 / ADR-019）：阈值来自 config
+	// guardrails 块，0 = 关（零回归）。负值 fail fast（校验在 config_guardrail.go，
+	// 同 opsagent 先例由装配侧调用）；Set* 热生效（当前启动生效；main 持有引用，
+	// 后续接配置 reload 即可在线调档，无需改装配）。
+	if err := cfg.Guardrails.validate(); err != nil {
+		log.Fatalf("guardrails config: %v", err)
+	}
+	guardrail := server.NewGuardrail()
+	guardrail.SetContextWarnTokens(cfg.Guardrails.ContextWarnTokens)
+	guardrail.SetContextMaxTokens(cfg.Guardrails.ContextMaxTokens)
+	guardrail.SetSessionRPM(cfg.Guardrails.SessionRPM)
+
 	h := server.NewHandler(server.Config{
 		Pool:     p,
 		Upstream: up,
@@ -489,6 +501,9 @@ func main() {
 		Fallback: buildFallbackConfig(cfg),
 		// 协议漂移观测（R-102）：未启用 = nil（/status 省略该键 = 外层 unknown）。
 		Drift: driftMon,
+		// 上下文护栏（REQ-context-guardrail）：阈值 0 = 关（零回归）；实例在 main 持有
+		// 引用（guardrail 变量），Set* 已暴露供热调档。
+		Guardrail: guardrail,
 	})
 	// F6：handler 创建后把 per-key RPM 快照接线给 panel（晚绑定闭包）。
 	keyRPMStatsFn = func() any { return h.KeyRPMStats() }

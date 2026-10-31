@@ -1048,3 +1048,24 @@ func TestMaxBodyBytesConfig(t *testing.T) {
 		t.Error("负 max_body_bytes 应 fail fast")
 	}
 }
+
+func TestGuardrailsValidate(t *testing.T) {
+	// 0 = 关（零回归）：空配置必须通过。
+	if err := (GuardrailsConfig{}).validate(); err != nil {
+		t.Fatalf("空配置 validate 应通过：%v", err)
+	}
+	// 正数阈值合法。
+	if err := (GuardrailsConfig{ContextWarnTokens: 500000, ContextMaxTokens: 800000, SessionRPM: 60}).validate(); err != nil {
+		t.Fatalf("正数阈值 validate 应通过：%v", err)
+	}
+	// 负值 fail fast（写 -1 想「关」的人应写 0）。
+	if err := (GuardrailsConfig{ContextWarnTokens: -1}).validate(); err == nil {
+		t.Error("负 context_warn_tokens 应 fail fast")
+	}
+	if err := (GuardrailsConfig{ContextMaxTokens: -1}).validate(); err == nil {
+		t.Error("负 context_max_tokens 应 fail fast")
+	}
+	if err := (GuardrailsConfig{SessionRPM: -1}).validate(); err == nil {
+		t.Error("负 session_rpm 应 fail fast")
+	}
+}

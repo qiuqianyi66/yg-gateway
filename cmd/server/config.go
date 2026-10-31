@@ -85,6 +85,8 @@ type Config struct {
 		DedupMinutes int `json:"dedup_minutes"`
 	} `json:"alerting"`
 
+	Guardrails GuardrailsConfig `json:"guardrails"` // 上下文护栏（0=关零回归）；结构/校验见 config_guardrail.go
+
 	OpsAgent OpsAgentConfig `json:"opsagent"` // 运维 agent（默认关；结构见 config_opsagent.go）
 
 	// Fallback 备用上游级联（P2）：CodeBuddy 账号池全挂（选号耗尽）时，

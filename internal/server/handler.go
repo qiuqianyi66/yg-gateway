@@ -131,6 +131,12 @@ type Config struct {
 	// Drift 协议漂移观测层（P1，可选；nil = 不观测）。
 	// /status 暴露其状态视图；观测 goroutine 在 main 侧启动。
 	Drift *upstream.DriftMonitor
+
+	// Guardrail 上下文护栏（REQ-context-guardrail-2026-10-31 / ADR-019；可选；nil = 关闭）。
+	// 在 chatCompletions 阶段②（deriveSessionKeys）之后、阶段③（提示词改写）之前执行：
+	// 对客户端原始请求估算 prompt token，超 warn 阈值打标 + X-Gateway-Warning 头，
+	// 超 max 阈值 413 拒绝，按 sessKey 1 分钟窗口限流（429）。阈值 0 = 关（零回归）。
+	Guardrail *Guardrail
 }
 
 // FallbackEndpoint 单个 OpenAI 兼容备用端点（R-107 接入模板）。
@@ -208,6 +214,9 @@ type Handler struct {
 	// keyRPM per-key RPM 限流器（P0-3）：每把下游 key 独立 1 分钟窗口计数，
 	// 上限来自 live snapshot 的 key.RPM（热生效）。nil = 不限流。
 	keyRPM *keyRPMGuard
+	// guardrail 上下文护栏（REQ-context-guardrail；nil = 关闭）。在 NewHandler 由
+	// cfg.Guardrail 挂载一次（main 构造并装配阈值），Set* 热生效。
+	guardrail *Guardrail
 	// modelsCache 动态模型目录缓存（10min TTL + 5min 失败负缓存）。**实例字段**而非
 	// 包级全局：每个 NewHandler 自带一份空缓存，用例之间天然隔离（N3，见类型注释）。
 	modelsCache modelsCache
@@ -230,6 +239,7 @@ func NewHandler(cfg Config) *Handler {
 	h := &Handler{cfg: cfg, mux: http.NewServeMux()}
 	h.readonlyRL = cfg.ReadOnlyRateLimit.build()
 	h.keyRPM = newKeyRPMGuard()
+	h.guardrail = cfg.Guardrail
 	h.mux.HandleFunc("POST /v1/chat/completions", h.withAuth(h.chatCompletions))
 	h.mux.HandleFunc("POST /v1/messages", h.withAuth(h.anthropicMessages))
 	h.mux.HandleFunc("POST /v1/messages/count_tokens", h.withAuth(h.countTokens)) // ROADMAP v3 V3-1
@@ -609,6 +619,15 @@ func (h *Handler) status(w http.ResponseWriter, r *http.Request) {
 		body["agent_profile"] = prof
 	}
 
+	// guardrail_stats 上下文护栏命中（REQ-context-guardrail-2026-10-31 / ADR-019）：
+	// 无任何命中时整块省略（与 agent_profile / task_metrics 同源，键缺失 = 未观测，
+	// 不是「零命中」）。估算 vs 上游对照样本（Calibration）随块透出供权重校准。
+	if h.guardrail != nil {
+		if gs := h.guardrail.Snapshot(); gs.WarnHits+gs.BlockedHits+gs.SessionRPMHits > 0 {
+			body["guardrail_stats"] = gs
+		}
+	}
+
 	writeJSON(w, http.StatusOK, body)
 }
 
@@ -748,6 +767,15 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	// releaseHeld 多一次赋空，无副作用。
 	defer run.releaseHeld()
 
+	// 上下文护栏（REQ-context-guardrail-2026-10-31 / ADR-019）：请求前估算 + 双阈值 +
+	// 会话限流。挂点 = 阶段② 之后、阶段③（提示词改写）之前——判定必须针对客户端
+	// 原始请求，且拒绝要便宜（不选号、不打上游、不读改写后 body）。
+	// 实现抽成 applyGuardrail（guardrail.go），HTTP 语义可脱离完整链路独立单测
+	//（同 finalErrorOf 拆分风格）。返回 true = 已写响应（413/429），调用方 return。
+	if h.applyGuardrail(w, r, sessKey, &reqView, run) {
+		return
+	}
+
 	// 阶段③（系统提示词改写 / outbound model 名重写 / 会话头族）已抽到 chatflow.go
 	// 的 prepareOutbound——三件事都在轮转循环之外只做一次，循环内每次出站复用同一
 	// 份 body 与同一组会话头（换号/重试/降级都不发散）。
@@ -774,6 +802,12 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	// 响应再构造一次错误——症状是流式响应 body 正常但 Content-Type 被覆盖成
 	// application/json（行为快照场景 2 抓到的正是这个）。
 	if run.rotateAndServe(w, r, chatMeta) {
+		// 护栏对照校准（REQ-context-guardrail G2/G8）：warn 命中且上游返回实际
+		// prompt_tokens 时补样本——估算 vs 上游 usage 对照，供权重真机校准。
+		// 上游缺失时 st.promptTokens 为 0，不补（unknown 不冒充 0，四态纪律）。
+		if run.guardrailEst > 0 && h.guardrail != nil && st.promptTokens > 0 {
+			h.guardrail.RecordCalibration(run.guardrailEst, st.promptTokens)
+		}
 		return
 	}
 	// P2 fallback：CodeBuddy 账号池全挂（选号耗尽 + 轮转失败）时，
