@@ -809,7 +809,9 @@ func TestRunKeepaliveSkipsDisabledAndNoRefreshToken(t *testing.T) {
 // （400，非瞬时）时：该号**已有的到期快照必须原样保留**（不得被零值覆盖），
 // 且不影响同批其他账号的刷新。
 func TestRunBalanceRefreshErrorKeepsSnapshotAndOtherAccounts(t *testing.T) {
-	expiry := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
+	// earliestAt 必须在未来：SetCreditsDetailed 会把"不在未来"的日期清空。
+	// 用相对未来时间，避免硬编码日期随日历过期（时间炸弹）。
+	expiry := time.Now().Add(48 * time.Hour).UTC()
 	stub, s := schedulerNewCoverStub(t, schedulerCoverAuth("bad"), schedulerCoverAuth("good"))
 	stub.resourceFailUID = "bad"
 	stub.pool.SetCreditsDetailed("bad", 42, 100, 7, expiry, 7)
