@@ -35,9 +35,11 @@ P1/P2 的成就带、趋势平滑都依赖 P0 打下的动效基座（setCount �
    mask，`--ring` 百分比由 JS 写）、`#confetti` 覆盖层、`.streak` 连续天数条。
    **独立 CSS 文件而非内联进 index.html**：index.html 已超深度棘轮（maxFrontendLines 只许收紧），
    动效样式拆出既减负又可整体回滚；CSP `style-src 'self' 'unsafe-inline'` 已含 'self'，无需放宽。
-3. `index.html`：`<link rel="stylesheet" href="gamify.css">`（与 `<style>` 同行，守住棘轮）、
-   `<script src="app_views_gamify.js">`（并入 app_views_tasks.js 同行，守住棘轮；排在 app.js 前）、
-   hero 积分卡加 `hero-ring` class 与 `id="statCredits"`、`.stat` 规则补 `position: relative`。
+3. `index.html`：hero 积分卡加 `hero-ring` class 与 `id="statCredits"`、`.stat` 规则补
+   `position: relative`。**资源标签不手写**：head 与 body 尾部为 `<!--panel-styles-->` /
+   `<!--panel-scripts-->` 占位符，`gamify.css` / `app_views_gamify.js` 登记进 `panelStyles` /
+   `panelScripts` 清单，由 `renderIndexHTML()` 展开（并行改造 `.harness/changes/
+   2026-11-03-panel-asset-registry/`，消除「组件数增长吃页面骨架行数」的结构性缺陷）。
    streak/confetti 容器由 JS 创建（HTML 骨架保持最小）。
 4. `app.js`：`toast()` 加 `.tst-ic` SVG 形符（✓/✗/•，aria-hidden，颜色只是第二通道）；签到成功
    （accBody 委托 checkin 分支）、任务领取成功（taskBody 委托 claim 分支）、添加账号成功三处挂
@@ -46,8 +48,10 @@ P1/P2 的成就带、趋势平滑都依赖 P0 打下的动效基座（setCount �
    sCooling/sDisabled/sPaused/sCredits/sSticky/sTodayReq；sTodayTok 保留直接赋值——fmtTok 是小数
    带后缀，整数前缀滚动会制造「1.2k→1.5k」的假中间值）；`#statCredits` 写 `--ring` 百分比
    （totSum≤0 时留空，不臆造占比）。
-6. 资源管线（复用 2026-11-02 组件库拆分先例）：`index.go` 加 `//go:embed gamify.css` 与
-   `//go:embed app_views_gamify.js` + 两个 handler；`panel.go` routes() 加两条注册。
+6. 资源管线：`index.go` 加 `//go:embed gamify.css` / `//go:embed app_views_gamify.js` + 两个
+   handler；`panel.go` routes() 加两条注册；两个文件登记进 `panelStyles`/`panelScripts` 清单
+   （`app_views_gamify.js` 在 `app_views_tasks.js` 之后、`app_views_logs.js` 之前——满足
+   TestComponentLoadOrder：app_views_* 必须在 app.js 之前）。
 7. 测试：`gamify_test.go`（serving 全路由 + embed 非空 + 反查 index.html 不残留游戏化样式）；
    `security_test.go` 静态资源清单补两个新资源。
 
@@ -68,7 +72,8 @@ P1/P2 的成就带、趋势平滑都依赖 P0 打下的动效基座（setCount �
   「连续 N 天」+ 最近 7 日圆点（有操作日高亮）+「本机记录 · …」标注；跨零点后首次动作自动
   续期，今天未操作则从昨天起算。
 - **F6** Given 全部改动，When 跑 `scripts/pre-commit.ps1`，Then 退出码 0；深度棘轮
-  `maxFrontendLines` 未回退（index.html 净零增长：link/script 标签并入既有行，CSS 全拆出）。
+  `maxFrontendLines` 未回退（index.html 只留两个占位符，资源标签全部由清单生成，非空行 1844→1827
+  收紧；`TestIndexHTMLHasNoHandWrittenAssetTags` / `TestIndexHTMLPlaceholdersReplaced` 兜底）。
 
 ## 红线自查
 
@@ -77,4 +82,4 @@ P1/P2 的成就带、趋势平滑都依赖 P0 打下的动效基座（setCount �
 - 反 AI slop：toast 图标用 SVG 形符不用 emoji；无紫渐变；颜色全用现有 CSS 变量。✓
 - reduced-motion：全局规则（index.html:35）+ setCount/celebrate 双重降级。✓
 - R8/依赖方向/R10：未触碰上游协议、依赖表、Go 业务代码。✓
-- 深度棘轮：index.html 非空行 1842 保持（新 link/script 并入既有行；CSS 独立成文件）。
+- 深度棘轮：index.html 只留占位符（资源清单在 Go 侧一处维护），非空行 1844→1827 收紧、未回退。
