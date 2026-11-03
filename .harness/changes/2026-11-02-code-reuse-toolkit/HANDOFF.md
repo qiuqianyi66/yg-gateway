@@ -64,12 +64,19 @@ app_qr.js              144  QR 编码器（唯一排在 app.js 之后的组件�
 
 ## 六、工作区状态（2026-11-03 已拆完，干净）
 
-**两个 feature 已拆成两个提交，工作区 `脏文件=0`**：
+**两个 feature 已拆成两个提交（另有 3 个后续提交），工作区 `脏文件=0`**：
 
 | 提交 | feature | 文件数 |
 |---|---|---|
 | `4fb5639` | `feat(upstream): per-account proxy + 进程级 Session-ID + 11102 三值白名单`（上一轮 ban-risk） | 30 |
 | `48cb585` | `refactor: 代码复用体系（pkg 原语 + 前端组件库 + 代码块库 + 提示词模板）`（本任务） | 72 |
+| `0ba976a` | 交接文档同步（原 §六「必须先拆」已过期） | 1 |
+| `08b41f4` | `test(cmd/server)`: 覆盖率 72.9→74.0%，棘轮 maxFileLines 1089→1070、maxFrontendLines 4378→1842、minCoverage 73.3→74.0 | 5 |
+| `a2d99d5` | `feat(panel)`: 游戏化微动效层 P0 + **资源清单生成式**（index.html 1844→1827，maxFrontendLines 1842→1827） | 15 |
+
+> `a2d99d5` 是不可拆的合并提交：gamify 单独提交会被 `maxFrontendLines` 判红（1844>1842），
+> 资源清单生成式单独提交又会 embed 到不存在的文件。理由与回滚步骤见
+> `.harness/changes/2026-11-03-panel-asset-registry/summary.md`。
 
 ### 拆分要点（下次拆提交照这个来）
 
