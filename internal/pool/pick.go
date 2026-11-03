@@ -194,6 +194,18 @@ func (p *Pool) pick(tried map[string]bool, reqModel, realm, group string, class 
 			return 1, 0
 		}
 		if mc.CostPer1k <= 0 {
+			// 实测免费，但交叉验证目录倍率（global 侧 deepseek-v4.1-flash 实案：
+			// usage 上报 credit 字段缺失被误读为 0，网关误判免费疯狂打流量，
+			// 实际上游已改价收费，440 积分半天耗完）。
+			// 目录说收费而实测说免费 → 矛盾，保守按 tier 2 收费处理，
+			// 宁可少跑免费流量，也不要误判免费快速耗积分。
+			if p.modelRateOf != nil && reqModel != "" {
+				if rate := p.modelRateOf(realm, reqModel); rate != "" {
+					if v, err := strconv.ParseFloat(rate, 64); err == nil && v > 0 {
+						return 2, v
+					}
+				}
+			}
 			return 0, 0
 		}
 		return 2, mc.CostPer1k
