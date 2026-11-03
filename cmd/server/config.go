@@ -935,15 +935,12 @@ func (c *Config) normalize() error {
 	if c.Pool.BreakerThreshold <= 0 {
 		c.Pool.BreakerThreshold = 3
 	}
-	// 连败降权参数缺省归一（非法/未设置回落默认，与 breaker_threshold 同风格）。
+	// 连败降权阈值缺省归一（非法/未设置回落默认，与 breaker_threshold 同风格）。
+	// 注意：degrade_cooldown / degrade_cooldown_max 的空值回落**只在本函数上方一处**
+	// （806-811 段）。此处曾有一份逐字重复的副本——归一后这两个字段不可能是 "",
+	// 故该副本恒不执行（2026-11-03 删除，行为等价；重复段也让覆盖率永远差 2 条）。
 	if c.Pool.DegradeThreshold <= 0 {
 		c.Pool.DegradeThreshold = 5
-	}
-	if c.Pool.DegradeCooldown == "" {
-		c.Pool.DegradeCooldown = "10m"
-	}
-	if c.Pool.DegradeCooldownMax == "" {
-		c.Pool.DegradeCooldownMax = "2h"
 	}
 	// global 在途分档：0/负数视为未设置回落默认 2（WAF 403 修复 P1-1）。
 	if c.Pool.MaxInFlightGlobal <= 0 {

@@ -220,7 +220,7 @@ pre-commit.ps1                                  → 11/11 全过，EXIT=0
 | `.harness/snippets/` 代码块库 | **已完成（第二轮）** | 4 块 + 索引，含"什么时候**不**该用"的判据 |
 | `jsonsafe` 全量迁移（62 处） | **结论修正：不做** | 逐处读过：绝大多数紧跟守卫，已等价于 ok 检查；改口径为"新增必用、存量改到哪迁哪" |
 | 前端组件库（`app.js` 4317 行 → 组件） | **计划已定，待执行** | 前置约束已测绘（29 处测试硬读 `app.js`、≥6 处 `indexOf` 切片）；执行顺序见 [frontend-split-plan.md](frontend-split-plan.md) |
-| `cmd/server` 覆盖率 73.3% → 72.9% | **待补测** | 上一轮 `minRequestInterval` 新增分支缺测试；属那轮改动的收尾，本任务未引入 |
+| `cmd/server` 覆盖率 73.3% → 72.9% | **已完成（2026-11-03）** | 补 9 条归一分支 → **74.0%**；棘轮同步收紧，见下节 |
 | 11102 三值判定**调用分支**的端到端测试 | **待补** | 三值契约有测试（有牙齿），但「目录为空 + 11102 → 仍换号」这条路径没覆盖 |
 | 代理 fail-open 直连（配错时反而用共享 IP 出去） | **待 owner 决策** | 改 fail-closed 会改可用性语义；建议至少让 `/status` 能看出「代理未生效」 |
 | `chatClientFor` 重复 `chatHTTP()` / 每次 11102 复制两次快照 / `sessionID` 每请求新 ID | **未修（属 ban-risk feature）** | 已在 `review.md` 登记 |
@@ -236,3 +236,63 @@ git revert <commit>            # 或 git checkout -- <改动文件>
 
 回滚后需同步：`scripts/check-boundaries.ps1` 的白名单（`pkg` 条目留着无害——未消费的层不会误判）、
 `AGENTS.md` 的两处数字。数据/凭证/配置**零影响**（未动 wire 形状、未动 `auths/`、未动 `config.json`）。
+
+---
+
+## 第三轮（2026-11-03）：覆盖率回补 + 深度棘轮收紧
+
+### 为什么必须先补测再收紧
+
+`scripts/check-depth.ps1` 的 `minCoverage` 取的是**各包最小值**（`Measure-Object -Minimum`，
+0% 的 no-test 包被豁免），带 `0.5` 容差；`-Update` 写的是 `$current` **全量**。
+所以 72.9 对基线 73.3 只是「擦边未判回退」（< 72.8 才拦），`-Update` 会**原样把 72.9 写进基线**
+——棘轮被悄悄放松。正确顺序：先把覆盖率补回基线以上，再 `-Update`。
+
+### 补了什么
+
+新增 `cmd/server/ratelimit_config_test.go`（5 组用例，覆盖此前只有「正常值」路径的分支）：
+
+| 分支 | 位置 | 为什么值得钉 |
+|---|---|---|
+| `min_request_interval` / `_global` 非法时长报错 | `config.go:905` / `:914` | 不报错则非法值被 `ParseDuration` 静默吞成 0 = 特性悄悄关闭（R10） |
+| `min_request_interval` / `_global` 负值钳 0 | `:908` / `:917` | 配置层**出口口径**：导出字段不得带负值（不是唯一防线，见下） |
+| `failure_window` 负值钳 0 | `:898` | 同上；负值语义上等于关闭 |
+| `degrade_cooldown` / `_max` 空串回落默认 | `:806-811` | 空串无法 `ParseDuration`，不回落就 fail fast——「留空」从「用默认」变「启动崩溃」 |
+| `Load` 的第二个 `normalize` 错误出口 | `:624-626` | env 覆盖发生在第一次归一之后，必须再归一一次 |
+| `WriteDefault` 父目录创建失败 | `:673-674` | 父级被普通文件占住时必须报错，否则故障延迟到下次重启 |
+
+覆盖率：`cmd/server` **72.9% → 74.0%**。
+
+### 顺带清掉一处死代码
+
+`config.go` 里 `degrade_cooldown` / `degrade_cooldown_max` 的空值回落写了**两遍**（原 `806-811`
+与 `942-947`）。第二份恒不执行：
+
+- 全仓对这两个字段的赋值只有 `Default():555`、`806-807`、`942-943` 三处；
+- `806` 归一后字段不可能是 `""`，`806 → 942` 之间是直线（只有错误 `return`，无跳转）。
+
+已删除后一份（行为等价），并在原处留注释指向唯一实现。附带效果：这 2 条不可达语句不再永久
+压着覆盖率分母。
+
+### 棘轮收紧结果（`-Update`）
+
+```
++ maxFileLines        1089 → 1070
++ maxFrontendLines    4378 → 1842   （现最大前端文件是 index.html，不是 app.js）
++ minCoverage         73.3 → 74.0
+```
+
+三项**均为变好**，`oversizeFiles 2` / `oversizeFuncs 7` / `oversizeFrontendFiles 2` 不变，
+**无一放松**。
+
+### 诚实边界（别把下面几条读成「已覆盖」）
+
+1. 仍有 **3 条不可测分支**：`crypto/rand.Read` 失败（`:661`）、`json.MarshalIndent` 失败
+   （`:669`）、`f.Write` 失败（`:683`）。三者要测必须给 `WriteDefault` 注入 seam
+   （随机源 / 序列化器 / 写入器），本轮**没做**——它们是 unknown，不是「已覆盖」。
+2. 负值钳位的「牙齿」是**弱**的，测试注释已按实测改写：`pool.minIntervalBlocked` 有
+   `interval <= 0 → return false`（`pick.go:99`），`failureWindowBlocked` 首位是
+   `p.failureWindow > 0`（`pick.go:89`），`Pool.SetMinRequestInterval` 也自钳一次。
+   所以删掉配置层钳位**不会**把选号挂死——钉的是出口口径，属纵深防御。
+3. `minCoverage 74.0` 恰好等于当前实测值，`cmd/server` 是全仓新底线：**给它加生产代码而不加测试
+   会直接撞门禁**（容差 0.5）。这是棘轮本意，但下一轮动 `cmd/server` 时会先看到这条。
