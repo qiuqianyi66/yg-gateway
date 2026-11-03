@@ -65,6 +65,22 @@
     }
   }
 
+  // smoothPath：Catmull-Rom → 三次贝塞尔平滑（P1，2026-11-03）。
+  // 纯视觉插值：数据点位置不变（圆点仍在，observation 可见），曲线不产生新事实。
+  // 返回 SVG path d；不足 2 点返回 null（不画）。
+  function smoothPath(xy) {
+    if (!xy || xy.length < 2) return null;
+    let d = 'M' + xy[0][0].toFixed(1) + ' ' + xy[0][1].toFixed(1);
+    for (let i = 0; i < xy.length - 1; i++) {
+      const p0 = xy[Math.max(0, i - 1)], p1 = xy[i], p2 = xy[i + 1], p3 = xy[Math.min(xy.length - 1, i + 2)];
+      const c1x = p1[0] + (p2[0] - p0[0]) / 6, c1y = p1[1] + (p2[1] - p0[1]) / 6;
+      const c2x = p2[0] - (p3[0] - p1[0]) / 6, c2y = p2[1] - (p3[1] - p1[1]) / 6;
+      d += 'C' + c1x.toFixed(1) + ' ' + c1y.toFixed(1) + ' ' + c2x.toFixed(1) + ' ' +
+           c2y.toFixed(1) + ' ' + p2[0].toFixed(1) + ' ' + p2[1].toFixed(1);
+    }
+    return d;
+  }
+
   function renderTrends(d) {
     const host = $('trChart');
     const days = d.days || [];
@@ -99,7 +115,8 @@
     const rateDays = pts.filter(p => p.rate !== null).length;
     const cn = $('trChartNote');
     if (cn) cn.textContent = days.length + ' 天 · 总请求 ' + total + ' · 平均成功率 ' +
-      (rateDays ? (avgRate / rateDays).toFixed(1) + '%' : '—') + '（无观测天不参与）';
+      (rateDays ? (avgRate / rateDays).toFixed(1) + '%' : '—') + '（无观测天不参与）' +
+      ' · 深绿线 = 3 日均值（derivation）';
     const t2 = $('trNote');
     if (t2) t2.textContent = '归档 ' + (d.window || 0) + ' 条 · ' +
       (d.accounts || []).length + ' 个账号';
@@ -140,15 +157,29 @@
         out += '<circle cx="' + x.toFixed(1) + '" cy="' + yr + '" r="3" fill="var(--warn,#f59e0b)"/>';
       }
     }
-    let prev = null;
-    for (const p of pts) {
-      if (p.rate === null) { prev = null; continue; }
-      const x = xOf(p.t), y = yRate(p.rate);
-      if (prev) out += '<line class="tk" x1="' + prev.x.toFixed(1) + '" y1="' + prev.y.toFixed(1) +
-                       '" x2="' + x.toFixed(1) + '" y2="' + y.toFixed(1) + '" stroke="var(--warn,#f59e0b)" stroke-width="1.6" opacity=".85"/>';
-      prev = { x, y };
+    // 3 日均值线（derivation：移动平均，口径在 trChartNote 标注；不足 3 天的位置跳过）。
+    const ma = [];
+    for (let i = 0; i < pts.length; i++) {
+      if (i < 2) continue;
+      ma.push([xOf(pts[i].t), yReq((pts[i - 2].req + pts[i - 1].req + pts[i].req) / 3)]);
     }
+    const maD = smoothPath(ma);
+    if (maD) out += '<path d="' + maD + '" fill="none" stroke="var(--accent-2,#059669)" stroke-width="1.4" opacity=".55"/>';
 
+    // 成功率曲线：Catmull-Rom 平滑（连续有观测的段内平滑；无观测日断开、不插值——
+    // 四态纪律：无观测 ≠ 任何值）。
+    let seg = [];
+    for (const p of pts) {
+      if (p.rate === null) {
+        const d = smoothPath(seg);
+        if (d) out += '<path d="' + d + '" fill="none" stroke="var(--warn,#f59e0b)" stroke-width="1.6" opacity=".85"/>';
+        seg = [];
+        continue;
+      }
+      seg.push([xOf(p.t), yRate(p.rate)]);
+    }
+    const dLast = smoothPath(seg);
+    if (dLast) out += '<path d="' + dLast + '" fill="none" stroke="var(--warn,#f59e0b)" stroke-width="1.6" opacity=".85"/>';
     const TICKS = Math.min(6, pts.length);
     const used = new Set();
     for (let k = 0; k < TICKS; k++) {

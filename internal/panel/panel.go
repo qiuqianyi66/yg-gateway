@@ -180,6 +180,7 @@ func (p *Panel) routes() {
 	p.mux.HandleFunc("GET /panel/app_views_usage.js", p.appViewsUsageScript)
 	p.mux.HandleFunc("GET /panel/app_views_keys.js", p.appViewsKeysScript)
 	p.mux.HandleFunc("GET /panel/app_views_gamify.js", p.appViewsGamifyScript)
+	p.mux.HandleFunc("GET /panel/app_views_achievements.js", p.appViewsAchievementsScript)
 	p.mux.HandleFunc("GET /panel/app_views_packages.js", p.appViewsPackagesScript)
 	p.mux.HandleFunc("GET /panel/app_views_models.js", p.appViewsModelsScript)
 	p.mux.HandleFunc("GET /panel/app_core.js", p.appCoreScript)

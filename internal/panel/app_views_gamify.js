@@ -90,7 +90,9 @@ function noteStreak() {
   const a = streakLoad();
   if (a[a.length - 1] !== today) a.push(today);
   streakSave(a);
+  noteOp();          // 成就带操作计数（app_views_achievements.js）
   renderStreak();
+  renderAchievements();
 }
 function streakDays() {
   const set = new Set(streakLoad());
@@ -104,7 +106,7 @@ function renderStreak() {
   let el = document.getElementById('streakStrip');
   if (!el) {
     // 容器由 JS 创建（HTML 骨架保持最小，配合深度棘轮对 index.html 只许收紧）
-    const host = document.getElementById('taskscenter');
+    const host = document.getElementById('view-taskscenter');
     const qprog = host && document.getElementById('qProg');
     if (!host) return;
     el = document.createElement('div');

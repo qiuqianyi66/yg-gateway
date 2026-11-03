@@ -1006,6 +1006,7 @@ function refreshVisible() {
 function start() {
   loadOverview(true);
   renderStreak();   // 游戏化层：启动即渲染本机连续操作天数条（含后台切回时重算）
+  renderAchievements(); // 游戏化层：启动即渲染本机成就带（数据同源 localStorage）
   if (refTimer) clearInterval(refTimer);
   // 页面隐藏（切到别的标签页/最小化）时不轮询：此前无视 document.hidden，
   // 后台标签页每 5 秒打一次 overview（日志页还会并发 3 个接口），纯浪费

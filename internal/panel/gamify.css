@@ -44,3 +44,14 @@
 .streak .sl-dots i.on { background: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
 .streak .sl-note { color: var(--ink-3); font-size: 11.5px; margin-left: auto; white-space: nowrap; }
 @media (max-width: 760px) { .streak .sl-note { display: none; } }
+
+/* ④ 成就带（P1，2026-11-03）：本机成就横条。解锁=accent 实底徽章 + 一次性
+   pop 动画（reduced-motion 由 index.html 顶部全局规则关闭）；锁定=灰底虚线。 */
+.ach { display: flex; align-items: center; gap: 8px; padding: 9px 16px; border-bottom: 1px solid var(--line-soft); flex-wrap: wrap; }
+.ach .ach-head { font-size: 12.5px; font-weight: 650; color: var(--ink-2); margin-right: 2px; }
+.ach .ach-item { display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px 3px 4px; border-radius: 999px; background: var(--surface-2); border: 1px dashed var(--line); color: var(--ink-3); font-size: 12px; }
+.ach .ach-item i { width: 20px; height: 20px; border-radius: 50%; background: var(--line); color: var(--ink-3); display: inline-flex; align-items: center; justify-content: center; font-style: normal; font-size: 11px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.ach .ach-item b { font-weight: 500; }
+.ach .ach-item.on { background: var(--accent-soft); border-color: transparent; color: var(--accent-2); }
+.ach .ach-item.on i { background: var(--accent); color: var(--accent-ink); animation: ach-pop .3s ease-out; }
+@keyframes ach-pop { from { transform: scale(.55); } to { transform: scale(1); } }

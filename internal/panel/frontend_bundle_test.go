@@ -228,3 +228,45 @@ func funcsOnly(t *testing.T, src []byte) []byte {
 	}
 	return []byte(out.String())
 }
+
+// TestViewScriptsReferenceExistingDOMIDs 视图脚本里 getElementById 引用的静态 id 必须
+// 存在于下发 HTML，或由脚本自身动态创建（2026-11-03 P1 实测踩坑：renderStreak/
+// renderAchievements 查 'taskscenter'，实际 DOM id 是 'view-taskscenter' → 宿主恒为
+// null、静默 return，连续天数条/成就带从未渲染；frontend_test.go 的 smoke 桩
+// getElementById 恒返回 inert proxy，对这种「id 打错但不报错」的失效完全盲）。
+//
+// 判定：引用 id 既不在 index.html 的 id 属性集合、也不在任何脚本 `.id = '…'`
+// 动态创建的集合里 → 该 getElementById 恒返回 null，静默失效，测试红。
+func TestViewScriptsReferenceExistingDOMIDs(t *testing.T) {
+	getElRe := regexp.MustCompile(`getElementById\(['"]([^'"]+)['"]\)`)
+	idAttrRe := regexp.MustCompile(`id="([^"]+)"`)
+	idAssignRe := regexp.MustCompile(`\.id\s*=\s*['"]([^'"]+)['"]`)
+
+	htmlIDs := map[string]bool{}
+	for _, m := range idAttrRe.FindAllStringSubmatch(string(renderIndexHTML()), -1) {
+		htmlIDs[m[1]] = true
+	}
+	createdIDs := map[string]bool{}
+	for _, name := range scriptFiles(t) {
+		src, err := os.ReadFile(name)
+		if err != nil {
+			t.Fatalf("读 %s 失败: %v", name, err)
+		}
+		for _, m := range idAssignRe.FindAllStringSubmatch(string(src), -1) {
+			createdIDs[m[1]] = true
+		}
+	}
+	for _, name := range scriptFiles(t) {
+		src, err := os.ReadFile(name)
+		if err != nil {
+			t.Fatalf("读 %s 失败: %v", name, err)
+		}
+		for _, m := range getElRe.FindAllStringSubmatch(string(src), -1) {
+			id := m[1]
+			if htmlIDs[id] || createdIDs[id] {
+				continue
+			}
+			t.Errorf("%s 引用不存在的 DOM id %q：既不在 index.html 也不由脚本动态创建（渲染会静默不生效）", name, id)
+		}
+	}
+}

@@ -49,6 +49,9 @@ var appViewsUsageJS []byte
 //go:embed app_views_keys.js
 var appViewsKeysJS []byte
 
+//go:embed app_views_achievements.js
+var appViewsAchievementsJS []byte
+
 //go:embed app_views_gamify.js
 var appViewsGamifyJS []byte
 
@@ -111,6 +114,7 @@ var panelScripts = []string{
 	"app_views_usage.js",
 	"app_views_config.js",
 	"app_views_tasks.js",
+	"app_views_achievements.js",
 	"app_views_gamify.js",
 	"app_views_logs.js",
 	"app.js",
@@ -255,6 +259,18 @@ func (p *Panel) appViewsKeysScript(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	// 忽略：静态资源全量写回，写失败即客户端断连，无可恢复语义（与 appScript 同口径）。
 	_, _ = w.Write(appViewsKeysJS)
+}
+
+// appViewsAchievementsScript 输出成就带组件（P1，2026-11-03）。
+// 加载顺序关键：排在 app.js 之前；gamify.js 的 noteStreak() 运行时调用
+// noteOp()（本文件声明），先定义后使用最稳。只放声明，遵守
+// TestViewsComponentsAreFunctionOnly 白名单；初始渲染由 app.js start() 调用。
+func (p *Panel) appViewsAchievementsScript(w http.ResponseWriter, r *http.Request) {
+	setSecurityHeaders(w)
+	w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	// 忽略：静态资源全量写回，写失败即客户端断连，无可恢复语义（与 appScript 同口径）。
+	_, _ = w.Write(appViewsAchievementsJS)
 }
 
 // appViewsGamifyScript 输出游戏化微动效层组件（P0，2026-11-03）。
