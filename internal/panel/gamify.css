@@ -1,0 +1,46 @@
+/* ── 游戏化微动效层（P0，2026-11-03）──────────────────────────────
+   纯 CSS 零依赖；reduced-motion 由 index.html 顶部全局规则统一关闭。
+   独立文件而非内联进 index.html：index.html 已超 1000 非空行（深度棘轮
+   maxFrontendLines 只许收紧），动效样式独立成文件既给 index.html 减负，
+   也让整个动效层可整体回滚。机制同 app_views_*.js 拆分先例
+   （index.go 逐文件 embed + panel.go 注册路由 + serving 测试）。 */
+
+/* toast 入场动画 keyframes（.tst 上的 animation 属性留在 index.html 规则内）。
+   toast 状态图标：成功/失败的语义不靠颜色单通道，配 SVG 形符（反 AI slop）。 */
+@keyframes tst-in { from { opacity: 0; transform: translateY(6px) scale(.98); } to { opacity: 1; transform: none; } }
+.tst .tst-ic { flex: none; width: 14px; height: 14px; margin-top: 1px; color: var(--ink-3); }
+.tst.ok .tst-ic { color: var(--ok); } .tst.err .tst-ic { color: var(--bad); }
+
+/* ① 积分 hero 卡的角落能量环：--ring 百分比由 app_views_gamify.js 按
+   剩余/总额写入 style；conic-gradient + mask 抠环，明暗主题随 CSS 变量，
+   纯装饰 + 一眼看比例。父卡 position:relative 在 index.html .stat 规则里。 */
+.stat.hero-ring::after {
+  content: ''; position: absolute; right: 12px; top: 50%; transform: translateY(-50%);
+  width: 42px; height: 42px; border-radius: 50%; pointer-events: none;
+  background: conic-gradient(var(--accent) var(--ring, 0%), var(--line-soft) 0);
+  -webkit-mask: radial-gradient(circle, transparent 58%, #000 59%);
+  mask: radial-gradient(circle, transparent 58%, #000 59%);
+  opacity: .45;
+}
+
+/* ② 庆祝彩屑：容器由 celebrate() 动态创建（fixed 覆盖层，pointer-events 透传），
+   26 片 i 元素带 --dx/--dy 自定义属性，CSS 关键帧飞散后由 JS 自清理。 */
+#confetti { position: fixed; inset: 0; pointer-events: none; overflow: hidden; z-index: 999; }
+#confetti i {
+  position: absolute; top: 74%; width: 7px; height: 12px; border-radius: 2px;
+  opacity: 0; animation: confetti-fly .9s ease-out forwards;
+}
+@keyframes confetti-fly {
+  0% { opacity: 1; transform: translate(0, 0) rotate(0deg); }
+  100% { opacity: 0; transform: translate(var(--dx), var(--dy)) rotate(240deg); }
+}
+
+/* ③ 任务中心「本机连续操作天数」条：localStorage 派生展示，UI 文案强制带
+   「本机记录」标注，不冒充上游数据（四态纪律：derivation）。 */
+.streak { display: flex; align-items: center; gap: 10px; padding: 9px 16px; border-bottom: 1px solid var(--line-soft); font-size: 12.5px; }
+.streak .sl-n { font-weight: 650; color: var(--accent); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.streak .sl-dots { display: inline-flex; gap: 4px; align-items: center; }
+.streak .sl-dots i { width: 9px; height: 9px; border-radius: 50%; background: var(--line); flex: none; }
+.streak .sl-dots i.on { background: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
+.streak .sl-note { color: var(--ink-3); font-size: 11.5px; margin-left: auto; white-space: nowrap; }
+@media (max-width: 760px) { .streak .sl-note { display: none; } }

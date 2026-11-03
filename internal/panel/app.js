@@ -93,6 +93,16 @@ function toast(msg, cls) {
   const host = $('toasts');
   const el = document.createElement('div');
   el.className = 'tst ' + (cls || '');
+  // 状态图标（游戏化层）：成功/失败配 SVG 形符，aria-hidden 纯装饰；颜色只是第二通道。
+  const ic = document.createElement('span');
+  ic.className = 'tst-ic';
+  ic.setAttribute('aria-hidden', 'true');
+  ic.innerHTML = cls === 'err'
+    ? '<svg viewBox="0 0 14 14" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3 3l8 8M11 3l-8 8"/></svg>'
+    : cls === 'ok'
+      ? '<svg viewBox="0 0 14 14" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M2.5 7.5 5.5 10.5 11.5 3.5"/></svg>'
+      : '<svg viewBox="0 0 14 14" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="7" cy="7" r="5"/></svg>';
+  el.appendChild(ic);
   const txt = document.createElement('span');
   txt.textContent = msg;
   el.appendChild(txt);
@@ -537,6 +547,7 @@ $('accBody').addEventListener('click', async ev => {
     if (a === 'checkin') {
       const r = await api('accounts/' + encodeURIComponent(u) + '/checkin', { method: 'POST' });
       toast('签到完成' + (r.credits != null ? '，积分 ' + r.credits + (r.credits_total > 0 ? '/' + r.credits_total : '') : '') + (r.checkin_message ? '（' + r.checkin_message + '）' : ''), 'ok');
+      celebrate(); noteStreak();   // 游戏化层：签到成功撒花 + 记本机操作日
     } else if (a === 'balance') {
       const r = await api('accounts/' + encodeURIComponent(u) + '/balance', { method: 'POST' });
       toast('余额已更新：' + r.credits + (r.credits_total > 0 ? ' / ' + r.credits_total : ''), 'ok');
@@ -910,6 +921,7 @@ async function pollLogin() {
       $('addReady').hidden = true;
       $('addDone').hidden = false;
       $('addDone').textContent = '已添加 ' + (r.nickname || r.uid) + (r.realm === 'global' ? '（国际版）' : '') + (r.credits >= 0 ? ' · 积分 ' + r.credits + (r.credits_total > 0 ? '/' + r.credits_total : '') : '') + '，账号已载入池中';
+      celebrate(); noteStreak();   // 游戏化层：入池成功撒花 + 记本机操作日
       setTimeout(() => { closeAdd(); loadOverview(true); }, 1600);
     }
   } catch (e) {
@@ -993,6 +1005,7 @@ function refreshVisible() {
 }
 function start() {
   loadOverview(true);
+  renderStreak();   // 游戏化层：启动即渲染本机连续操作天数条（含后台切回时重算）
   if (refTimer) clearInterval(refTimer);
   // 页面隐藏（切到别的标签页/最小化）时不轮询：此前无视 document.hidden，
   // 后台标签页每 5 秒打一次 overview（日志页还会并发 3 个接口），纯浪费
@@ -1110,7 +1123,7 @@ $('taskBody').addEventListener('click', async ev => {
       const body = kind === 'claim' ? { task_code: code } : { task_codes: [code] };
       await api(path, { method: 'POST', body: JSON.stringify(body) });
       toast(kind === 'claim' ? '已领取奖励' : '已接受任务', 'ok');
-      if (kind === 'claim') loadOverview(true);
+      if (kind === 'claim') { loadOverview(true); celebrate(); noteStreak(); }   // 游戏化层：领取成功撒花 + 记本机操作日
     }
   } catch (e) { toast(e.message, 'err'); }
   finally { loadTasks(); }

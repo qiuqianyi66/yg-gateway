@@ -6,7 +6,7 @@
                     "oversizeFiles":  2,
                     "oversizeFuncs":  7,
                     "minCoverage":  74,
-                    "maxFrontendLines":  1842,
+                    "maxFrontendLines":  1827,
                     "oversizeFrontendFiles":  2
                 }
 }

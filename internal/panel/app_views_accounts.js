@@ -193,16 +193,24 @@ async function loadOverview(quiet) {
     overviewData = d;
     // F6：key RPM 实况槽就地刷新（每 5s 轮询路径，不整表重渲）。
     refreshRpmLive(d.key_rpm);
-    $('sTotal').textContent = d.total;
-    $('sHealthy').textContent = d.healthy;
-    $('sCooling').textContent = d.cooling;
-    $('sDisabled').textContent = d.disabled;
+    // 统计卡数字滚动（游戏化层 setCount）：整数前缀滚上去，其余文本原样保留；
+    // reduced-motion / 无 rAF 环境自动降级为直接落值。
+    setCount('sTotal', d.total);
+    setCount('sHealthy', d.healthy);
+    setCount('sCooling', d.cooling);
+    setCount('sDisabled', d.disabled);
     // 暂停选号单列（issue #125）：只关选号、照常签到保活，与禁用不同。
-    if ($('sPaused')) $('sPaused').textContent = d.paused == null ? '-' : d.paused;
+    if ($('sPaused')) setCount('sPaused', d.paused == null ? '-' : d.paused);
     const remSum = (d.accounts || []).reduce((a, s) => a + (s.credits || 0), 0);
     const totSum = (d.accounts || []).reduce((a, s) => a + (s.credits_total || 0), 0);
-    $('sCredits').textContent = totSum > 0 ? remSum + ' / ' + totSum : remSum;
-    $('sSticky').textContent = d.sticky_sessions;
+    setCount('sCredits', totSum > 0 ? remSum + ' / ' + totSum : remSum);
+    // 能量环：积分占比一眼可见。总额缺失（含不限量账号）时占比未知，环留空不臆造。
+    const ringEl = $('statCredits');
+    if (ringEl) {
+      const pct = totSum > 0 ? Math.min(100, Math.round(remSum / totSum * 100)) : 0;
+      ringEl.style.setProperty('--ring', pct + '%');
+    }
+    setCount('sSticky', d.sticky_sessions);
     // 粘性会话详情列表：join accounts 数据显示昵称 + 成本层级。
     const sl = d.sticky_list || [];
     const stickyBox = $('stickyBox'), stickyList = $('stickyList');
@@ -251,7 +259,7 @@ async function loadOverview(quiet) {
     (async () => {
       try {
         const u = await api('usage?hours=24');
-        if ($('sTodayReq')) $('sTodayReq').textContent = Number(u.totals && u.totals.requests || 0);
+        if ($('sTodayReq')) setCount('sTodayReq', Number(u.totals && u.totals.requests || 0));
         if ($('sTodayTok')) $('sTodayTok').textContent = fmtTok(u.totals && u.totals.total_tokens || 0);
       } catch (_) { /* 旁支指标失败不打扰 */ }
     })();

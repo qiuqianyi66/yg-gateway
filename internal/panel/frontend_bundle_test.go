@@ -8,32 +8,81 @@ import (
 	"testing"
 )
 
-// 前端脚本加载顺序的**单一来源**：直接读 index.html 的 <script src>，不手抄。
+// 前端脚本加载顺序的**单一来源**：读面板实际下发的 <script src>，不手抄。
 //
 // 为什么（2026-11-02 前端组件库拆分第 1 步）：此前所有前端测试都硬读 "app.js"，
 // 全包共 26 处引用 + 28 处 `src.indexOf('function x')` 切片。一旦把 app.js 拆成多个
 // 组件文件，这些测试要么读不到源码、要么切片落空——而且**不报错**（空切片仍能跑，
 // 断言变成空转）。所以先把"取源码"这件事收成一个入口，拆分时改这一处即可。
+//
+// 2026-11-03 二次调整：标签改由 index.go 的 panelScripts 生成（index.html 只留
+// `<!--panel-scripts-->` 占位符），因此本入口必须读 renderIndexHTML() 的产物。
+// 若仍读原始 index.html，拿到的会是空清单——所有依赖本入口的测试静默空转。
 var scriptSrcRe = regexp.MustCompile(`<script\s+src="([^"]+)"`)
 
-// scriptFiles 返回 index.html 中同源脚本的加载顺序（相对路径，如 "app.js"）。
+// scriptFiles 返回面板**实际下发**的脚本加载顺序（相对路径，如 "app.js"）。
 //
-// 只取 `<script src="...">`：index.html 被 TestIndexHTMLNoInlineScript 保证无内联脚本，
-// 所以这个列表就是浏览器实际执行的全部脚本，顺序即依赖顺序。
+// 只取 `<script src="...">`：下发页面被 TestIndexHTMLNoInlineScript /
+// TestIndexReferencesExternalScript 保证无内联脚本，所以这个列表就是浏览器实际
+// 执行的全部脚本，顺序即依赖顺序。
 func scriptFiles(t *testing.T) []string {
 	t.Helper()
+	var out []string
+	for _, m := range scriptSrcRe.FindAllStringSubmatch(string(renderIndexHTML()), -1) {
+		out = append(out, m[1])
+	}
+	if len(out) == 0 {
+		t.Fatal("下发页面里没有 <script src>：脚本清单为空（占位符没展开 / 清单被清空，拆分会静默失效）")
+	}
+	return out
+}
+
+// TestIndexHTMLHasNoHandWrittenAssetTags 骨架里不许再手写 <script src> / <link>。
+//
+// 为什么单列：资源清单必须只在 index.go 的 panelScripts / panelStyles 一处维护。
+// 手写标签会立刻复活「加一个组件吃一行 index.html 棘轮额度」的结构性增长——
+// 2026-11-03 加一个 gamify 组件就把 maxFrontendLines 1842 顶成 1844、门禁判红。
+//
+// 牙齿：把任意一条 `<script src="x.js"></script>` 抄回 index.html → 本用例立刻红。
+func TestIndexHTMLHasNoHandWrittenAssetTags(t *testing.T) {
 	raw, err := os.ReadFile("index.html")
 	if err != nil {
 		t.Fatalf("读 index.html 失败: %v", err)
 	}
-	var out []string
-	for _, m := range scriptSrcRe.FindAllStringSubmatch(string(raw), -1) {
-		out = append(out, m[1])
+	body := string(raw)
+	if m := scriptSrcRe.FindStringSubmatch(body); m != nil {
+		t.Errorf("index.html 不应手写 <script src>（发现 %q）：清单只在 index.go panelScripts 维护", m[1])
 	}
-	if len(out) == 0 {
-		t.Fatal("index.html 里没有 <script src>：前端脚本清单为空（拆分会静默失效）")
+	if strings.Contains(body, `<link rel="stylesheet"`) {
+		t.Error("index.html 不应手写 <link rel=stylesheet>：清单只在 index.go panelStyles 维护")
 	}
-	return out
+}
+
+// TestIndexHTMLPlaceholdersReplaced 占位符必须被展开，且展开结果覆盖清单每一项。
+//
+// 占位符改名而 renderIndexHTML 没同步时，strings.Replace 会**静默不替换** →
+// 页面没有任何脚本 → 白屏，而 Go 侧编译与测试全绿（正是本仓最怕的「不报错的失效」）。
+// 所以做双向断言：占位符残留要红，清单项在产物里缺失也要红。
+func TestIndexHTMLPlaceholdersReplaced(t *testing.T) {
+	rendered := string(renderIndexHTML())
+
+	for _, ph := range []string{panelStylesPlaceholder, panelScriptsPlaceholder} {
+		if strings.Contains(rendered, ph) {
+			t.Errorf("下发页面仍残留占位符 %q —— renderIndexHTML 的 Replace 没命中（占位符改名未同步？）", ph)
+		}
+	}
+	for _, name := range panelScripts {
+		want := `<script src="` + name + `"></script>`
+		if !strings.Contains(rendered, want) {
+			t.Errorf("下发页面缺 %s（panelScripts 里有、展开后没有）", want)
+		}
+	}
+	for _, name := range panelStyles {
+		want := `<link rel="stylesheet" href="` + name + `">`
+		if !strings.Contains(rendered, want) {
+			t.Errorf("下发页面缺 %s（panelStyles 里有、展开后没有）", want)
+		}
+	}
 }
 
 // scriptBundle 按加载顺序拼接全部前端脚本源码，供测试做文本检索与切片。
