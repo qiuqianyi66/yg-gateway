@@ -88,11 +88,30 @@ func (p *Pool) pick(tried map[string]bool, reqModel, realm, group string, class 
 	failureWindowBlocked := func(e *entry) bool {
 		return p.failureWindow > 0 && !e.lastErr.IsZero() && now.Sub(e.lastErr) < p.failureWindow
 	}
+	// minIntervalBlocked 主动 RPM 限流（风控规避）：距离上次请求太近的账号跳过，
+	// 避免单账号短时间打太密触发上游风控（真实用户不会每秒发多次请求）。
+	// global 账号阈值更严（国际版风控更敏感）。0 = 关闭（零回归）。
+	minIntervalBlocked := func(e *entry) bool {
+		interval := p.minRequestInterval
+		if e.a.IsGlobal() && p.minRequestIntervalGlobal > 0 {
+			interval = p.minRequestIntervalGlobal
+		}
+		if interval <= 0 {
+			return false
+		}
+		last := e.lastRequestAt.Load()
+		if last == 0 {
+			return false // 从未请求过，不拦
+		}
+		return now.Sub(time.Unix(0, last)) < interval
+	}
 	healthyOf := func(e *entry) bool {
-		return realmOK(e) && !failureWindowBlocked(e) && e.healthy(now)
+		return realmOK(e) && !failureWindowBlocked(e) && !minIntervalBlocked(e) && e.healthy(now)
 	}
 	if reqModel != "" {
-		healthyOf = func(e *entry) bool { return realmOK(e) && !failureWindowBlocked(e) && e.healthyForModel(now, reqModel) }
+		healthyOf = func(e *entry) bool {
+			return realmOK(e) && !failureWindowBlocked(e) && !minIntervalBlocked(e) && e.healthyForModel(now, reqModel)
+		}
 	}
 	// floorBlocked 积分保底拦截判定（实现在 floorBlockedForRealmModel，与粘性路径共用）：
 	// 触底 + 收费（本地实测台账 或 上游目录倍率）即拦；免费/未知倍率不受限。
@@ -428,6 +447,24 @@ func (p *Pool) pickEarliestExpiryLocked(tried map[string]bool, now time.Time, re
 			// 故障窗内号（P0-2）：expiry 零值（无冷却/熔断/降权）但仍在窗内 →
 			// 兜底可见，恢复时刻 = lastErr + 窗。全池窗内时选最早失败者，不 503。
 			exp = e.lastErr.Add(p.failureWindow)
+		}
+		if exp.IsZero() {
+			// 最小请求间隔限流（风控规避）：expiry 零值但仍在间隔窗内 →
+			// 兜底可见，恢复时刻 = lastRequestAt + interval。全池被间隔限制时
+			// 选最早恢复者，不 503（和 failureWindow 同哲学）。
+			interval := p.minRequestInterval
+			if e.a.IsGlobal() && p.minRequestIntervalGlobal > 0 {
+				interval = p.minRequestIntervalGlobal
+			}
+			if interval > 0 {
+				last := e.lastRequestAt.Load()
+				if last > 0 {
+					next := time.Unix(0, last).Add(interval)
+					if next.After(now) {
+						exp = next
+					}
+				}
+			}
 		}
 		if exp.IsZero() {
 			continue

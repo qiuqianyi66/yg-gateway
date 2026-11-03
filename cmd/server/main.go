@@ -195,10 +195,11 @@ func main() {
 	p.SetCreditFloor(cfg.Pool.CreditFloor)               // 积分保底（默认 0 = 关闭）
 	p.SetWeights(cfg.Pool.IdleWeightPerHour, cfg.Pool.IdleWeightMax)
 	p.SetPreferExpiring(cfg.Pool.PreferExpiring)
-	p.SetEwma(cfg.Pool.Ewma.Enabled, cfg.Pool.Ewma.Alpha, cfg.Pool.Ewma.MinSamples) // EWMA 表现回灌（ADR-005 D-502，默认关 = 零回归）
-	p.SetFailureWindow(cfg.FailureWindowDur)                                        // 账号级故障窗（P0-2，默认 30s；0 关闭）
-	p.SetRecentUsageFactor(cfg.Pool.RecentUsageFactor)                              // 近期用量衰减（REQ-routing P2，默认关）
-	p.SetPaceMode(cfg.Pool.PaceMode)                                                // pace 选号（F9，默认关 = 零回归）
+	p.SetEwma(cfg.Pool.Ewma.Enabled, cfg.Pool.Ewma.Alpha, cfg.Pool.Ewma.MinSamples)     // EWMA 表现回灌（ADR-005 D-502，默认关 = 零回归）
+	p.SetFailureWindow(cfg.FailureWindowDur)                                            // 账号级故障窗（P0-2，默认 30s；0 关闭）
+	p.SetMinRequestInterval(cfg.MinRequestIntervalDur, cfg.MinRequestIntervalGlobalDur) // 主动 RPM 限流（风控规避，默认 0 = 关闭）
+	p.SetRecentUsageFactor(cfg.Pool.RecentUsageFactor)                                  // 近期用量衰减（REQ-routing P2，默认关）
+	p.SetPaceMode(cfg.Pool.PaceMode)                                                    // pace 选号（F9，默认关 = 零回归）
 
 	// 会话粘性路由（可配关闭）。
 	var sessRouter *session.Router
@@ -780,9 +781,10 @@ func saveConfig(raw []byte, path string, live *livecfg.Holder, p *pool.Pool, up 
 	p.SetCreditFloor(newCfg.Pool.CreditFloor)               // 积分保底热生效（0 = 关闭）
 	p.SetWeights(newCfg.Pool.IdleWeightPerHour, newCfg.Pool.IdleWeightMax)
 	p.SetPreferExpiring(newCfg.Pool.PreferExpiring)
-	p.SetEwma(newCfg.Pool.Ewma.Enabled, newCfg.Pool.Ewma.Alpha, newCfg.Pool.Ewma.MinSamples) // EWMA 表现回灌热生效（ADR-005 D-502）
-	p.SetFailureWindow(newCfg.FailureWindowDur)                                              // 账号级故障窗热生效（P0-2）
-	p.SetPaceMode(newCfg.Pool.PaceMode)                                                      // pace 选号热生效（F9）
+	p.SetEwma(newCfg.Pool.Ewma.Enabled, newCfg.Pool.Ewma.Alpha, newCfg.Pool.Ewma.MinSamples)  // EWMA 表现回灌热生效（ADR-005 D-502）
+	p.SetFailureWindow(newCfg.FailureWindowDur)                                               // 账号级故障窗热生效（P0-2）
+	p.SetMinRequestInterval(newCfg.MinRequestIntervalDur, newCfg.MinRequestIntervalGlobalDur) // 主动 RPM 限流热生效（风控规避）
+	p.SetPaceMode(newCfg.Pool.PaceMode)                                                       // pace 选号热生效（F9）
 	sch.SetExpiringSoonWindow(newCfg.ExpiringSoonDur)
 	sch.Reconfigure(
 		newCfg.Schedule.CheckinHours, newCfg.Schedule.TravelHours,

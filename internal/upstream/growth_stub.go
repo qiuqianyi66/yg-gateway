@@ -108,7 +108,7 @@ func (c *Client) schoolJSON(a *auth.Auth, method, path string, body map[string]a
 	if a.UID != "" {
 		req.Header.Set("X-User-Id", a.UID)
 	}
-	data, err := c.doJSON(req)
+	data, err := c.doJSON(req, a)
 	if err != nil {
 		return err
 	}

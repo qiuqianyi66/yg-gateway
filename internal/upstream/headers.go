@@ -3,10 +3,12 @@
 package upstream
 
 import (
+	crand "crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"net/http"
 	"strings"
+	"time"
 
 	"yg-gateway/internal/auth"
 	"yg-gateway/internal/session"
@@ -123,7 +125,7 @@ func (c *Client) injectDeviceToken(req *http.Request, a *auth.Auth) {
 //
 // 两个用途：
 //   - purpose="machine" → X-Machine-ID（设备级，跨会话稳定）
-//   - purpose="session" → X-Session-ID（账号固定会话，跨重启稳定）
+//   - purpose="session" → 已弃用，改由 newProcessSessionID() 进程级生成
 //
 // 与 injectDeviceToken 的 X-Device-Token 并存不冲突：那是登录时上游签发的
 // 真实设备令牌（有则发，权威）；本对头是「每账号一台固定虚拟设备」的稳定指纹，
@@ -133,14 +135,37 @@ func deriveAccountStableID(uid, purpose string) string {
 	return hex.EncodeToString(sum[:18]) // 36 hex chars
 }
 
-// injectAccountStableHeaders 在 req 注入 X-Machine-ID / X-Session-ID：按 uid 稳定
-// 派生，跨重启固定、账号间互异。uid 为空时不注入（匿名请求无设备标识，上游不要求）。
+// newProcessSessionID 生成进程级随机 Session-ID（36 hex）。
+// 每次网关启动调用一次，存在 Client.sessionID 字段里，全进程复用。
+// 与账号级固定的 X-Machine-ID 区分：Machine-ID 模拟「同一台设备」（跨重启稳定），
+// Session-ID 模拟「设备上的一次会话」（重启换新，对齐真实客户端行为）。
+func newProcessSessionID() string {
+	var b [18]byte
+	if _, err := crand.Read(b[:]); err != nil {
+		// crypto/rand 失败是系统级故障，理论上不会发生；兜底用时间戳哈希避免空值
+		sum := sha256.Sum256([]byte("wb2a:session:" + time.Now().String()))
+		return hex.EncodeToString(sum[:18])
+	}
+	return hex.EncodeToString(b[:])
+}
+
+// injectAccountStableHeaders 在 req 注入 X-Machine-ID / X-Session-ID：
+//   - X-Machine-ID：按 uid 稳定派生，跨重启固定、账号间互异（模拟一台设备一个号）
+//   - X-Session-ID：进程级随机，重启换新（模拟设备上的一次会话）
+//
+// uid 为空时不注入（匿名请求无设备标识，上游不要求）。
 func (c *Client) injectAccountStableHeaders(req *http.Request, a *auth.Auth) {
 	if a == nil || a.UID == "" {
 		return
 	}
 	req.Header.Set("X-Machine-ID", deriveAccountStableID(a.UID, "machine"))
-	req.Header.Set("X-Session-ID", deriveAccountStableID(a.UID, "session"))
+	sid := c.sessionID
+	if sid == "" {
+		// 测试裸用 Client 未调 New() 时兜底生成（不写回字段，每次调用生成新的——
+		// 测试场景下不追求跨请求一致，只保证头不为空）
+		sid = newProcessSessionID()
+	}
+	req.Header.Set("X-Session-ID", sid)
 }
 
 // CommonHeaders 设置所有 API 共享的请求头。

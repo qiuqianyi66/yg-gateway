@@ -110,6 +110,18 @@ type Client struct {
 	// 缺省 false（反代安全边界）；handler 在 chat 路径按请求把 clientIP 传入 ChatStream。
 	PassthroughIP bool
 
+	// sessionID 进程级 X-Session-ID：每次网关启动生成一次随机 UUID，重启即换。
+	// 与账号级固定的 X-Machine-ID 区分：Machine-ID 模拟「同一台设备」（账号间互异、
+	// 跨重启稳定），Session-ID 模拟「设备上的一次会话」（重启换新，对齐真实客户端
+	// 每次启动生成新会话 ID 的行为）。固定 Session-ID 在上游风控眼里像机器人。
+	sessionID string
+
+	// proxyClients 按 proxyURL 缓存的 per-account HTTP client 池。
+	// 空 key = 直连（用全局 HTTP）；非空 key = 带对应代理的 client。
+	// 用途：切断多账号共用出口 IP 的风控关联。
+	proxyMu      sync.RWMutex
+	proxyClients map[string]*http.Client
+
 	// DeviceToken 设备风控 Token（X-Device-Token 头）全局兜底来源：config upstream.device_token。
 	// 解析优先级：auth.Auth.DeviceToken > DeviceToken（config）> DeviceTokenFile（文件）。
 	DeviceToken string
@@ -134,6 +146,70 @@ type Client struct {
 	GlobalEnabled bool
 }
 
+// clientFor 返回账号对应的 HTTP client（带 per-account proxy 支持）。
+// 账号无 ProxyURL → 返回全局直连 client；有 ProxyURL → 从缓存取对应代理 client。
+//
+// 用途：切断多账号共用出口 IP 的风控关联。
+// 连接池按 proxyURL 隔离：不同代理走不同 transport，互不干扰。
+func (c *Client) clientFor(a *auth.Auth) *http.Client {
+	if a == nil || a.ProxyURL == "" {
+		return c.HTTP
+	}
+	// 先读缓存
+	c.proxyMu.RLock()
+	if pc, ok := c.proxyClients[a.ProxyURL]; ok {
+		c.proxyMu.RUnlock()
+		return pc
+	}
+	c.proxyMu.RUnlock()
+	// 未命中：构造新的代理 client
+	c.proxyMu.Lock()
+	defer c.proxyMu.Unlock()
+	// 双检：可能在等锁时被其他 goroutine 创建了
+	if pc, ok := c.proxyClients[a.ProxyURL]; ok {
+		return pc
+	}
+	tr := newTransportWithProxy(a.ProxyURL)
+	pc := newUpstreamHTTP(120*time.Second, tr)
+	if c.proxyClients == nil {
+		c.proxyClients = make(map[string]*http.Client)
+	}
+	c.proxyClients[a.ProxyURL] = pc
+	return pc
+}
+
+// chatClientFor 返回账号对应的聊天 SSE client（带 per-account proxy 支持）。
+// 与 clientFor 同逻辑，只是用 ChatHTTP 作为直连兜底（无总时长上限）。
+func (c *Client) chatClientFor(a *auth.Auth) *http.Client {
+	if a == nil || a.ProxyURL == "" {
+		// fallback：ChatHTTP 为 nil 时回退到 HTTP（与原 chatHTTP() 方法同逻辑）
+		if c.ChatHTTP != nil {
+			return c.ChatHTTP
+		}
+		return c.HTTP
+	}
+	// 复用 clientFor 的缓存逻辑：key 相同就共享 client 实例
+	// （但 SSE client 无总时长上限，需要单独构造）
+	c.proxyMu.RLock()
+	if pc, ok := c.proxyClients["chat:"+a.ProxyURL]; ok {
+		c.proxyMu.RUnlock()
+		return pc
+	}
+	c.proxyMu.RUnlock()
+	c.proxyMu.Lock()
+	defer c.proxyMu.Unlock()
+	if pc, ok := c.proxyClients["chat:"+a.ProxyURL]; ok {
+		return pc
+	}
+	tr := newTransportWithProxy(a.ProxyURL)
+	pc := newUpstreamHTTP(0, tr)
+	if c.proxyClients == nil {
+		c.proxyClients = make(map[string]*http.Client)
+	}
+	c.proxyClients["chat:"+a.ProxyURL] = pc
+	return pc
+}
+
 // New 生产默认值。Client 由 newUpstreamHTTP 集中构造（共享 newTransport 的连接层
 // 加固：真正禁 h2 / TLS 握手超时 / 短 keepalive 探测 / 失败清池，参数见
 // transport.go——吸收上游 kongjianguan 4 连击实测经验；外加显式重定向策略）。
@@ -151,6 +227,7 @@ func New() *Client {
 	}
 	c.SanitizeFingerprints.Store(true)
 	c.refreshGroup = &refreshGroup{}
+	c.sessionID = newProcessSessionID()
 	return c
 }
 
@@ -317,8 +394,11 @@ func (c *Client) webBase(a *auth.Auth) string {
 // doJSON 发请求并解信封；HTTP 非 2xx 或业务 code != 0 时返回带 body 片段的 *Error。
 // body 读失败（连接中断/空闲掐流/截断）返回普通错误（非 *Error）——半截 body 不进
 // Classify，不参与账号惩罚（传输层故障不该喂熔断误罚号）。
-func (c *Client) doJSON(req *http.Request) (json.RawMessage, error) {
-	resp, err := c.HTTP.Do(req)
+//
+// a 用于 per-account proxy 选择：nil 或无 ProxyURL = 用全局直连 client。
+func (c *Client) doJSON(req *http.Request, a *auth.Auth) (json.RawMessage, error) {
+	httpc := c.clientFor(a)
+	resp, err := httpc.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -470,7 +550,7 @@ func (c *Client) refreshTokenLocked(ctx context.Context, a *auth.Auth) error {
 	c.RefreshHeaders(req, &hdrSnapshot)
 
 	// 网络 I/O（锁外，30s 上限）。
-	data, err := c.doJSON(req)
+	data, err := c.doJSON(req, a)
 	if err != nil {
 		return err
 	}
@@ -577,14 +657,16 @@ func (c *Client) ChatStreamContext(ctx context.Context, a *auth.Auth, body []byt
 		// 同时 monitorBody.Close 仍能独立 cancel 本分支（空闲掐流）。
 		reqCtx, cancel := context.WithCancel(ctx)
 		req = req.WithContext(reqCtx)
-		resp, err := c.chatHTTP().Do(req)
+		// per-account proxy：根据账号的 ProxyURL 选对应的 client（切断多账号 IP 关联）。
+		httpc := c.chatClientFor(a)
+		resp, err := httpc.Do(req)
 		if err != nil {
 			cancel()
 			log.Printf("ERR: [upstream] chat_stream acct=%s: transport error: %v", logfmt.Label(a.UID, a.Nickname), err)
 			// 传输层失败 → 清空共享连接池的空闲连接（连接层加固）：失败连接可能仍
 			// 留在空闲池里，下一个请求会继续捡到它——仅靠 IdleConnTimeout 等过期
 			// 不够，主动清池才断根。
-			roundTripCloseIdle(c.chatHTTP().Transport)
+			roundTripCloseIdle(httpc.Transport)
 			return nil, 0, nil, err
 		}
 		if resp.StatusCode >= 400 {

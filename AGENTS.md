@@ -161,6 +161,10 @@ Unknown 是**一等公民实体**，不是面板上的一个展示区：
 - **动手前先读 `.harness/LESSONS.md`**（会伪造结论的坑清单 + Seen 计数制：同一类坑第 2 次出现
   即升级为规则或机器检查）。它只是**索引**，正文按条目在 `.harness/lessons/`，命中哪条读哪条
 - 本机无 gcc，`-race` 不可用（**由 CI 独占**）；并发正确性靠设计 + 单测保证
+- **手动回归直接跑 `python scripts/yg-regression-test.py`**（S1-S8 全套，默认免费模型零积分，
+  自带假模型负缓存清理；`--skip S4,S8` 跳过危险用例，`--base http://127.0.0.1:7864` 切端口）。
+  **不要手敲 curl 重定向到桌面**；临时手敲的输出落 `artifacts/manual-tests/<时间戳>/`（已 gitignore）。
+  面板 UI 冒烟另见 `e2e/tests/smoke.spec.ts`，与 API 回归不混。
 
 ## 变更追踪
 

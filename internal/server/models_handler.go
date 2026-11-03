@@ -76,6 +76,51 @@ func (c *modelsCache) snapshot() []upstream.ModelInfo {
 	return hit
 }
 
+// modelCatalogVerdict 模型目录对该裸模型名的**三值**判定。
+//
+// 为什么必须是三值而不是 bool（2026-11-02 独立复审 🟡-1）：`false` 同时承载了
+// 「目录里确实没有」与「目录还没拉到」两种语义，而后者是 **unknown**——
+// 用 `!isKnownModel(...)` 当否定判据会在冷启动时把真实模型直接 400 掉
+// （换号本可成功），与 AGENTS.md「禁止用 !field 判否」直接冲突。
+type modelCatalogVerdict int
+
+const (
+	// modelCatalogUnknown 目录为空（刚启动还没拉到 / 拉取失败）：什么都不能断言。
+	modelCatalogUnknown modelCatalogVerdict = iota
+	// modelCatalogAbsent 目录非空且不含该模型：确定客户端拼错了。
+	modelCatalogAbsent
+	// modelCatalogKnown 目录非空且含该模型。
+	modelCatalogKnown
+)
+
+// modelCatalogVerdict 判定裸模型名在已知动态目录里的状态（三值见上）。
+//
+// 消费方口径：
+//   - modelCatalogKnown   → 可写负缓存（确定在目录里）
+//   - modelCatalogAbsent  → 可 fail-fast（换任何号都会错）
+//   - modelCatalogUnknown → 两者都不许做（继续尝试 / 不缓存）
+func (h *Handler) modelCatalogVerdict(bareModel string) modelCatalogVerdict {
+	snap := h.modelsCache.snapshot()
+	if len(snap) == 0 {
+		return modelCatalogUnknown
+	}
+	for _, m := range snap {
+		_, bare := resolveModel(m.ID)
+		if bare == bareModel {
+			return modelCatalogKnown
+		}
+	}
+	return modelCatalogAbsent
+}
+
+// isKnownModel 报告裸模型名是否**确定**在已知动态目录里。
+//
+// 用途：11102 负缓存白名单——只有确定在目录里才写负缓存。unknown 一律 false，
+// 调用方若要区分"确定没有"与"不知道"，用 modelCatalogVerdict。
+func (h *Handler) isKnownModel(bareModel string) bool {
+	return h.modelCatalogVerdict(bareModel) == modelCatalogKnown
+}
+
 // noteFail 记一次拉取失败（进 5min 负缓存）。
 func (c *modelsCache) noteFail() {
 	c.mu.Lock()

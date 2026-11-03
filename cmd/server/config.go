@@ -11,8 +11,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	"yg-gateway/internal/prompt"
 )
 
 // ModelPrice 一个模型的 OpenRouter 美元参考价（$/1M tokens）。纯展示层。
@@ -317,6 +315,14 @@ type Config struct {
 		DeviceTokenFile string `json:"device_token_file"`
 		// PassthroughIP 是否透传客户端 IP 给上游（默认 false，反代安全边界）。
 		PassthroughIP bool `json:"passthrough_ip"`
+		//
+		// 已知风控风险（架构级，配置无法解决）：
+		// 多账号共用同一出口 IP。4 个账号的请求全部从网关机器同一个 IP 发出，
+		// 上游风控很容易关联「这个 IP 上有 N 个账号在同时活动」。
+		// 缓解方案：
+		//   1. 给每个账号配不同的 HTTP 代理出口（需开发 per-account proxy 支持）
+		//   2. 分散账号的请求时间，不要同时打满
+		//   3. 保持行为自然（Session-ID 进程随机、Machine-ID 账号固定，已实现）
 	} `json:"upstream"`
 
 	Features struct {
@@ -396,6 +402,14 @@ type Config struct {
 		// 不受影响），防止抖动号被连续打。默认 "30s"；"0" 关闭（零回归）。
 		// 字段热生效（SetFailureWindow），改配置无需重启。
 		FailureWindow string `json:"failure_window"`
+		// MinRequestInterval 单账号最小请求间隔（主动 RPM 限流，风控规避）。
+		// 选号时距上次请求小于该间隔则跳过该账号——避免单账号短时间打太密
+		// 触发上游风控（真实用户不会每秒发多次请求）。
+		// global 域用 min_request_interval_global 分档（国际版风控更敏感）。
+		// 默认 "0" = 关闭（零回归）。建议 CN 配 "1500ms"、global 配 "3s"。
+		// 字段热生效（SetMinRequestInterval），改配置无需重启。
+		MinRequestInterval       string `json:"min_request_interval"`
+		MinRequestIntervalGlobal string `json:"min_request_interval_global"`
 	} `json:"pool"`
 
 	SessionSticky struct {
@@ -418,11 +432,14 @@ type Config struct {
 	// BreakerProbeGapDur 解析后的 half-open 试探间隔（ADR-003 D-400）；0 = 关闭。
 	BreakerProbeGapDur time.Duration `json:"-"`
 	// FailureWindowDur 解析后的账号级故障窗（P0-2）；0 = 关闭。
-	FailureWindowDur    time.Duration `json:"-"`
-	DegradeCooldownDur  time.Duration `json:"-"`
-	DegradeCooldownMaxD time.Duration `json:"-"`
-	SessionTTL          time.Duration `json:"-"`
-	SessionGCInterval   time.Duration `json:"-"`
+	FailureWindowDur time.Duration `json:"-"`
+	// MinRequestIntervalDur 解析后的单账号最小请求间隔（风控规避）；0 = 关闭。
+	MinRequestIntervalDur       time.Duration `json:"-"`
+	MinRequestIntervalGlobalDur time.Duration `json:"-"`
+	DegradeCooldownDur          time.Duration `json:"-"`
+	DegradeCooldownMaxD         time.Duration `json:"-"`
+	SessionTTL                  time.Duration `json:"-"`
+	SessionGCInterval           time.Duration `json:"-"`
 	// SessionStickyDerive 解析后的内容派生会话键开关（默认 true）。
 	SessionStickyDerive    bool          `json:"-"`
 	BalanceRefreshInterval time.Duration `json:"-"` // 0 = 不启动（enabled=false）
@@ -880,6 +897,26 @@ func (c *Config) normalize() error {
 	if c.FailureWindowDur < 0 {
 		c.FailureWindowDur = 0
 	}
+	// 最小请求间隔（主动 RPM 限流，风控规避）：空值回落默认 "0"（关闭，零回归）。
+	// "0" 显式关闭；负值钳 0（= 关闭）。global 分档为空则回落主值。
+	if c.Pool.MinRequestInterval == "" {
+		c.Pool.MinRequestInterval = "0"
+	}
+	if c.MinRequestIntervalDur, err = time.ParseDuration(c.Pool.MinRequestInterval); err != nil {
+		return fmt.Errorf("pool.min_request_interval: %w", err)
+	}
+	if c.MinRequestIntervalDur < 0 {
+		c.MinRequestIntervalDur = 0
+	}
+	if c.Pool.MinRequestIntervalGlobal == "" {
+		c.Pool.MinRequestIntervalGlobal = "0"
+	}
+	if c.MinRequestIntervalGlobalDur, err = time.ParseDuration(c.Pool.MinRequestIntervalGlobal); err != nil {
+		return fmt.Errorf("pool.min_request_interval_global: %w", err)
+	}
+	if c.MinRequestIntervalGlobalDur < 0 {
+		c.MinRequestIntervalGlobalDur = 0
+	}
 	// 积分保底：负值钳 0（= 关闭）。0 是合法默认（关闭），无需空值回落。
 	if c.Pool.CreditFloor < 0 {
 		c.Pool.CreditFloor = 0
@@ -982,62 +1019,5 @@ func (c *Config) normalize() error {
 	return c.normalizePrompt()
 }
 
-// normalizePrompt 校验 prompt.mode 并按 file 加载提示词文本（custom/append 模式）。
-//
-// mode 非法（非 passthrough/custom/append）启动报错，避免静默回落到某一分支；
-// custom/append 模式下 file 非空但不可读 → 报错（fail fast），file 空 → 用内置默认
-// （两模式共用同一加载路径，PromptText 均非空）。
-// passthrough 模式不加载文本（透传客户端原始 system，文本在降级时用 prompt.Degraded）。
-func (c *Config) normalizePrompt() error {
-	switch m := strings.ToLower(strings.TrimSpace(c.Prompt.Mode)); m {
-	case "", "passthrough":
-		c.Prompt.Mode = "passthrough"
-	case "custom":
-		c.Prompt.Mode = "custom"
-	case "append":
-		c.Prompt.Mode = "append"
-	default:
-		return fmt.Errorf("prompt.mode: %q 不是合法值（passthrough / custom / append）", c.Prompt.Mode)
-	}
-	if c.Prompt.Mode == "custom" || c.Prompt.Mode == "append" {
-		text, err := prompt.Load(c.Prompt.Mode, c.Prompt.File)
-		if err != nil {
-			return err
-		}
-		c.PromptText = text
-	}
-	return nil
-}
-
-// validateScheduleHours 校验排程小时落在 0-23。
-//
-// 为什么不用 `[-1]` 之类的哨兵值表意"禁用"：非法小时被静默吞掉时，用户以为关掉了签到，
-// 实际可能被当成另一个整点照常执行；这里直接快速失败，并在错误信息里指向正确的开关
-// （checkin_enabled / keepalive_enabled），避免用户靠猜哨兵值来配。
-func (c *Config) validateScheduleHours() error {
-	if err := checkHourRange("schedule.checkin_hours", "checkin_enabled", c.Schedule.CheckinHours); err != nil {
-		return err
-	}
-	if err := checkHourRange("schedule.travel_hours", "travel_enabled", c.Schedule.TravelHours); err != nil {
-		return err
-	}
-	if err := checkHourRange("schedule.activity_hours", "activity_enabled", c.Schedule.ActivityHours); err != nil {
-		return err
-	}
-	if err := checkHourRange("schedule.keepalive_hours", "keepalive_enabled", c.Schedule.KeepaliveHours); err != nil {
-		return err
-	}
-	if err := checkHourRange("schedule.blackcat_hours", "blackcat_enabled", c.Schedule.BlackcatHours); err != nil {
-		return err
-	}
-	return checkHourRange("schedule.growth_hours", "growth_enabled", c.Schedule.GrowthHours)
-}
-
-func checkHourRange(field, switchKey string, hours []int) error {
-	for _, h := range hours {
-		if h < 0 || h > 23 {
-			return fmt.Errorf("%s: %d 不是合法小时（0-23）；如要关闭该任务请设 schedule.%s=false", field, h, switchKey)
-		}
-	}
-	return nil
-}
+// normalizePrompt / validateScheduleHours / checkHourRange 已机械拆到 config_prompt.go
+// （2026-11-02：本文件非空行越过深度棘轮阈值 1000，整块搬走零行为变化）。

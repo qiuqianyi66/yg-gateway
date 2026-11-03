@@ -971,7 +971,13 @@ func (h *Handler) applyErrorPolicy(uid string, kind upstream.ErrKind, body, mode
 		// 11102「该后端无此模型」：(账号, 模型) 负缓存避让。复用 modelCooldowns 机制
 		// （与 6004 同域），选号侧 healthyForModel 对该账号自动避开该模型。
 		// 立即换号（本轮 continue），该账号该模型冷却，下次选号避开。
-		h.cfg.Pool.BlockModelBackoff(uid, model, upstream.ModelBlockReason)
+		//
+		// 白名单：模型名不在已知目录里（客户端拼错了），不写负缓存——
+		// 这种情况换任何号都会错，缓存只是浪费槽位（还会污染面板，
+		// 比如测试发了一个 nonexistent-model-xyz 就锁 6h）。
+		if h.isKnownModel(model) {
+			h.cfg.Pool.BlockModelBackoff(uid, model, upstream.ModelBlockReason)
+		}
 	default:
 		// 其余（ErrClient/ErrNone）：只换号不罚（防雪崩），不喂熔断。
 		// ErrClient（未知 4xx）喂连败计数（issue #114）：连续 N 次该形态失败 →

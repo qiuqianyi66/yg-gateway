@@ -652,6 +652,49 @@ const (
 	errHandled                   // 响应已写完，调用方 return true
 )
 
+// handleTransportError 传输层错误（非 *upstream.Error）的两分支处置：上游超时/停滞
+// 直接止损（不换号、不罚号），网络层抖动换号但不喂熔断。
+//
+// 从 handleErrorPath 机械拆出（2026-11-02：该函数代码行 121 越过深度棘轮阈值 120）。
+// 判定顺序、注释与副作用（recordAttempt / lastErr / status / NoteFailures / fail）
+// 原样保留，调用方只看返回值决定控制流。
+func (run *chatRun) handleTransportError(r *http.Request, acct *auth.Auth, terr error, i int, attemptStarted time.Time) errOutcome {
+	h := run.h
+	st := run.st
+	// 上游超时 / 停滞：**不换号、不罚号**。
+	//
+	// 超时不是账号的问题：同一份请求换到别的号，撞上的是同一个慢上游，
+	// 只会把客户端拖到 MaxRotate × header_timeout（部署值 600s 时最坏
+	// 约半小时），期间还给一串健康号喂连败计数。此前全仓没有任何超时
+	// 识别，超时和"网络抖动"共用同一条换号路径。
+	//
+	// 判定三态：net.Error.Timeout()（ResponseHeaderTimeout / Client.Timeout）、
+	// 显式 deadline（DeadlineExceeded / os.ErrDeadlineExceeded）、以及
+	// **客户端仍在但 ctx 被取消**——那只能是我们自己的空闲看门狗掐的流，
+	// 也就是上游停滞。客户端主动断连时 r.Context() 已取消，走下面的抖动分支。
+	if isUpstreamTimeout(terr, r.Context().Err() != nil) {
+		run.recordAttempt(acct.UID, pool.TokenUsageDelta{}, 0, false, attemptStarted, 0)
+		st.status = http.StatusServiceUnavailable
+		run.lastErr = fmt.Errorf("%w: %v", errUpstreamTimeout, terr)
+		log.Printf("WARN: [server] upstream timeout acct=%s: %v (rotation stopped, account not penalized)",
+			logfmt.Label(acct.UID, acct.Nickname), terr)
+		return errAbort
+	}
+	// 网络层抖动：只换号，不喂熔断计数（传输层错误对连续失败连坐熔断过于严苛）。
+	// 连败兜底（issue #114）：喂连败计数——连不上上游是「不知道原因的失败」，
+	// 连败 N 次临时出池，单次/偶发不罚（NoteFailures 内部达阈才动作）。
+	// 上游 client 已打 transport error 日志。
+	run.recordAttempt(acct.UID, pool.TokenUsageDelta{}, 0, false, attemptStarted, 0)
+	st.status = http.StatusServiceUnavailable
+	run.lastErr = terr
+	h.cfg.Pool.NoteFailures(acct.UID)
+	run.fail(acct.UID)
+	if !rotateBackoff(i, r.Context()) {
+		return errAbort
+	}
+	return errRetry
+}
+
 // handleErrorPath 传输层错误与上游 4xx/5xx 的分类与处置。
 //
 // 副作用写 run/st（lastErr / status / outcome），调用方只需看返回值决定控制流。
@@ -665,38 +708,7 @@ func (run *chatRun) handleErrorPath(w http.ResponseWriter, i int, r *http.Reques
 		status = uerr.Status
 	}
 	if uerr == nil && terr != nil {
-		// 上游超时 / 停滞：**不换号、不罚号**。
-		//
-		// 超时不是账号的问题：同一份请求换到别的号，撞上的是同一个慢上游，
-		// 只会把客户端拖到 MaxRotate × header_timeout（部署值 600s 时最坏
-		// 约半小时），期间还给一串健康号喂连败计数。此前全仓没有任何超时
-		// 识别，超时和"网络抖动"共用同一条换号路径。
-		//
-		// 判定三态：net.Error.Timeout()（ResponseHeaderTimeout / Client.Timeout）、
-		// 显式 deadline（DeadlineExceeded / os.ErrDeadlineExceeded）、以及
-		// **客户端仍在但 ctx 被取消**——那只能是我们自己的空闲看门狗掐的流，
-		// 也就是上游停滞。客户端主动断连时 r.Context() 已取消，走下面的抖动分支。
-		if isUpstreamTimeout(terr, r.Context().Err() != nil) {
-			run.recordAttempt(acct.UID, pool.TokenUsageDelta{}, 0, false, attemptStarted, 0)
-			st.status = http.StatusServiceUnavailable
-			run.lastErr = fmt.Errorf("%w: %v", errUpstreamTimeout, terr)
-			log.Printf("WARN: [server] upstream timeout acct=%s: %v (rotation stopped, account not penalized)",
-				logfmt.Label(acct.UID, acct.Nickname), terr)
-			return errAbort
-		}
-		// 网络层抖动：只换号，不喂熔断计数（传输层错误对连续失败连坐熔断过于严苛）。
-		// 连败兜底（issue #114）：喂连败计数——连不上上游是「不知道原因的失败」，
-		// 连败 N 次临时出池，单次/偶发不罚（NoteFailures 内部达阈才动作）。
-		// 上游 client 已打 transport error 日志。
-		run.recordAttempt(acct.UID, pool.TokenUsageDelta{}, 0, false, attemptStarted, 0)
-		st.status = http.StatusServiceUnavailable
-		run.lastErr = terr
-		h.cfg.Pool.NoteFailures(acct.UID)
-		run.fail(acct.UID)
-		if !rotateBackoff(i, r.Context()) {
-			return errAbort
-		}
-		return errRetry
+		return run.handleTransportError(r, acct, terr, i, attemptStarted)
 	}
 	if status >= 400 {
 		run.recordAttempt(acct.UID, pool.TokenUsageDelta{}, 0, false, attemptStarted, 0)
@@ -790,6 +802,29 @@ func (run *chatRun) handleErrorPath(w http.ResponseWriter, i int, r *http.Reques
 			st.status = http.StatusBadRequest
 			st.outcome = reqlog.OutcomeHTTPError
 			return errHandled
+		}
+		// 模型不存在（11102）：只有**确定**模型名不在已知目录里（客户端拼错）才 fail-fast
+		// ——换任何号都会错，和 11101 同一哲学：直接透传 4xx，不换号重试，也不写负缓存
+		// （拼错的模型名不该占缓存槽位、污染面板）。
+		//
+		// 三值纪律（2026-11-02 独立复审 🟡-1）：目录为空 = **unknown**（刚启动还没拉到 /
+		// 拉取失败），不得当成"模型不存在"。旧写法 `!isKnownModel(...)` 会在冷启动时把一个
+		// 真实模型（换号本可成功）直接 400 掉，与 isKnownModel 自己的注释意图相反。
+		if kind == upstream.ErrModelBlocked {
+			// 只有"目录非空且确实没有"才 fail-fast；unknown（目录为空）继续换号尝试。
+			if h.modelCatalogVerdict(bareModel) == modelCatalogAbsent {
+				h.applyErrorPolicy(acct.UID, kind, string(respBody), bareModel, uerr)
+				run.fail(acct.UID)
+				msg := string(respBody)
+				if strings.TrimSpace(msg) == "" {
+					msg = "model not found"
+				}
+				writeOpenAIErrorHint(w, http.StatusBadRequest, "model_not_found", msg,
+					h.hintOf(upstream.ErrModelBlocked, string(respBody), bareModel, run.hasImage(), uerr))
+				st.status = http.StatusBadRequest
+				st.outcome = reqlog.OutcomeHTTPError
+				return errHandled
+			}
 		}
 		// lastErr 携带完整 body（uerr.Msg 在 upstream 侧截断 200 字符，透传语义
 		// 要求原文全量）+ Kind/RetryAfter（末端映射与冷却时长共用）。

@@ -13,6 +13,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"golang.org/x/net/proxy"
 )
 
 // 连接层参数集中定义（与 server/backoff.go 同风格：一处定义，测试可回读断言）。
@@ -75,8 +77,45 @@ func newDialer() *net.Dialer {
 //   - TCP 层：DialContext 10s 建连上限 + 15s keepalive 探测，半开连接在建立期
 //     和复用期都能被快速识别（见 dialTimeout/dialKeepAlive 注释）。
 func newTransport() *http.Transport {
+	return newTransportWithProxy("")
+}
+
+// redactProxyURL 抹掉代理 URL 里的 userinfo（`user:pass@`），只保留 scheme://host。
+//
+// 为什么必须抹（2026-11-02 独立复审 🔴-1，R1/R2 红线）：ProxyURL 按设计就是含凭据的
+// 形态（见 internal/auth/auth.go 的注释示例 `http://user:pass@proxy:8080`），原样打进
+// WARN 日志等于把账号代理密码写进 stderr / 日志文件，而运维巡检与归档都会读它。
+//
+// 解析失败时**连原文都不能打**：此时无法判断是否含 userinfo，一律按"可能含凭据"处理。
+func redactProxyURL(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		if strings.Contains(raw, "@") {
+			return "<代理 URL 解析失败且含 userinfo，已隐去>"
+		}
+		return raw
+	}
+	if u.User == nil {
+		return raw
+	}
+	u.User = nil // String() 会省掉 userinfo 段
+	return u.String()
+}
+
+// newTransportWithProxy 构造带 HTTP/SOCKS5 代理的出站 Transport。
+// proxyURL 为空 = 直连（与 newTransport 等价）。
+//
+// 支持的代理 scheme：
+//   - http:// 或 https:// → HTTP 代理（CONNECT 隧道）
+//   - socks5:// → SOCKS5 代理
+//
+// 用途：per-account 代理出口，切断多账号共用 IP 的风控关联。
+// 每个不同的 proxyURL 对应一个独立的 Transport 实例（连接池隔离）。
+//
+// 日志纪律：本函数只打印 redactProxyURL(proxyURL)——绝不打印含 userinfo 的原文（R1/R2）。
+func newTransportWithProxy(proxyURL string) *http.Transport {
 	dialer := newDialer()
-	return &http.Transport{
+	tr := &http.Transport{
 		DialContext: dialer.DialContext,
 		// 空 TLSNextProto（非 nil）真正禁 h2：见函数注释。必须 make 而非 nil——
 		// nil 表示「让标准库注入默认 h2 映射」（kongjianguan 实测：设
@@ -88,6 +127,41 @@ func newTransport() *http.Transport {
 		IdleConnTimeout:       idleConnTimeout,
 		ResponseHeaderTimeout: responseHeaderTimeout,
 	}
+	if proxyURL == "" {
+		return tr
+	}
+	u, err := url.Parse(proxyURL)
+	if err != nil {
+		log.Printf("WARN: [upstream] 代理 URL 解析失败，回退直连: %s (%v)", redactProxyURL(proxyURL), err)
+		return tr
+	}
+	switch u.Scheme {
+	case "http", "https":
+		// HTTP 代理：用 Transport.Proxy 方式
+		tr.Proxy = http.ProxyURL(u)
+	case "socks5", "socks5h":
+		// SOCKS5 代理：用 x/net/proxy 构造 Dialer
+		// 变量名 socksAuth 而非 auth：本仓大量文件 import yg-gateway/internal/auth，
+		// 同名局部变量会遮蔽包名（独立复审 🔵-2）。
+		socksAuth := &proxy.Auth{}
+		if u.User != nil {
+			socksAuth.User = u.User.Username()
+			// 忽略：URL 未带密码时 Password() 返回空串+nil，不影响 SOCKS5 认证
+			socksAuth.Password, _ = u.User.Password()
+		}
+		socksDialer, err := proxy.SOCKS5("tcp", u.Host, socksAuth, dialer)
+		if err != nil {
+			log.Printf("WARN: [upstream] SOCKS5 代理初始化失败，回退直连: %s (%v)", redactProxyURL(proxyURL), err)
+			return tr
+		}
+		// 类型断言：确保是 ContextDialer
+		if cd, ok := socksDialer.(proxy.ContextDialer); ok {
+			tr.DialContext = cd.DialContext
+		}
+	default:
+		log.Printf("WARN: [upstream] 不支持的代理 scheme %q，回退直连: %s", u.Scheme, redactProxyURL(proxyURL))
+	}
+	return tr
 }
 
 // newUpstreamHTTP 构造出站 http.Client：共享 Transport + 显式重定向策略。

@@ -108,6 +108,15 @@ type Pool struct {
 	// （零回归）。只挡 normal：全池皆窗内时走 pickEarliestExpiry 兜底（失败
 	// 成本仅一轮换），不产生 503 新语义。
 	failureWindow time.Duration
+	// minRequestInterval 单账号最小请求间隔（主动 RPM 限流，风控规避）。
+	// 选号时若距离上次出站请求小于该间隔，则跳过该账号——避免单账号短时间
+	// 打太密触发上游风控（真实客户端用户不会每秒发多次请求）。
+	// 0 = 关闭（默认，零回归）。global 账号阈值更低（见 minRequestIntervalGlobal）。
+	minRequestInterval time.Duration
+	// minRequestIntervalGlobal global 域单账号最小请求间隔分档。
+	// 国际版账号风控更敏感（国内 IP 调国际版 API 是封号重灾区），阈值更严。
+	// 0 = 未设置，回落 minRequestInterval（不分档，零回归）。
+	minRequestIntervalGlobal time.Duration
 	// globalMaxInFlight 全局在途上限（ADR-003 D-401）：所有账号在途请求总数上限，
 	// 超限立即 429 不排队。0 = 不限（默认，零回归）。经 globalInFlight 原子计数判定。
 	globalMaxInFlight int
@@ -249,6 +258,22 @@ func (p *Pool) SetFailureWindow(d time.Duration) {
 		d = 0
 	}
 	p.failureWindow = d
+}
+
+// SetMinRequestInterval 注入单账号最小请求间隔（主动 RPM 限流，风控规避）。
+// dGlobal 为 global 域分档；传 0 表示未设置、回落 d（不分档，零回归）。
+// 0（或负）= 关闭（零回归，不做间隔检查）。热生效。
+func (p *Pool) SetMinRequestInterval(d, dGlobal time.Duration) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if d < 0 {
+		d = 0
+	}
+	if dGlobal < 0 {
+		dGlobal = 0
+	}
+	p.minRequestInterval = d
+	p.minRequestIntervalGlobal = dGlobal
 }
 
 // SetGlobalMaxInFlight 注入全局在途上限（ADR-003 D-401）。0（或负）= 不限。
@@ -460,6 +485,7 @@ func (p *Pool) SetStore(s StoreSnapshotter) {
 // Acquire 为 uid 占一个在途名额（会话粘性命中后调用）；池上限内返回 true。
 // 名额用 entry.inFlight 原子自增，满额返回 false。上限按账号 realm 分档
 // （global 档 maxInFlightGlobal，P1-1；未设置回落 maxInFlight）。
+// 成功时同时更新 lastRequestAt（主动 RPM 限流：选号时距上次请求太近则跳过）。
 func (p *Pool) Acquire(uid string) bool {
 	p.mu.RLock()
 	e, ok := p.byUID[uid]
@@ -472,6 +498,7 @@ func (p *Pool) Acquire(uid string) bool {
 	if limit <= 0 {
 		// 不限：计数仍累加（供状态观测），但永不拒绝。
 		e.inFlight.Add(1)
+		e.lastRequestAt.Store(time.Now().UnixNano())
 		return true
 	}
 	for {
@@ -480,6 +507,7 @@ func (p *Pool) Acquire(uid string) bool {
 			return false
 		}
 		if e.inFlight.CompareAndSwap(cur, cur+1) {
+			e.lastRequestAt.Store(time.Now().UnixNano())
 			return true
 		}
 	}

@@ -48,6 +48,14 @@ type Auth struct {
 	// 手写扁平形 auth 文件可直接写 "device_token": "..."；插件 OAuth 嵌套形
 	// 顶层 device_token 也会被解析（与桌面端共用状态文件的部署方式）。
 	DeviceToken string
+
+	// ProxyURL 该账号的出站 HTTP 代理地址（如 "http://user:pass@proxy:8080"）。
+	// 缺省为空 = 不走代理，直连（默认行为）。
+	//
+	// 用途：多账号共用出口 IP 是风控关联的高风险点——上游很容易识别
+	// "这个 IP 上有 N 个账号在活动"。给不同账号配不同代理出口，可切断关联。
+	// 从 auth 文件的 "proxy_url" 键读取。
+	ProxyURL string
 }
 
 // Lock 供同进程内其他包（upstream.RefreshToken）在改写 Auth 字段期间加锁。
@@ -262,6 +270,8 @@ func Parse(raw []byte) (*Auth, error) {
 			DeviceToken string `json:"device_token"`
 			// Group 顶层 group（账号池分组标签，P1-B；嵌套形/扁平形都读顶层）。
 			Group string `json:"group"`
+			// ProxyURL 顶层 proxy_url（per-account 出站代理，切断多账号 IP 关联风控）。
+			ProxyURL string `json:"proxy_url"`
 		}
 		if err := json.Unmarshal(raw, &n); err != nil {
 			return nil, fmt.Errorf("storage_parse_error: %w", err)
@@ -277,6 +287,7 @@ func Parse(raw []byte) (*Auth, error) {
 			Nickname:     n.Account.Nickname,
 			Group:        n.Group,
 			DeviceToken:  n.DeviceToken,
+			ProxyURL:     n.ProxyURL,
 		}
 	} else {
 		var f struct {
@@ -290,6 +301,7 @@ func Parse(raw []byte) (*Auth, error) {
 			Nickname     string `json:"nickname"`
 			DeviceToken  string `json:"device_token"`
 			Group        string `json:"group"`
+			ProxyURL     string `json:"proxy_url"`
 		}
 		if err := json.Unmarshal(raw, &f); err != nil {
 			return nil, fmt.Errorf("storage_parse_error: %w", err)
@@ -305,6 +317,7 @@ func Parse(raw []byte) (*Auth, error) {
 			Nickname:     f.Nickname,
 			Group:        f.Group,
 			DeviceToken:  f.DeviceToken,
+			ProxyURL:     f.ProxyURL,
 		}
 	}
 	if strings.TrimSpace(a.AccessToken) == "" {

@@ -96,3 +96,7 @@ server.exe
 /.harness/changes/2026-10-18-b1b-panel-unknown-visual/panel-unknowns-*.png
 # 工具层 hook 状态（mimosa）；内容无害但不该进库
 /.mimosa/
+
+# 手动冒烟 / 调试输出（每次一个时间戳子目录，原始报文与响应快照；
+# 不入库——复现命令见 scripts/smoke.ps1，明细无长期保留价值）
+/artifacts/

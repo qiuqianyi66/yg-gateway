@@ -278,6 +278,11 @@ type entry struct {
 	// 本字段记录上次试探，供限速判定。运行态，不持久化（重启后首次到期即试探，
 	// 语义安全：最坏多探一次）。atomic（unixnano，0=无试探），同 lastUsed 口径。
 	breakerProbeAt atomic.Int64
+	// lastRequestAt 最近一次成功出站请求的时刻（unixnano）。
+	// 用于主动 RPM 限制：选号时若距离上次请求小于 minRequestInterval，
+	// 则跳过该账号（避免单账号短时间打太密触发上游风控）。
+	// atomic（同 lastUsed 口径），读锁下可直接 Load。运行态，不持久化。
+	lastRequestAt atomic.Int64
 	// lastPrune 上次清理模型级台账（modelCost / modelCooldowns）的时刻
 	// （ADR-003 D-402）。pick 的写锁内每轮对全池每个 entry 扫这两个 map，
 	// 实测占 pick 耗时 ~85%；改为按 pruneInterval 时间节流后，绝大多数 pick

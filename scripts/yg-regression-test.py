@@ -3,20 +3,21 @@
 """
 yg-gateway 生产稳定性回归（worst-case 覆盖版）
 ==============================================
-针对 D:/yg-gateway 生产实例（127.0.0.1:7863）做最坏情景回归。
+默认打生产实例（127.0.0.1:7863），请确保你知道自己在做什么。
 
 覆盖矩阵（每节独立断言，失败不影响其他节）：
   S1  配置自检          config.json 关键值 vs /status（护栏 500k/300k、rpm 20、append）
-  S2  健康基线          100 次非流式小请求 → 期望 100% 200
+  S2  健康基线          N 次非流式小请求 → 期望 100% 200
   S3  护栏 max 边界     ~520k 中文 → 期望 413 context_length_exceeded（本地拦截，不达上游）
-  S4  会话 RPM 限流     同 conversationId 连发 25 次（rpm=20）→ 期望前 20 次 200、第 21+ 次 429
+  S4  会话 RPM 限流     同 conversationId 连发 N 次 → 期望触发 429（⚠️ 故意打上游冷却，默认 skip）
   S5  无效输入族        坏 auth→401；畸形 JSON→400；不存在模型→4xx；空 messages→400
   S6  超大 body         >64MB → 期望 413（body 上限，非 guardrail 拦截）
-  S7  流式完整性        10 次 SSE：期望全部 200 且以 data: [DONE] 收尾
-  S8  并发无 panic      8 线程 × 5 请求 → 期望全有响应（200/429），无 5xx/超时
+  S7  流式完整性        M 次 SSE：期望全部 200 且以 data: [DONE] 收尾
+  S8  并发无 panic      8 线程 × 2 请求 → 期望全有响应（200/429），无 5xx/超时
 
-用法：python yg-regression-test.py [-n 健康次数] [--model <模型>] [--skip S4,S8]
+用法：python yg-regression-test.py [-n 健康次数] [--model <模型>] [--skip S4,S8] [--base <url>]
 默认模型 cn:hy3 ×0（限时免费，零积分消耗）；失败可改 --model cn:deepseek-v4.1-flash ×0.11
+--base 切换测试端口（如 http://127.0.0.1:7864），避免打生产
 """
 import argparse
 import json
@@ -32,13 +33,53 @@ BASE = "http://127.0.0.1:7863"
 CONFIG_PATH = r"D:\yg-gateway\config.json"
 DEFAULT_MODEL = "cn:hy3 ×0"
 FALLBACK_MODEL = "cn:deepseek-v4.1-flash ×0.11"
+FAKE_MODEL = "nonexistent-model-xyz"
 
 PASS, FAIL = [], []
 
 
 def load_key():
+    if not os.path.exists(CONFIG_PATH):
+        print(f"[fatal] 找不到配置文件 {CONFIG_PATH}")
+        print("        生产实例没装？先看 D:\\yg-gateway\\ 目录，或用 --base 指向测试端口。")
+        sys.exit(2)
     with open(CONFIG_PATH, encoding="utf-8") as f:
-        return json.load(f)["api_key"]
+        cfg = json.load(f)
+    key = cfg.get("api_key")
+    if not key:
+        print(f"[fatal] {CONFIG_PATH} 里没有 api_key 字段")
+        sys.exit(2)
+    return key
+
+
+def preflight(base, key):
+    """开跑前探活：网关不通就立刻死，不卡 180s 超时。"""
+    import socket
+    host, port = base.replace("http://", "").replace("https://", "").split(":")
+    if "/" in port:
+        port = port.split("/")[0]
+    port = int(port)
+    try:
+        s = socket.create_connection((host, port), timeout=1.5)
+        s.close()
+    except Exception as e:
+        print(f"[fatal] 网关 {base} 连不上（{e}）")
+        print("        先确认服务在跑：netstat -ano | findstr :7863")
+        print("        本机守护：powershell -File scripts/yg-gateway-watch.ps1（幂等，不健康会拉起）")
+        sys.exit(2)
+    # 打一下 /status 看池子健康数，给用户个底
+    try:
+        st, data, _, _ = request("/status", key, body=None)
+        if st == 200:
+            healthy = data.get("healthy", "?")
+            total = data.get("total", "?")
+            cooling = data.get("cooling", 0)
+            disabled = data.get("disabled", 0)
+            print(f"[preflight] /status OK  healthy={healthy}/{total}  cooling={cooling}  disabled={disabled}")
+            if healthy == 0 or healthy == "?":
+                print("        ⚠️ 零健康账号，S2/S7 等真实请求用例大概率会 503")
+    except Exception:
+        pass  # /status 不通不挡，后面 S1 会报
 
 
 def request(path, key, body=None, headers=None, stream=False, timeout=180):
@@ -193,10 +234,12 @@ def s5_invalid_inputs(key, model):
     check("畸形 JSON → 4xx", 400 <= st < 500, f"status={st}")
     # 5.3 不存在模型（账号冷却期会先 503 no_healthy_account，属上游状态非模型校验）
     st, data, _, _ = request("/v1/chat/completions", key,
-                             {"model": "nonexistent-model-xyz", "messages": [{"role": "user", "content": "hi"}]})
+                             {"model": FAKE_MODEL, "messages": [{"role": "user", "content": "hi"}]})
     code = ((data.get("error") or {}).get("code")) if isinstance(data.get("error"), dict) else None
     check("不存在模型 → 4xx 或冷却 503", 400 <= st < 500 or st == 503,
           f"status={st} code={code}")
+    # 清理假模型冷却：测试发的假模型名会触发 11102 负缓存，从 state.json 里删掉避免污染面板
+    _cleanup_fake_model_cooldown()
     # 5.4 空 messages（append 模式会补 persona 为第一条 system → 预期 200 透传）
     st, data, _, _ = request("/v1/chat/completions", key, {"model": model, "messages": []})
     check("空 messages append 补全后透传", st == 200, f"status={st}")
@@ -209,6 +252,28 @@ def s5_invalid_inputs(key, model):
     except urllib.error.HTTPError as e:
         st = e.code
     check("空 body → 4xx", 400 <= st < 500, f"status={st}")
+
+
+def _cleanup_fake_model_cooldown():
+    """从 state.json 里删掉假模型 FAKE_MODEL 的冷却条目，避免测试污染面板。"""
+    state_path = r"D:\yg-gateway\data\state.json"
+    if not os.path.exists(state_path):
+        return
+    try:
+        with open(state_path, encoding="utf-8") as f:
+            state = json.load(f)
+        cleaned = 0
+        for uid, acct in state.get("accounts", {}).items():
+            mcs = acct.get("model_cooldowns") or {}
+            if FAKE_MODEL in mcs:
+                del mcs[FAKE_MODEL]
+                cleaned += 1
+        if cleaned:
+            with open(state_path, "w", encoding="utf-8") as f:
+                json.dump(state, f, ensure_ascii=False, indent=2)
+            print(f"  [cleanup] 已从 state.json 删除 {cleaned} 个账号的 {FAKE_MODEL} 冷却条目")
+    except Exception as e:
+        print(f"  [warn] 清理假模型冷却失败: {e}")
 
 
 def s6_huge_body(key, model):
@@ -291,40 +356,62 @@ def s8_concurrency(key, model):
 
 
 def main():
+    global BASE
     ap = argparse.ArgumentParser()
     ap.add_argument("-n", type=int, default=20, help="S2 健康基线次数（上游慢时建议 20）")
     ap.add_argument("--model", default=DEFAULT_MODEL)
     ap.add_argument("--skip", default="", help="逗号分隔：S3,S4 等")
+    ap.add_argument("--base", default=BASE, help="网关地址（默认生产 7863；测试用 7864）")
     args = ap.parse_args()
     skip = {s.strip().upper() for s in args.skip.split(",") if s.strip()}
 
+    BASE = args.base
+
     key = load_key()
     model = args.model
+    user_pinned_model = (args.model != DEFAULT_MODEL)  # 用户手动指定了模型就不自动 fallback
     print(f"yg-gateway 稳定性回归  base={BASE} model={model} skip={skip or '-'}")
     print(f"时间: {time.strftime('%Y-%m-%d %H:%M:%S')}")
+
+    preflight(BASE, key)
 
     # 模型探测（含 fallback）
     st, data, dt, _ = request("/v1/chat/completions", key,
                               {"model": model, "messages": [{"role": "user", "content": "probe"}]})
     if st != 200:
-        print(f"  [probe] {model} 失败({st})，回退 {FALLBACK_MODEL}")
+        err_code = (data.get("error") or {}).get("code") if isinstance(data.get("error"), dict) else None
+        print(f"  [probe] {model} 失败 status={st} code={err_code}")
+        if err_code in ("no_healthy_account", "no_healthy_upstream"):
+            print("        池子全冷却/全禁用，先跑 /status 看账号状态，别急着跑回归")
+        if user_pinned_model:
+            print(f"        你手动指定了 --model {model}，不自动 fallback；确认模型名是否正确")
+            sys.exit(2)
+        print(f"        回退到 {FALLBACK_MODEL}（⚠️ 付费模型 ×0.11，会耗积分）")
         model = FALLBACK_MODEL
         st, data, dt, _ = request("/v1/chat/completions", key,
                                   {"model": model, "messages": [{"role": "user", "content": "probe"}]})
         if st != 200:
-            print(f"  [probe] {FALLBACK_MODEL} 也失败({st})，中止")
+            err2 = (data.get("error") or {}).get("code") if isinstance(data.get("error"), dict) else None
+            print(f"  [probe] {FALLBACK_MODEL} 也失败 status={st} code={err2}")
+            print("        两个模型都打不通：先看 /status 池子状态，或上游 CodeBuddy 挂了")
             sys.exit(2)
     print(f"  [probe] {model} OK dt={dt:.1f}s")
 
+    # S4 默认 skip：它会故意打 21 连发触发 429，污染生产账号冷却。
+    # 需要测 RPM 限流时显式加 --skip "" 或 --skip 其他节来开启。
+    skip_with_s4_default = set(skip)
+    if "S4" not in skip and not any(s == "S4" for s in skip):
+        skip_with_s4_default.add("S4")
+
     # S4 会话限流放最后：21 连发会打上游账号冷却，避免污染其他节
-    if "S1" not in skip: s1_config(key)
-    if "S2" not in skip: s2_healthy(key, model, args.n)
-    if "S3" not in skip: s3_max_boundary(key, model)
-    if "S5" not in skip: s5_invalid_inputs(key, model)
-    if "S6" not in skip: s6_huge_body(key, model)
-    if "S7" not in skip: s7_stream(key, model)
-    if "S8" not in skip: s8_concurrency(key, model)
-    if "S4" not in skip: s4_session_rpm(key, model)
+    if "S1" not in skip_with_s4_default: s1_config(key)
+    if "S2" not in skip_with_s4_default: s2_healthy(key, model, args.n)
+    if "S3" not in skip_with_s4_default: s3_max_boundary(key, model)
+    if "S5" not in skip_with_s4_default: s5_invalid_inputs(key, model)
+    if "S6" not in skip_with_s4_default: s6_huge_body(key, model)
+    if "S7" not in skip_with_s4_default: s7_stream(key, model)
+    if "S8" not in skip_with_s4_default: s8_concurrency(key, model)
+    if "S4" not in skip_with_s4_default: s4_session_rpm(key, model)
 
     print("\n" + "=" * 50)
     print(f"PASS {len(PASS)} | FAIL {len(FAIL)}")

@@ -55,7 +55,7 @@ func (c *Client) DoChat(a *auth.Auth, method, path string, body any) (json.RawMe
 		return nil, err
 	}
 	c.BillingHeaders(req, a)
-	data, err := c.doJSON(req)
+	data, err := c.doJSON(req, a)
 	return data, growthErr(err)
 }
 
@@ -76,7 +76,7 @@ func (c *Client) DoChatMP(a *auth.Auth, method, path string, body any) (json.Raw
 	}
 	c.BillingHeaders(req, a)
 	req.Header.Set("X-Client-Platform", mpPlatform)
-	data, err := c.doJSON(req)
+	data, err := c.doJSON(req, a)
 	return data, growthErr(err)
 }
 
@@ -114,7 +114,7 @@ func (c *Client) DoWeb(a *auth.Auth, method, path string) (json.RawMessage, erro
 	if d := a.DomainValue(); d != "" {
 		req.Header.Set("X-Domain", d)
 	}
-	data, err := c.doJSON(req)
+	data, err := c.doJSON(req, a)
 	return data, growthErr(err)
 }
 
@@ -145,7 +145,7 @@ func (c *Client) DoReportMP(a *auth.Auth, path string, body []map[string]any) er
 	req.Header.Set("X-Client-Version", "2.4.0")
 	req.Header.Set("X-Client-Platform", "mp-weixin")
 	req.Header.Set("X-Platform", "wechatmp")
-	_, err = c.doJSON(req)
+	_, err = c.doJSON(req, a)
 	return growthErr(err)
 }
 
