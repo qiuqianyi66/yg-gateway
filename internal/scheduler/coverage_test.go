@@ -433,40 +433,8 @@ func TestAwaitWakeupGraceCanceledCtxAbandonsBatch(t *testing.T) {
 	}
 }
 
-// TestSleepCtxZeroAndCanceledCtx sleepCtx 的两个早期出口：d<=0 立即放行、但
-// ctx 已取消时即便 d<=0 也必须返回 false（停机不再派发新工作）。
-func TestSleepCtxZeroAndCanceledCtx(t *testing.T) {
-	if !sleepCtx(context.Background(), 0) {
-		t.Error("d<=0 且 ctx 存活应返回 true")
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	if sleepCtx(ctx, 0) {
-		t.Error("d<=0 但 ctx 已取消应返回 false")
-	}
-	if !sleepCtx(context.Background(), 20*time.Millisecond) {
-		t.Error("等满时长应返回 true")
-	}
-}
-
-// TestSleepCtxCancelInterruptsWait 等待中途取消必须立即返回 false，不等满时长。
-func TestSleepCtxCancelInterruptsWait(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
-
-	go func() {
-		time.Sleep(20 * time.Millisecond)
-		cancel()
-	}()
-
-	start := time.Now()
-	if sleepCtx(ctx, 5*time.Second) {
-		t.Error("取消时应返回 false")
-	}
-	if d := time.Since(start); d > time.Second {
-		t.Errorf("取消响应耗时 %v（应远小于 5s 的等待时长）", d)
-	}
-}
+// sleepCtx 的两个行为用例（d<=0 立即放行 / 等待中途取消立即返回）已随实现迁移到
+// internal/pkg/timex/timex_test.go（2026-11-02）：函数搬走了，断言跟着走，不留孤儿测试。
 
 // ---------------------------------------------------------------------------
 // 排程热改：Reconfigure / poke / Run 的 rearm 重算

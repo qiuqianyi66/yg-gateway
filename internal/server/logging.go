@@ -17,6 +17,7 @@ import (
 
 	"yg-gateway/internal/httpauth"
 	"yg-gateway/internal/logfmt"
+	"yg-gateway/internal/pkg/jsonsafe"
 	"yg-gateway/internal/pool"
 	"yg-gateway/internal/reqlog"
 	"yg-gateway/internal/session"
@@ -301,38 +302,17 @@ func parseModelFromBody(body []byte) string {
 // usageDeltaFromResponse 从非流式聚合响应中提取明确存在的 token 字段。
 func usageDeltaFromResponse(resp map[string]any) pool.TokenUsageDelta {
 	delta := pool.TokenUsageDelta{}
-	u, ok := resp["usage"].(map[string]any)
+	u, ok := jsonsafe.Map(resp, "usage")
 	if !ok {
 		return delta
 	}
-	read := func(key string) (int64, bool) {
-		v, ok := u[key]
-		if !ok {
-			return 0, false
-		}
-		switch n := v.(type) {
-		case float64:
-			return int64(n), true
-		case float32:
-			return int64(n), true
-		case int:
-			return int64(n), true
-		case int64:
-			return n, true
-		case json.Number:
-			i, err := n.Int64()
-			return i, err == nil
-		default:
-			return 0, false
-		}
-	}
-	if n, ok := read("prompt_tokens"); ok {
+	if n, ok := jsonsafe.Int(u, "prompt_tokens"); ok {
 		delta.HasPromptTokens, delta.PromptTokens = true, n
 	}
-	if n, ok := read("completion_tokens"); ok {
+	if n, ok := jsonsafe.Int(u, "completion_tokens"); ok {
 		delta.HasCompletionTokens, delta.CompletionTokens = true, n
 	}
-	if n, ok := read("total_tokens"); ok {
+	if n, ok := jsonsafe.Int(u, "total_tokens"); ok {
 		delta.HasTotalTokens, delta.TotalTokens = true, n
 	}
 	return delta
@@ -340,11 +320,11 @@ func usageDeltaFromResponse(resp map[string]any) pool.TokenUsageDelta {
 
 // completionTokens 从 Aggregate 返回的响应中提取 usage.completion_tokens；缺失返回 -1。
 func completionTokens(resp map[string]any) int {
-	u, ok := resp["usage"].(map[string]any)
+	u, ok := jsonsafe.Map(resp, "usage")
 	if !ok {
 		return -1
 	}
-	v, ok := u["completion_tokens"].(float64)
+	v, ok := jsonsafe.Float(u, "completion_tokens")
 	if !ok {
 		return -1
 	}

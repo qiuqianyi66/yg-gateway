@@ -59,18 +59,22 @@ $allow = @{
     # 顶层装配层：cmd 可以依赖任何 internal
     'cmd'      = @('*')
     # HTTP 适配层：装配并编排，依赖各领域包（实测）
-    'server'   = @('alerting','auth','httpauth','livecfg','logfmt','metrics',
+    # + pkg：timex（可取消等待/日期布局）、jsonsafe（map[string]any 安全取值）
+    'server'   = @('alerting','auth','httpauth','livecfg','logfmt','metrics','pkg',
                    'pool','prompt','reqlog','session','upstream','usage')
     # 领域层：账号池依赖凭证、日志脱敏，以及 domain 层（四态标注 / 未知跟踪）
-    'pool'     = @('auth','evidence','logfmt','unknown')
+    # + pkg：签到日判定与本地日期格式化（timex.Date）
+    'pool'     = @('auth','evidence','logfmt','pkg','unknown')
     # 运维 agent（ADR-017）：只依赖 domain 层；pool/metrics 的观察面由 cmd/server
     # 装配期闭包注入（依赖倒置），本包不直接 import 它们
     'opsagent' = @('evidence','logfmt','unknown')
     # 出站适配层：依赖凭证、日志脱敏、会话键解析（实测）
     # + growth：实现 growth.Transport + 委托字段（ADR-018，growth 域业务搬出后接线）
-    'upstream' = @('auth','growth','logfmt','session')
+    # + pkg：上游重置时间/套餐到期时间格式（timex.DateTimeLayout 单源）
+    'upstream' = @('auth','growth','logfmt','pkg','session')
     # 养号活动域（ADR-018 拆出）：只依赖凭证类型（Auth）；transport 由 upstream 注入
-    'growth'   = @('auth')
+    # + pkg：夜猫子窗口的本地日期（timex.Date）
+    'growth'   = @('auth','pkg')
     # 会话键派生：依赖 redisstore（粘性绑定持久化）（实测）
     'session'  = @('redisstore')
     # 面板：只读运维视图，可依赖领域包但不可反向被依赖（实测）
@@ -80,20 +84,22 @@ $allow = @{
     'panel'    = @('auth','bench','httpauth','livecfg','logfmt','opsagent','pool','reqlog',
                    'scheduler','session','unknown','upstream','usage')
     # 调度：依赖凭证、日志、池、上游（实测）
-    'scheduler'= @('auth','logfmt','pool','upstream')
+    # + pkg：限速等待（timex.SleepCtx）与每日快照/连登/旅行日期（timex.Date）
+    'scheduler'= @('auth','logfmt','pkg','pool','upstream')
     # 热配置：依赖 httpauth（密钥约束校验）（实测）
     'livecfg'  = @('httpauth')
     # 凭证层：依赖日志脱敏（实测）
     'auth'     = @('logfmt')
-    # 纯叶子：无 internal 依赖
-    'usage'      = @()
-    'reqlog'     = @()
+    # 叶子层：除 pkg 原语外无 internal 依赖（2026-11-02 起 usage/reqlog 用 timex 做日期键）
+    'usage'      = @('pkg')
+    'reqlog'     = @('pkg')
     'metrics'    = @()
     'logfmt'     = @()
     # 网关级 benchmark（REQ-benchmark-2026-10-29）：纯离线评测层，只读 reqlog
     # 归档（脱敏叶子包）+ 自投影快照结构（不 import pool，避免向上依赖）；
     # 被 cmd/bench 装配调用。依赖方向：bench → reqlog（叶子）合法。
-    'bench'      = @('reqlog')
+    # + pkg：按天聚合的日期键（timex.Date）
+    'bench'      = @('pkg','reqlog')
     # 告警外发：webhook body 需按 R2 口径截断完整 UID → 依赖 logfmt（纯脱敏 helper 叶子包）。
     # 2026-10-22 体检 C-2 引入，-Fix 实测生成；无反向依赖风险。
     'alerting'   = @('logfmt')
@@ -103,6 +109,11 @@ $allow = @{
     # domain 层（事实四态标记 / unknown 消解）：零 internal 依赖，可被任何层引用
     'evidence'   = @()
     'unknown'    = @()
+    # 跨包通用原语层（internal/pkg/*，2026-11-02 代码复用体系）：**纯叶子**，
+    # 零 internal 依赖，只依赖标准库。存在的理由是消除「依赖方向禁止互引 → 同函数
+    # 各写一份」的复制（server/scheduler 的 sleepCtx 双份是实弹证据）。
+    # 纪律：只放与业务语义无关的东西；带业务口径的留在各自领域包。
+    'pkg'        = @()
 }
 
 # 取每个包的 import 列表。

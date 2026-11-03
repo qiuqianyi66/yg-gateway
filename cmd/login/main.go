@@ -31,16 +31,19 @@ import (
 	"time"
 
 	auth2 "yg-gateway/internal/auth"
+	"yg-gateway/internal/upstream"
 )
 
 // 上游常量：CN → copilot.tencent.com（Origin 为 codebuddy.cn）；global → www.workbuddy.ai
 // （base 与 Origin/Referer 同域）。端点 URL 由 realmConfig 按 realm 动态拼出，不再硬编码。
 const (
-	upstreamBaseCN      = "https://copilot.tencent.com"
-	upstreamBaseGlobal  = "https://www.workbuddy.ai"
-	clientUA            = "CLI/2.63.2 CodeBuddy/2.63.2"
-	originRefererCN     = "https://www.codebuddy.cn"
-	originRefererGlobal = "https://www.workbuddy.ai"
+	// 协议常量全部来自 internal/upstream（R8 单一来源，2026-11-02）：这些是**报文内容**，
+	// 曾经在 cmd/login/main.go 与 internal/panel/login.go 各存一份字面量。
+	upstreamBaseCN      = upstream.LoginBaseCN
+	upstreamBaseGlobal  = upstream.LoginBaseGlobal
+	clientUA            = upstream.CLIUserAgent
+	originRefererCN     = upstream.OriginRefererCN
+	originRefererGlobal = upstream.OriginRefererGlobal
 )
 
 // 登录 state 落盘路径（var 便于测试替换临时文件）

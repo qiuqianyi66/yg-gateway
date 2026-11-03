@@ -25,13 +25,18 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"yg-gateway/internal/pkg/timex"
+	"yg-gateway/internal/upstream"
 )
 
-const billingBaseCN = "https://www.codebuddy.cn"
+// 计费域默认基址来自 internal/upstream（R8 单一来源，2026-11-02）：同一串此前在
+// cmd/credit 与 upstream/client.go 的 Client 缺省值各有一份，换域名时极易漏改一处。
+const billingBaseCN = upstream.DefaultBillingBaseCN
 
 // billingBaseGlobal 国际版计费域。global 账号打 CN 域会得到 401：
 // www.codebuddy.cn 不认 workbuddy.ai 的 token（实测 401，workbuddy.ai 同 token 为 code=0）。
-const billingBaseGlobal = "https://www.workbuddy.ai"
+const billingBaseGlobal = upstream.DefaultBillingBaseGlobal
 
 // billingBaseFor 按账号 realm 选择计费域。
 //
@@ -146,8 +151,8 @@ func fetchUserResourceAt(base string, af *authFile, client *http.Client) (remain
 		"PageSize":                 100,
 		"ProductCode":              "p_tcaca",
 		"Status":                   []int{0, 3},
-		"PackageEndTimeRangeBegin": now.Format("2006-01-02 15:04:05"),
-		"PackageEndTimeRangeEnd":   now.Add(365 * 101 * 24 * time.Hour).Format("2006-01-02 15:04:05"),
+		"PackageEndTimeRangeBegin": timex.DateTime(now),
+		"PackageEndTimeRangeEnd":   timex.DateTime(now.Add(365 * 101 * 24 * time.Hour)),
 	})
 	path := billingPathFor(base)
 	req, err := http.NewRequest(http.MethodPost, base+path, bytes.NewReader(body))

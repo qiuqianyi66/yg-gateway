@@ -9,6 +9,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"yg-gateway/internal/pkg/timex"
 )
 
 // ErrKind 错误分类，pool 据此决定冷却时长。
@@ -263,7 +265,8 @@ var (
 )
 
 // softRateTimeLayout 上游重置时间的格式（无时区后缀；时区固定 UTC+8）。
-const softRateTimeLayout = "2006-01-02 15:04:05"
+// 值取自 internal/pkg/timex（2026-11-02）：同一形态在 billing/main 也用到，字面量只留一处。
+const softRateTimeLayout = timex.DateTimeLayout
 
 // IsModelRateLimit 报告 429 body 是否明确指向模型级限流（业务 code 6004）。
 // 用于区分"账号级软限流"（按账号冷却）与"模型级用量限流"（切模型即可用）。

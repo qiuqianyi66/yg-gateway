@@ -10,6 +10,9 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"yg-gateway/internal/pkg/jsonsafe"
+	"yg-gateway/internal/pkg/timex"
 )
 
 // tokensPerSecond 计算吐字速率（token/s），返回 (速率, 是否有意义)。
@@ -71,16 +74,19 @@ func promptTooLongMessage(body string) string {
 //     旧实现 `c, _ := usage["credit"].(float64)` 会用零值兜底，把「未知」当成
 //     「免费」写进成本台账（per1k=0 的观测样本），于是一个付费号可能被判成免费号被优先选号。
 //     true 的 credit=0（真免费模型）是**观察**，仍走正常分支——这是防过度纠正的硬边界。
+//
+// 取值统一走 internal/pkg/jsonsafe（2026-11-02）：缺失/类型不符一律 ok=false，
+// 结构上不给"零值兜底"留口子——上面那次事故的根因就是断言失败被 `_` 吞掉。
 func usageCreditTotal(resp map[string]any) (credit float64, total int, ok bool, creditUnknown bool) {
-	usage, _ := resp["usage"].(map[string]any)
-	if usage == nil {
+	usage, hasUsage := jsonsafe.Map(resp, "usage")
+	if !hasUsage {
 		return 0, 0, false, false
 	}
-	t, okT := usage["total_tokens"].(float64)
+	t, okT := jsonsafe.Float(usage, "total_tokens")
 	if !okT || t <= 0 {
 		return 0, 0, false, false
 	}
-	c, okC := usage["credit"].(float64)
+	c, okC := jsonsafe.Float(usage, "credit")
 	if !okC {
 		return 0, int(t), false, true
 	}
@@ -93,11 +99,9 @@ func usageCreditTotal(resp map[string]any) (credit float64, total int, ok bool, 
 // 换号重试无意义）。退避是「换号前歇一下」让上游频控窗口滑过；正常单号请求
 // （首次成功）不经过本函数，零开销。
 func rotateBackoff(i int, ctx context.Context) bool {
-	d := backoffAfter(i)
-	if d <= 0 {
-		return ctx.Err() == nil
-	}
-	if !sleepCtx(ctx, d) {
+	// d<=0 的短路已由 timex.SleepCtx 内部处理（含 ctx.Err() 语义），此处不再重复守卫
+	// ——重复一份"零等待"语义等于把刚消掉的复制又写回来（独立复审 🟢-1）。
+	if !timex.SleepCtx(ctx, backoffAfter(i)) {
 		log.Printf("WARN: [server] rotate backoff aborted: ctx cancelled")
 		return false
 	}

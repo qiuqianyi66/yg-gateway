@@ -18,6 +18,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"time"
+
+	"yg-gateway/internal/pkg/timex"
 )
 
 type taskDef struct {
@@ -245,7 +247,7 @@ func checkT5(repoRoot string) {
 
 func cmdReport() {
 	now := time.Now()
-	filename := fmt.Sprintf("run-%s.md", now.Format("2006-01-02"))
+	filename := fmt.Sprintf("run-%s.md", timex.Date(now))
 	reportPath := filepath.Join("docs", "agent-eval", filename)
 
 	fmt.Printf("生成报告模板: %s\n\n", reportPath)
@@ -277,7 +279,7 @@ func cmdReport() {
 ## 未达标项根因
 
 （逐条写：哪个任务、哪个评分点、为什么没达标、下次怎么改）
-`, now.Format("2006-01-02"))
+`, timex.Date(now))
 
 	if err := os.WriteFile(reportPath, []byte(content), 0644); err != nil {
 		fmt.Printf("❌ 写入失败: %v\n", err)

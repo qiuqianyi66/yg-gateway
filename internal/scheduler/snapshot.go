@@ -18,6 +18,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"yg-gateway/internal/pkg/timex"
 )
 
 // snapshotNow 快照所用时钟（生产恒为 time.Now；测试钉住日期，避免依赖墙钟
@@ -49,7 +51,7 @@ func (s *Scheduler) RunSnapshotNow() {
 		log.Printf("snapshot: mkdir %s: %v", dir, err)
 		return
 	}
-	name := filepath.Join(dir, now.Format("2006-01-02")+".json")
+	name := filepath.Join(dir, timex.Date(now)+".json")
 	tmp := name + ".tmp"
 	if err := os.WriteFile(tmp, data, 0o644); err != nil {
 		log.Printf("snapshot: write %s: %v", tmp, err)

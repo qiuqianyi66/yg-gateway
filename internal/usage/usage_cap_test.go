@@ -3,11 +3,13 @@ package usage
 import (
 	"testing"
 	"time"
+
+	"yg-gateway/internal/pkg/timex"
 )
 
 // 直接注入小时桶 / 日桶（绕过 Add 的维度约束），专测折叠算法本身。
 func injectHourly(r *Recorder, ts time.Time, realm, uid, model, rate, key string, req, pt int64) {
-	scope := "h:" + ts.Format(hourLayout)
+	scope := "h:" + timex.Hour(ts)
 	r.buckets[bucketKey(scope, realm, uid, model, rate, key)] = &bucket{
 		Scope: scope, Realm: realm, UID: uid, Model: model, Rate: rate, Key: key,
 		Req: req, PT: pt,
@@ -115,7 +117,7 @@ func TestRollupCapDailyDropValve(t *testing.T) {
 	now := time.Now()
 	base := now.Truncate(24 * time.Hour)
 	for k := 1; k <= 100; k++ {
-		day := base.Add(-time.Duration(k) * 24 * time.Hour).Format(dayLayout)
+		day := timex.Date(base.Add(-time.Duration(k) * 24 * time.Hour))
 		injectDaily(r, day, "cn", "u", "m", "0.5", "k", 1, 10)
 	}
 	if len(r.buckets) != 100 {
@@ -190,7 +192,7 @@ func TestRollupCapPersistence(t *testing.T) {
 	now := time.Now()
 	base := now.Truncate(24 * time.Hour)
 	for k := 1; k <= 100; k++ {
-		day := base.Add(-time.Duration(k) * 24 * time.Hour).Format(dayLayout)
+		day := timex.Date(base.Add(-time.Duration(k) * 24 * time.Hour))
 		injectDaily(r1, day, "cn", "u", "m", "0.5", "k", 1, 10)
 	}
 	r1.rollupWithLimits(now, 34, 24*time.Hour)

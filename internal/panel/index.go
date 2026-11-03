@@ -20,8 +20,38 @@ import (
 //go:embed index.html
 var indexHTML []byte
 
+//go:embed app_core.js
+var appCoreJS []byte
+
+//go:embed app_views_models.js
+var appViewsModelsJS []byte
+
+//go:embed app_views_packages.js
+var appViewsPackagesJS []byte
+
+//go:embed app_views_logs.js
+var appViewsLogsJS []byte
+
+//go:embed app_views_tasks.js
+var appViewsTasksJS []byte
+
+//go:embed app_views_config.js
+var appViewsConfigJS []byte
+
+//go:embed app_views_accounts.js
+var appViewsAccountsJS []byte
+
+//go:embed app_views_usage.js
+var appViewsUsageJS []byte
+
+//go:embed app_views_keys.js
+var appViewsKeysJS []byte
+
 //go:embed app.js
 var appJS []byte
+
+//go:embed app_qr.js
+var appQRJS []byte
 
 //go:embed acl_notice.js
 var aclNoticeJS []byte
@@ -80,6 +110,100 @@ func (p *Panel) appScript(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(appJS)
+}
+
+// appViewsLogsScript 输出日志视图组件（从 app.js 拆出的第十个组件，2026-11-02）。
+func (p *Panel) appViewsLogsScript(w http.ResponseWriter, r *http.Request) {
+	setSecurityHeaders(w)
+	w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	// 忽略：静态资源全量写回，写失败即客户端断连，无可恢复语义（与 appScript 同口径）。
+	_, _ = w.Write(appViewsLogsJS)
+}
+
+// appViewsTasksScript 输出积分任务/任务中心视图组件（从 app.js 拆出的第九个组件，2026-11-02）。
+func (p *Panel) appViewsTasksScript(w http.ResponseWriter, r *http.Request) {
+	setSecurityHeaders(w)
+	w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	// 忽略：静态资源全量写回，写失败即客户端断连，无可恢复语义（与 appScript 同口径）。
+	_, _ = w.Write(appViewsTasksJS)
+}
+
+// appViewsConfigScript 输出配置页视图组件（从 app.js 拆出的第八个组件，2026-11-02）。
+func (p *Panel) appViewsConfigScript(w http.ResponseWriter, r *http.Request) {
+	setSecurityHeaders(w)
+	w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	// 忽略：静态资源全量写回，写失败即客户端断连，无可恢复语义（与 appScript 同口径）。
+	_, _ = w.Write(appViewsConfigJS)
+}
+
+// appViewsAccountsScript 输出账号池视图组件（从 app.js 拆出的第七个组件，2026-11-02）。
+func (p *Panel) appViewsAccountsScript(w http.ResponseWriter, r *http.Request) {
+	setSecurityHeaders(w)
+	w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	// 忽略：静态资源全量写回，写失败即客户端断连，无可恢复语义（与 appScript 同口径）。
+	_, _ = w.Write(appViewsAccountsJS)
+}
+
+// appViewsUsageScript 输出用量视图组件（从 app.js 拆出的第六个组件，2026-11-02）。
+func (p *Panel) appViewsUsageScript(w http.ResponseWriter, r *http.Request) {
+	setSecurityHeaders(w)
+	w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	// 忽略：静态资源全量写回，写失败即客户端断连，无可恢复语义（与 appScript 同口径）。
+	_, _ = w.Write(appViewsUsageJS)
+}
+
+// appViewsKeysScript 输出 API Key 弹窗组件（从 app.js 拆出的第五个组件，2026-11-02）。
+func (p *Panel) appViewsKeysScript(w http.ResponseWriter, r *http.Request) {
+	setSecurityHeaders(w)
+	w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	// 忽略：静态资源全量写回，写失败即客户端断连，无可恢复语义（与 appScript 同口径）。
+	_, _ = w.Write(appViewsKeysJS)
+}
+
+// appViewsPackagesScript 输出积分包视图组件（从 app.js 拆出的第四个组件，2026-11-02）。
+// 加载顺序关键：必须排在 app.js 之前（函数体里的状态读取依赖 app.js 已初始化的 let 绑定）。
+func (p *Panel) appViewsPackagesScript(w http.ResponseWriter, r *http.Request) {
+	setSecurityHeaders(w)
+	w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	// 忽略：静态资源全量写回，写失败即客户端断连，无可恢复语义（与 appScript 同口径）。
+	_, _ = w.Write(appViewsPackagesJS)
+}
+
+// appViewsModelsScript 输出模型目录视图组件（从 app.js 拆出的第三个组件，2026-11-02）。
+// 加载顺序关键：必须排在 app.js 之前（app.js 顶层路由会直接调用 renderModels）。
+func (p *Panel) appViewsModelsScript(w http.ResponseWriter, r *http.Request) {
+	setSecurityHeaders(w)
+	w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	// 忽略：静态资源全量写回，写失败即客户端断连，无可恢复语义（与 appScript 同口径）。
+	_, _ = w.Write(appViewsModelsJS)
+}
+
+// appCoreScript 输出面板通用原语组件（从 app.js 拆出的第二个组件，2026-11-02）。
+// 加载顺序关键：index.html 中必须排在 app.js 之前（app.js 顶层会调用这些工具函数）。
+func (p *Panel) appCoreScript(w http.ResponseWriter, r *http.Request) {
+	setSecurityHeaders(w)
+	w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	// 忽略：静态资源全量写回，写失败即客户端断连，无可恢复语义（与 appScript 同口径）。
+	_, _ = w.Write(appCoreJS)
+}
+
+// appQRScript 输出 QR 编码器组件（从 app.js 拆出的第一个组件，2026-11-02）。
+// 与 appScript 同口径：同源脚本 + 统一安全头，供 CSP script-src 'self' 加载。
+func (p *Panel) appQRScript(w http.ResponseWriter, r *http.Request) {
+	setSecurityHeaders(w)
+	w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	// 忽略：静态资源全量写回，写失败即客户端断连，无可恢复语义（与 appScript 同口径）。
+	_, _ = w.Write(appQRJS)
 }
 
 // aclNoticeScript 输出 F-101 面板 ACL 提示脚本（同源静态资源，与 appScript 同口径）。

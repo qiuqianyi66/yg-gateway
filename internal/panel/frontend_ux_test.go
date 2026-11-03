@@ -7,14 +7,14 @@ import (
 	"testing"
 )
 
-// readAppJS 读取 app.js 源码（源码级断言用）。
+// readAppJS 读取**全部前端脚本**的拼接源码（源码级断言用）。
+//
+// 2026-11-02（组件库拆分第 1 步）：原来是 os.ReadFile("app.js")，硬绑单文件。
+// 拆分后 app.js 只是其中一个组件，源码级断言必须看全集，否则断言会在拆分当天静默失效
+// （读到的是残缺源码，断言"没找到"却看不出为什么）。
 func readAppJS(t *testing.T) string {
 	t.Helper()
-	raw, err := os.ReadFile("app.js")
-	if err != nil {
-		t.Fatalf("read app.js: %v", err)
-	}
-	return string(raw)
+	return string(scriptBundle(t))
 }
 
 // TestAppJSConfigDirtyGuard 配置页未保存改动的守卫必须存在。
@@ -250,7 +250,7 @@ process.stdout.write(JSON.stringify({
 		t.Fatal(err)
 	}
 	f.Close()
-	out, err := exec.Command(node, f.Name(), "app.js").Output()
+	out, err := exec.Command(node, f.Name(), funcsOnlyBundlePath(t)).Output()
 	if err != nil {
 		t.Fatalf("csv node test failed: %v\n%s", err, nodeDiag(err, out))
 	}

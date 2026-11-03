@@ -173,7 +173,17 @@ func (p *Panel) Logs() *Ring { return p.logs }
 
 func (p *Panel) routes() {
 	p.mux.HandleFunc("GET /panel/{$}", p.index)
+	p.mux.HandleFunc("GET /panel/app_views_logs.js", p.appViewsLogsScript)
+	p.mux.HandleFunc("GET /panel/app_views_tasks.js", p.appViewsTasksScript)
+	p.mux.HandleFunc("GET /panel/app_views_config.js", p.appViewsConfigScript)
+	p.mux.HandleFunc("GET /panel/app_views_accounts.js", p.appViewsAccountsScript)
+	p.mux.HandleFunc("GET /panel/app_views_usage.js", p.appViewsUsageScript)
+	p.mux.HandleFunc("GET /panel/app_views_keys.js", p.appViewsKeysScript)
+	p.mux.HandleFunc("GET /panel/app_views_packages.js", p.appViewsPackagesScript)
+	p.mux.HandleFunc("GET /panel/app_views_models.js", p.appViewsModelsScript)
+	p.mux.HandleFunc("GET /panel/app_core.js", p.appCoreScript)
 	p.mux.HandleFunc("GET /panel/app.js", p.appScript)
+	p.mux.HandleFunc("GET /panel/app_qr.js", p.appQRScript)
 	p.mux.HandleFunc("GET /panel/acl_notice.js", p.aclNoticeScript)
 	p.mux.HandleFunc("GET /panel/savings_note.js", p.savingsNoteScript)
 	p.mux.HandleFunc("GET /panel/opsagent.js", p.opsAgentScript)

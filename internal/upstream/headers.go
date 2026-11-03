@@ -23,8 +23,10 @@ const (
 	// config upstream.cli_version 可覆盖（空 = 内置默认）。
 	defaultCliVersion = "2.137.1"
 
-	originRefererCN     = "https://www.codebuddy.cn"
-	originRefererGlobal = "https://www.workbuddy.ai"
+	// originRefererCN / originRefererGlobal 的值来自 protocol.go（R8 单一来源）：
+	// 本包内保留短名以免大面积改调用点，字面量只许出现在 protocol.go。
+	originRefererCN     = OriginRefererCN
+	originRefererGlobal = OriginRefererGlobal
 )
 
 // originRefererFor 按账号 realm 返回 Origin/Referer 基础域：

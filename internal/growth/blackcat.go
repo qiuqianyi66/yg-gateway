@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"yg-gateway/internal/auth"
+	"yg-gateway/internal/pkg/timex"
 )
 
 // BlackcatNeed 查 black_cat 任务剩余差额（需要再完成几次对话）。
@@ -143,7 +144,7 @@ func claimCredit(data []byte, op string) (int64, error) {
 
 // HeatmapYesterdayMissed 检查昨日是否漏签（heatmap cell score==0）。
 func (c *Client) HeatmapYesterdayMissed(a *auth.Auth) (bool, error) {
-	yesterday := time.Now().AddDate(0, 0, -1).Format("2006-01-02")
+	yesterday := timex.Date(time.Now().AddDate(0, 0, -1))
 	data, err := c.t.DoChat(a, http.MethodGet, "/activity/growth/heatmap", nil)
 	if err != nil {
 		return false, err

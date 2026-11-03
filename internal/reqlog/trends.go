@@ -19,6 +19,8 @@
 //     叠加 Pool.List() 现态完成（当前快照，observation）。
 package reqlog
 
+import "yg-gateway/internal/pkg/timex"
+
 // DailyPoint 单日聚合点（JSON 字段名即 wire 名）。
 type DailyPoint struct {
 	Date             string  `json:"date"`              // "2006-01-02"（本地时区）
@@ -46,7 +48,7 @@ func AggregateDaily(events []Event) []DailyPoint {
 	days := make(map[string]*accum)
 	for i := range events {
 		e := events[i]
-		d := e.Time.Local().Format("2006-01-02")
+		d := timex.Date(e.Time.Local())
 		a, ok := days[d]
 		if !ok {
 			a = &accum{active: map[string]struct{}{}}

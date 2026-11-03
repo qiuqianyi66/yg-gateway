@@ -7,6 +7,8 @@ import (
 	"log"
 	"strings"
 	"time"
+
+	"yg-gateway/internal/pkg/timex"
 )
 
 func (p *Pool) SetCredits(uid string, credits, total int64) {
@@ -55,7 +57,7 @@ func (p *Pool) NoteCheckinDone(uid string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if e, ok := p.byUID[uid]; ok {
-		day := time.Now().Format("2006-01-02")
+		day := timex.Date(time.Now())
 		if e.lastCheckinDay != day {
 			e.lastCheckinDay = day
 			p.dirty.Store(true)

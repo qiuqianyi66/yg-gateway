@@ -4,14 +4,15 @@ package usage
 //
 // 与 usage.go 同包，故可直接引用包级常量（maxBuckets / minHourlyKeep /
 // rollupTargetRatio / hourlyKeep）、类型（bucket / Recorder）与函数（bucketKey /
-// bucketTime / hourLayout / dayLayout）。拆到独立文件仅为控制 usage.go 体积，避免越过
-// 千行（深度棘轮：oversizeFiles 只许降不许涨）。
+// bucketTime）。时间布局自 2026-11-02 起在 internal/pkg/timex（HourLayout / DateLayout）。
 
 import (
 	"log"
 	"sort"
 	"strings"
 	"time"
+
+	"yg-gateway/internal/pkg/timex"
 )
 
 // ancientDayScope 合成「远古」日桶的 scope。维度（realm/uid/model/rate/key）全空，
@@ -80,11 +81,11 @@ func (r *Recorder) foldHourlyOlderThan(cutoff time.Time) {
 		if !strings.HasPrefix(b.Scope, "h:") {
 			continue
 		}
-		ts, err := time.ParseInLocation(hourLayout, strings.TrimPrefix(b.Scope, "h:"), time.Local)
+		ts, err := time.ParseInLocation(timex.HourLayout, strings.TrimPrefix(b.Scope, "h:"), time.Local)
 		if err != nil || !ts.Before(cutoff) {
 			continue
 		}
-		day := "d:" + ts.Format(dayLayout)
+		day := "d:" + timex.Date(ts)
 		moves = append(moves, move{from: k, to: bucketKey(day, b.Realm, b.UID, b.Model, b.Rate, b.Key)})
 	}
 	if len(moves) == 0 {

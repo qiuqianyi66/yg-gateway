@@ -19,6 +19,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"yg-gateway/internal/pkg/timex"
 )
 
 const (
@@ -426,7 +428,7 @@ func (w *archiveWriter) writeEvent(e Event) {
 	if now.IsZero() {
 		now = time.Now()
 	}
-	day := now.Format("2006-01-02")
+	day := timex.Date(now)
 	if w.file == nil || w.day != day {
 		if err := w.openFile(now, false); err != nil {
 			w.setErr(err)
@@ -452,7 +454,7 @@ func (w *archiveWriter) writeEvent(e Event) {
 
 func (w *archiveWriter) openFile(now time.Time, rotate bool) error {
 	w.closeFile()
-	day := now.Format("2006-01-02")
+	day := timex.Date(now)
 	if err := os.MkdirAll(w.cfg.Dir, 0o700); err != nil {
 		return err
 	}
@@ -519,8 +521,15 @@ func latestArchiveForDay(dir, day string) string {
 // archiveDay 从归档文件名取日期段（"requests-2026-10-22[.N].jsonl" → "2026-10-22"）。
 // 调用处已用 HasPrefix/HasSuffix 守卫，切片偏移固定安全。
 func archiveDay(name string) string {
-	return name[len("requests-") : len("requests-")+len("2006-01-02")]
+	return name[len("requests-") : len("requests-")+archiveDateLen]
 }
+
+// archiveDateLen 归档文件名里日期段的固定宽度（"requests-YYYY-MM-DD.jsonl"）。
+//
+// 刻意**不用** len(timex.DateLayout)：文件名契约是定宽 10，而布局串长度只是格式化细节。
+// 两者耦在一起时，一旦布局改成非定宽形态（如 "2006-1-2"），这里会静默切错且不报错
+// （2026-11-02 独立复审 🟢-3）。
+const archiveDateLen = 10
 
 func nextArchivePath(dir, day string) string {
 	base := filepath.Join(dir, "requests-"+day)
@@ -625,10 +634,10 @@ func (w *archiveWriter) read(limit int, filter Filter) ([]Event, error) {
 	// （此前 From/To 只在行内过滤生效，一次面板查询要 parse 整个归档目录。）
 	fromDay, toDay := "", ""
 	if !filter.From.IsZero() {
-		fromDay = filter.From.Format("2006-01-02")
+		fromDay = timex.Date(filter.From)
 	}
 	if !filter.To.IsZero() {
-		toDay = filter.To.Format("2006-01-02")
+		toDay = timex.Date(filter.To)
 	}
 	// 文件读取顺序无关紧要：结果一律按事件时间排序。不能依赖归档文件的 mtime 还原时间
 	// 顺序——同一秒内连续轮转写出的多个文件 mtime 经常完全相同（Linux 文件时间戳粒度粗），
@@ -668,10 +677,10 @@ func (w *archiveWriter) readAll(filter Filter) ([]Event, error) {
 	}
 	fromDay, toDay := "", ""
 	if !filter.From.IsZero() {
-		fromDay = filter.From.Format("2006-01-02")
+		fromDay = timex.Date(filter.From)
 	}
 	if !filter.To.IsZero() {
-		toDay = filter.To.Format("2006-01-02")
+		toDay = timex.Date(filter.To)
 	}
 	var out []Event
 	for _, entry := range entriesSortedByName(w.cfg.Dir) {

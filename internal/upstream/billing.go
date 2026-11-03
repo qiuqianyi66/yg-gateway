@@ -13,6 +13,7 @@ import (
 
 	"yg-gateway/internal/auth"
 	"yg-gateway/internal/logfmt"
+	"yg-gateway/internal/pkg/timex"
 )
 
 // UserResource 查询账号积分余额与总额度（所有套餐聚合）。remain 负值钳 0；
@@ -169,7 +170,9 @@ func (c *Client) UserResource(a *auth.Auth) (remain, total int64, err error) {
 }
 
 // packageEndLayout 上游套餐到期时间的墙钟格式（UTC+8，与 softRateResetLoc 同口径）。
-const packageEndLayout = "2006-01-02 15:04:05"
+// 值取自 internal/pkg/timex（2026-11-02）：与 errors.go 的 softRateTimeLayout 同形态，
+// 字面量只留一处，避免改日期口径时漏掉其中一份。
+const packageEndLayout = timex.DateTimeLayout
 
 // parsePackageEndTime 统一解析上游套餐到期时间。空值、格式异常返回 false，
 // 调用方据此保守地不把该包计入最早到期路由。

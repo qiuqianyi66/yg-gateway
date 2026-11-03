@@ -21,14 +21,18 @@ import (
 	"time"
 
 	"yg-gateway/internal/auth"
+	"yg-gateway/internal/upstream"
 )
 
+// 协议常量全部来自 internal/upstream（R8 单一来源，2026-11-02）：
+// 这些字符串是**报文内容**，曾经在 panel/login.go 与 cmd/login/main.go 各存一份字面量，
+// 改一处忘一处即风控特征漂移且不报错。本包保留短名以免大面积改调用点。
 const (
-	upstreamBaseCN      = "https://copilot.tencent.com"
-	upstreamBaseGlobal  = "https://www.workbuddy.ai"
-	clientUA            = "CLI/2.63.2 CodeBuddy/2.63.2"
-	originRefererCN     = "https://www.codebuddy.cn"
-	originRefererGlobal = "https://www.workbuddy.ai"
+	upstreamBaseCN      = upstream.LoginBaseCN
+	upstreamBaseGlobal  = upstream.LoginBaseGlobal
+	clientUA            = upstream.CLIUserAgent
+	originRefererCN     = upstream.OriginRefererCN
+	originRefererGlobal = upstream.OriginRefererGlobal
 )
 
 // loginEndpoints 按 realm 返回设备授权三端点（auth/state、token、account）+ Origin。

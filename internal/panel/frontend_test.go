@@ -69,25 +69,30 @@ func TestNodeCallsDoNotMergeStderr(t *testing.T) {
 	}
 }
 
-// TestAppJSSyntax app.js 必须能通过 JS 解析器语法校验。
+// TestAppJSSyntax 每个前端脚本都必须能通过 JS 解析器语法校验。
 //
-// 为什么需要：app.js 是 go:embed 进二进制的静态资源，Go 编译器不检查其内容——
+// 为什么需要：前端脚本是 go:embed 进二进制的静态资源，Go 编译器不检查其内容——
 // 一次对象字面量键名未加引号（Model_chat_GLM5.2 被解析成属性访问 + 数字字面量）
 // 就让整个面板白屏，而所有 Go 测试依然全绿。此测试把语法校验前移到 CI。
 // 无 node 环境时跳过（不阻塞无 Node 的构建机）。
+//
+// 2026-11-02（组件库拆分第 1 步）：从"只查 app.js"改成"查 index.html 引用的每一个脚本"
+// ——拆成多文件后，逐文件校验才能把报错指到具体文件，而不是一堆拼接后的行号。
 func TestAppJSSyntax(t *testing.T) {
 	node, err := exec.LookPath("node")
 	if err != nil {
 		t.Skip("node not available; skipping JS syntax check")
 	}
-	path, err := filepath.Abs("app.js")
-	if err != nil {
-		t.Fatal(err)
-	}
-	// --check 的诊断一律走 stderr（stdout 恒空），所以要走 nodeDiag 才看得到报错。
-	out, err := exec.Command(node, "--check", path).Output()
-	if err != nil {
-		t.Fatalf("app.js syntax error:\n%s", nodeDiag(err, out))
+	for _, name := range scriptFiles(t) {
+		path, err := filepath.Abs(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// --check 的诊断一律走 stderr（stdout 恒空），所以要走 nodeDiag 才看得到报错。
+		out, err := exec.Command(node, "--check", path).Output()
+		if err != nil {
+			t.Fatalf("%s syntax error:\n%s", name, nodeDiag(err, out))
+		}
 	}
 }
 
@@ -148,6 +153,12 @@ const sandbox = new Proxy({
   fetch: () => new Promise(() => {}),
   addEventListener() {}, removeEventListener() {},
   matchMedia: () => ({ matches: false, addEventListener() {} }),
+  // MutationObserver / ResizeObserver / IntersectionObserver：浏览器内置，测试里给惰性桩。
+  // 2026-11-02 起冒烟跑**全部**前端脚本（拼接 bundle），不再只跑 app.js，故需要它们
+  // （此前 app.js 单文件不碰，其他脚本的顶层代码从未被求值过）。
+  MutationObserver: class { constructor() {} observe() {} disconnect() {} takeRecords() { return []; } },
+  ResizeObserver: class { constructor() {} observe() {} unobserve() {} disconnect() {} },
+  IntersectionObserver: class { constructor() {} observe() {} unobserve() {} disconnect() {} },
   setInterval, clearInterval, setTimeout, clearTimeout,
   console, JSON, Math, Date, Number, String, Boolean, Object, Array, Promise, Map, Set, RegExp, Error, TypeError, isNaN, parseInt, parseFloat, encodeURIComponent, decodeURIComponent, URL, Symbol, Proxy, Reflect,
 }, { get(t, k) { return t[k]; }, has() { return true; } });
@@ -171,7 +182,7 @@ try {
 	}
 	hf.Close()
 	for _, hash := range []string{"#taskscenter", "#accounts", "#usage", "#models", "#config", "#logs", "#packages"} {
-		cmd := exec.Command(node, hf.Name(), "app.js")
+		cmd := exec.Command(node, hf.Name(), scriptBundlePath(t))
 		cmd.Dir = "." // 测试工作目录 = internal/panel
 		cmd.Env = append(os.Environ(), "SMOKE_HASH="+hash)
 		out, err := cmd.Output()
@@ -221,7 +232,7 @@ process.stdout.write(JSON.stringify({
 		t.Fatal(err)
 	}
 	f.Close()
-	out, err := exec.Command(node, f.Name(), "app.js").Output()
+	out, err := exec.Command(node, f.Name(), funcsOnlyBundlePath(t)).Output()
 	if err != nil {
 		t.Fatalf("credit formatting node test failed: %v\n%s", err, nodeDiag(err, out))
 	}
@@ -265,7 +276,7 @@ process.stdout.write(JSON.stringify({
 		t.Fatal(err)
 	}
 	f.Close()
-	out, err := exec.Command(node, f.Name(), "app.js").Output()
+	out, err := exec.Command(node, f.Name(), funcsOnlyBundlePath(t)).Output()
 	if err != nil {
 		t.Fatalf("rate-limit formatting node test failed: %v\n%s", err, nodeDiag(err, out))
 	}
@@ -315,7 +326,7 @@ process.stdout.write(JSON.stringify({
 		t.Fatal(err)
 	}
 	f.Close()
-	out, err := exec.Command(node, f.Name(), "app.js").Output()
+	out, err := exec.Command(node, f.Name(), funcsOnlyBundlePath(t)).Output()
 	if err != nil {
 		t.Fatalf("request log formatting node test failed: %v\n%s", err, nodeDiag(err, out))
 	}
@@ -365,7 +376,7 @@ process.stdout.write(JSON.stringify({
 		t.Fatal(err)
 	}
 	f.Close()
-	out, err := exec.Command(node, f.Name(), "app.js").Output()
+	out, err := exec.Command(node, f.Name(), scriptBundlePath(t)).Output()
 	if err != nil {
 		t.Fatalf("request filter node test failed: %v\n%s", err, nodeDiag(err, out))
 	}
@@ -428,7 +439,7 @@ process.stdout.write(JSON.stringify({
 		t.Fatal(err)
 	}
 	f.Close()
-	out, err := exec.Command(node, f.Name(), "app.js").Output()
+	out, err := exec.Command(node, f.Name(), scriptBundlePath(t)).Output()
 	if err != nil {
 		t.Fatalf("model filter node test failed: %v\n%s", err, nodeDiag(err, out))
 	}
@@ -496,7 +507,7 @@ process.stdout.write(JSON.stringify({
 		t.Fatal(err)
 	}
 	f.Close()
-	out, err := exec.Command(node, f.Name(), "app.js").Output()
+	out, err := exec.Command(node, f.Name(), scriptBundlePath(t)).Output()
 	if err != nil {
 		t.Fatalf("unknown-capability filter node test failed: %v\n%s", err, nodeDiag(err, out))
 	}
@@ -558,7 +569,7 @@ process.stdout.write(JSON.stringify({
 		t.Fatal(err)
 	}
 	f.Close()
-	out, err := exec.Command(node, f.Name(), "app.js").Output()
+	out, err := exec.Command(node, f.Name(), scriptBundlePath(t)).Output()
 	if err != nil {
 		t.Fatalf("playground model label node test failed: %v\n%s", err, nodeDiag(err, out))
 	}
@@ -620,7 +631,7 @@ process.stdout.write(JSON.stringify({
 		t.Fatal(err)
 	}
 	f.Close()
-	out, err := exec.Command(node, f.Name(), "app.js").Output()
+	out, err := exec.Command(node, f.Name(), scriptBundlePath(t)).Output()
 	if err != nil {
 		t.Fatalf("unknown badge node test failed: %v\n%s", err, nodeDiag(err, out))
 	}
@@ -684,7 +695,7 @@ process.stdout.write(JSON.stringify({
 		t.Fatal(err)
 	}
 	f.Close()
-	out, err := exec.Command(node, f.Name(), "app.js").Output()
+	out, err := exec.Command(node, f.Name(), funcsOnlyBundlePath(t)).Output()
 	if err != nil {
 		t.Fatalf("usage chart node test failed: %v\n%s", err, nodeDiag(err, out))
 	}
@@ -758,7 +769,7 @@ process.stdout.write(JSON.stringify({
 		t.Fatal(err)
 	}
 	f.Close()
-	out, err := exec.Command(node, f.Name(), "app.js").Output()
+	out, err := exec.Command(node, f.Name(), scriptBundlePath(t)).Output()
 	if err != nil {
 		t.Fatalf("time range node test failed: %v\n%s", err, nodeDiag(err, out))
 	}
@@ -787,10 +798,7 @@ process.stdout.write(JSON.stringify({
 // 少了一个开关而 Go 测试全绿，只有人肉点开配置页才会发现。这里把"表单字段 ↔
 // CFG_MAP"与"关键热改键必须在表单里"两条都钉住。
 func TestConfigFormMatchesCFGMap(t *testing.T) {
-	src, err := os.ReadFile("app.js")
-	if err != nil {
-		t.Fatal(err)
-	}
+	src := scriptBundle(t)
 	js := string(src)
 	htmlBytes, err := os.ReadFile("index.html")
 	if err != nil {
@@ -856,12 +864,12 @@ func TestAppJSDetailGroups(t *testing.T) {
 	script := `const fs = require('fs');
 const vm = require('vm');
 const src = fs.readFileSync(process.argv[2], 'utf8');
-const start = src.indexOf('const PK_DEFAULT_DETAIL_LIMIT');
-const end = src.indexOf('function renderPackages');
-if (start < 0 || end < 0) throw new Error('detail group functions not found');
+// 2026-11-02 组件拆分：不再按位置切片（函数已分散在 app.js / app_views_packages.js，
+// 位置切片会跨文件漏掉依赖）。直接执行「常量+全部顶层函数」的源码，符号全在作用域内。
+if (src.indexOf('function pkDetailGroups') < 0 || src.indexOf('function pkDetailLimit') < 0) throw new Error('detail group functions not found');
 const ctx = { Date, Math, Number, String, Map, Array, Object, isFinite };
 vm.createContext(ctx);
-vm.runInContext(src.slice(start, end) + '\nthis.pkDetailGroups = pkDetailGroups; this.pkDetailLimit = pkDetailLimit;', ctx);
+vm.runInContext(src + '\nthis.pkDetailGroups = pkDetailGroups; this.pkDetailLimit = pkDetailLimit;', ctx);
 const input = [
   { id: 'small-late', size: 100, remain: 1, expires_at: 400 },
   { id: 'zero-early-b', size: 200, remain: 0, expires_at: 200 },
@@ -893,7 +901,7 @@ process.stdout.write(JSON.stringify({
 		t.Fatal(err)
 	}
 	f.Close()
-	out, err := exec.Command(node, f.Name(), "app.js").Output()
+	out, err := exec.Command(node, f.Name(), funcsOnlyWithConstsPath(t, "PK_DEFAULT_DETAIL_LIMIT")).Output()
 	if err != nil {
 		t.Fatalf("detail groups node test failed: %v\n%s", err, nodeDiag(err, out))
 	}
@@ -917,7 +925,10 @@ const end = src.indexOf('function renderExpiryDistribution');
 if (start < 0 || end < 0) throw new Error('expiry summary functions not found');
 const ctx = { Date, Math, Number, String, Map, Array, Object, isFinite };
 vm.createContext(ctx);
-vm.runInContext(src.slice(start, end) + '\nthis.summarizeCreditDays = summarizeCreditDays; this.pkAccountColorMap = pkAccountColorMap;', ctx);
+// 2026-11-02 组件拆分：summarizeCreditDays / pkAccountColorMap 已分散到 app_views_packages.js，
+// 位置切片会跨文件漏符号。直接执行「常量+全部顶层函数」的源码。
+if (src.indexOf('function pkAccountColorMap') < 0) throw new Error('pkAccountColorMap not found');
+vm.runInContext(src + '\nthis.summarizeCreditDays = summarizeCreditDays; this.pkAccountColorMap = pkAccountColorMap;', ctx);
 const day = 86400000, now = 100000;
 const out = ctx.summarizeCreditDays([
   { uid: 'a', remain: 100, packages: [
@@ -945,7 +956,7 @@ process.stdout.write(JSON.stringify({
 		t.Fatal(err)
 	}
 	f.Close()
-	out, err := exec.Command(node, f.Name(), "app.js").Output()
+	out, err := exec.Command(node, f.Name(), funcsOnlyWithConstsPath(t, "PK_ACCOUNT_COLORS", "PK_DAY_MS")).Output()
 	if err != nil {
 		t.Fatalf("expiry summary node test failed: %v\n%s", err, nodeDiag(err, out))
 	}
@@ -970,9 +981,9 @@ func TestAppJSCollectConfigClearable(t *testing.T) {
 	script := `const fs = require('fs');
 const vm = require('vm');
 const src = fs.readFileSync(process.argv[2], 'utf8');
-const start = src.indexOf('const CFG_MAP');
-const end = src.indexOf('/* Go 时长字段即时校验');
-if (start < 0 || end < 0 || end < start) throw new Error('collectConfig region not found');
+// 2026-11-02 组件拆分：collectConfig 在 app_views_config.js、CFG_MAP 仍在 app.js，
+// 位置切片会跨文件失败（end < start）。改为断言存在后直接执行整份函数源码。
+if (src.indexOf('function collectConfig') < 0) throw new Error('collectConfig not found');
 const mk = v => ({ type: 'text', value: v });
 const cfgForm = { elements: {
   listen: mk(''),
@@ -987,7 +998,7 @@ const ctx = {
   $: id => (id === 'cfgForm' ? cfgForm : null),
 };
 vm.createContext(ctx);
-vm.runInContext(src.slice(start, end) + '\nthis.collectConfig = collectConfig;', ctx);
+vm.runInContext(src + '\nthis.collectConfig = collectConfig;', ctx);
 const out = ctx.collectConfig();
 const has = (o, k) => Object.prototype.hasOwnProperty.call(o || {}, k);
 process.stdout.write(JSON.stringify([
@@ -1005,7 +1016,7 @@ process.stdout.write(JSON.stringify([
 		t.Fatal(err)
 	}
 	f.Close()
-	out, err := exec.Command(node, f.Name(), "app.js").Output()
+	out, err := exec.Command(node, f.Name(), funcsOnlyWithConstsPath(t, "CFG_MAP", "CLEARABLE_CFG")).Output()
 	if err != nil {
 		t.Fatalf("collectConfig node test failed: %v\n%s", err, nodeDiag(err, out))
 	}
@@ -1054,7 +1065,7 @@ process.stdout.write(JSON.stringify({
 		t.Fatal(err)
 	}
 	f.Close()
-	out, err := exec.Command(node, f.Name(), "app.js").Output()
+	out, err := exec.Command(node, f.Name(), scriptBundlePath(t)).Output()
 	if err != nil {
 		t.Fatalf("derive checkbox node test failed: %v\n%s", err, nodeDiag(err, out))
 	}
@@ -1119,7 +1130,7 @@ process.stdout.write(JSON.stringify(names));`
 		t.Fatal(err)
 	}
 	f.Close()
-	out, err := exec.Command(node, f.Name(), "app.js").Output()
+	out, err := exec.Command(node, f.Name(), funcsOnlyBundlePath(t)).Output()
 	if err != nil {
 		t.Fatalf("expiry sort node test failed: %v\n%s", err, nodeDiag(err, out))
 	}
@@ -1216,7 +1227,7 @@ process.stdout.write(JSON.stringify(out));`
 		t.Fatal(err)
 	}
 	f.Close()
-	out, err := exec.Command(node, f.Name(), "app.js").Output()
+	out, err := exec.Command(node, f.Name(), funcsOnlyBundlePath(t)).Output()
 	if err != nil {
 		t.Fatalf("expiry card grid node test failed: %v\n%s", err, nodeDiag(err, out))
 	}
@@ -1307,7 +1318,7 @@ process.stdout.write(JSON.stringify({
 		t.Fatal(err)
 	}
 	f.Close()
-	out, err := exec.Command(node, f.Name(), "app.js").Output()
+	out, err := exec.Command(node, f.Name(), scriptBundlePath(t)).Output()
 	if err != nil {
 		t.Fatalf("expiry snapshot node test failed: %v\n%s", err, nodeDiag(err, out))
 	}
@@ -1400,7 +1411,7 @@ process.stdout.write(JSON.stringify({
 		t.Fatal(err)
 	}
 	f.Close()
-	out, err := exec.Command(node, f.Name(), "app.js").Output()
+	out, err := exec.Command(node, f.Name(), scriptBundlePath(t)).Output()
 	if err != nil {
 		t.Fatalf("chart tooltip node test failed: %v\n%s", err, nodeDiag(err, out))
 	}
@@ -1422,10 +1433,7 @@ process.stdout.write(JSON.stringify({
 // 这里用源码断言而非 vm 执行：openKeyDialog 依赖完整 DOM 与模块闭包，切片求值
 // 会踩 frontend_test.go 既有切片契约；源码断言能精确钉住"赋值右侧不含 esc("。
 func TestAppJSKeyDialogValueNotEscaped(t *testing.T) {
-	raw, err := os.ReadFile("app.js")
-	if err != nil {
-		t.Fatalf("read app.js: %v", err)
-	}
+	raw := scriptBundle(t)
 	src := string(raw)
 	// 只检查弹窗赋值这两行（kfName / kfId 是唯一进 input.value 的 Key 字段）。
 	var bad []string
@@ -1475,7 +1483,7 @@ process.stdout.write(JSON.stringify(out));`
 		t.Fatal(err)
 	}
 	f.Close()
-	out, err := exec.Command(node, f.Name(), "app.js").Output()
+	out, err := exec.Command(node, f.Name(), scriptBundlePath(t)).Output()
 	if err != nil {
 		t.Fatalf("key import configs node test failed: %v\n%s", err, nodeDiag(err, out))
 	}
@@ -1502,10 +1510,7 @@ func TestIndexHTMLKeyImportBlocks(t *testing.T) {
 		t.Error("index.html 缺 .key-cfg-pre 样式（配置块）")
 	}
 
-	raw, err := os.ReadFile("app.js")
-	if err != nil {
-		t.Fatalf("read app.js: %v", err)
-	}
+	raw := scriptBundle(t)
 	js := string(raw)
 	for _, frag := range []string{
 		"function buildKeyImportConfigs",
@@ -1547,7 +1552,7 @@ process.stdout.write(JSON.stringify(out));`
 		t.Fatal(err)
 	}
 	f.Close()
-	out, err := exec.Command(node, f.Name(), "app.js").Output()
+	out, err := exec.Command(node, f.Name(), scriptBundlePath(t)).Output()
 	if err != nil {
 		t.Fatalf("buildEnvFile node test failed: %v\n%s", err, nodeDiag(err, out))
 	}
@@ -1577,10 +1582,7 @@ func TestIndexHTMLKeyCfgAndReset(t *testing.T) {
 		}
 	}
 
-	raw, err := os.ReadFile("app.js")
-	if err != nil {
-		t.Fatalf("read app.js: %v", err)
-	}
+	raw := scriptBundle(t)
 	js := string(raw)
 	for _, frag := range []string{
 		`data-action="importcfg"`,

@@ -13,6 +13,7 @@ import (
 
 	"yg-gateway/internal/auth"
 	"yg-gateway/internal/logfmt"
+	"yg-gateway/internal/pkg/timex"
 	"yg-gateway/internal/pool"
 	"yg-gateway/internal/upstream"
 )
@@ -326,7 +327,7 @@ func awaitWakeupGrace(ctx context.Context, planned time.Time) bool {
 		return ctx.Err() == nil // 准点触发：零延迟放行
 	}
 	log.Printf("wakeup grace %s: late catch-up for slot %s", wakeupGraceDelay, planned.Format("15:04"))
-	return sleepCtx(ctx, wakeupGraceDelay)
+	return timex.SleepCtx(ctx, wakeupGraceDelay)
 }
 
 // wallclockCheckStep 墙钟校验段长：等待槽位时单次 timer 的最大时长，每段醒来用
@@ -451,21 +452,9 @@ func (s *Scheduler) runBatch(ctx context.Context, kinds []taskKind) {
 	wg.Wait()
 }
 
-// sleepCtx 可取消的等待：ctx 取消立即返回 false（优雅停机不必等限速睡醒），
-// 等满返回 true。d<=0 立即放行。
-func sleepCtx(ctx context.Context, d time.Duration) bool {
-	if d <= 0 {
-		return ctx.Err() == nil
-	}
-	t := time.NewTimer(d)
-	defer t.Stop()
-	select {
-	case <-ctx.Done():
-		return false
-	case <-t.C:
-		return true
-	}
-}
+// sleepCtx 已上移到 internal/pkg/timex.SleepCtx（2026-11-02）：与 server 的同名实现
+// 曾是两份拷贝，依赖方向禁止互引，叶子包是唯一能消掉复制的落点。
+// 行为断言随实现一起迁移（internal/pkg/timex/timex_test.go）。
 
 // RunCheckinNow 立即对所有账号执行签到 + 余额刷新 + 解冻。
 // 冷却中的账号也参与（签到就是为了解冻它们）；禁用账号默认跳过——
@@ -561,7 +550,7 @@ func (s *Scheduler) runActivity(ctx context.Context) {
 		// 判断不成立——国际版 /v2/report 可用，跳过即国际版账号永远点不亮连登（上游
 		// a190252 同口径修复）。checkin/travel 的 global 门控不受影响，仍跳过。
 		if !first {
-			if !sleepCtx(ctx, activityAccountDelay) {
+			if !timex.SleepCtx(ctx, activityAccountDelay) {
 				return // 优雅停机：不等限速睡满，剩余账号下轮再报
 			}
 		}

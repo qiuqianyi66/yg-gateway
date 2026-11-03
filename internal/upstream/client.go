@@ -219,7 +219,7 @@ func New() *Client {
 		HTTP:          newUpstreamHTTP(120*time.Second, tr),
 		ChatHTTP:      newUpstreamHTTP(0, tr), // 无总时长；首字节由 ResponseHeaderTimeout 管
 		ChatBaseCN:    "https://copilot.tencent.com",
-		BillingBaseCN: "https://www.codebuddy.cn",
+		BillingBaseCN: DefaultBillingBaseCN,
 		WebBaseCN:     "https://www.workbuddy.cn",
 		// GlobalEnabled 缺省 true（与 config global.enabled 缺省 true 一致；纯 CN 部署行为不变：
 		// CN 账号恒判 cn，global base 只在 realm=global 的账号上被使用）。
@@ -240,7 +240,8 @@ func (c *Client) chatHTTP() *http.Client {
 }
 
 // defaultGlobalBase 缺省 global base（D5：config 未覆盖时默认 workbuddy.ai）。
-const defaultGlobalBase = "https://www.workbuddy.ai"
+// 值来自 protocol.go（R8 单一来源）。
+const defaultGlobalBase = DefaultBillingBaseGlobal
 
 // globalChatBase 生效的 global chat base：Client.ChatBaseGlobal 非空取之，否则默认。
 func (c *Client) globalChatBase() string {

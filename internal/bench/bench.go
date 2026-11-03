@@ -14,6 +14,7 @@ import (
 	"sort"
 	"time"
 
+	"yg-gateway/internal/pkg/timex"
 	"yg-gateway/internal/reqlog"
 )
 
@@ -216,7 +217,7 @@ func health(events []reqlog.Event, accounts []AccountState) HealthMetric {
 	perDay := make(map[string]Metric)
 	byDay := map[string][2]int{} // date -> [ok,total]
 	for _, ev := range events {
-		d := ev.Time.Format("2006-01-02")
+		d := timex.Date(ev.Time)
 		p := byDay[d]
 		p[1]++
 		if ev.OK {

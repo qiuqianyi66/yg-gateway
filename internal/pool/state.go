@@ -12,6 +12,7 @@ import (
 	"yg-gateway/internal/auth"
 	"yg-gateway/internal/evidence"
 	"yg-gateway/internal/logfmt"
+	"yg-gateway/internal/pkg/timex"
 )
 
 func (p *Pool) Disable(uid, reason string) {
@@ -667,7 +668,7 @@ func (p *Pool) statusOf(uid string, e *entry) Status {
 		Paused:           e.paused,
 		SuccessCount:     e.successCount,
 		ErrTotal:         e.errTotal,
-		CheckinDone:      e.lastCheckinDay == now.Format("2006-01-02"),
+		CheckinDone:      e.lastCheckinDay == timex.Date(now),
 		PickReason:       e.lastPickReason().string(),
 		TokenUsage:       e.tokenUsage,
 		LastSuccessTime:  e.lastSuccess,

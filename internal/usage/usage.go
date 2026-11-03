@@ -24,6 +24,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"yg-gateway/internal/pkg/timex"
 )
 
 // hourlyKeep 小时桶的保留时长；超出后折叠为日桶。
@@ -44,11 +46,8 @@ const minHourlyKeep = 24 * time.Hour
 // 避免压到上限后下一轮 tick 立刻又超、抖动（ADR-011）。
 const rollupTargetRatio = 0.85
 
-// hourLayout / dayLayout 分片键的时间格式（本地时区，与用户直觉一致）。
-const (
-	hourLayout = "2006-01-02T15"
-	dayLayout  = "2006-01-02"
-)
+// 分片键的时间格式已上移到 internal/pkg/timex（HourLayout / DateLayout，2026-11-02）：
+// 写入侧 timex.Hour(now) 与查询侧 timex.HourStart(now) 必须同源，否则窗口错一格。
 
 // fileVersion 是 usage.json 的当前格式版本。版本 2 增加积分观测字段，版本 3
 // 增加模型生效倍率分区，版本 4 增加前缀缓存命中/未命中累计，版本 5 增加下游
@@ -272,7 +271,7 @@ func (r *Recorder) Add(now time.Time, realm, uid, model string, d Delta, ok bool
 	if model == "" {
 		model = "(unknown)"
 	}
-	scope := "h:" + now.Format(hourLayout)
+	scope := "h:" + timex.Hour(now)
 	key := bucketKey(scope, realm, uid, model, d.ModelRate, d.KeyID)
 
 	r.mu.Lock()
@@ -705,16 +704,16 @@ func (w Window) bounds() (time.Time, time.Time) {
 	if h > 24*60 {
 		h = 24 * 60
 	}
-	return time.Now().Truncate(time.Hour).Add(-time.Duration(h-1) * time.Hour), time.Time{}
+	return timex.HourStart(time.Now()).Add(-time.Duration(h-1) * time.Hour), time.Time{}
 }
 
 // bucketTime 把桶 scope 解析成本地时间；脏 scope 返回 false（不进任何口径）。
 func bucketTime(scope string) (time.Time, bool) {
 	if strings.HasPrefix(scope, "h:") {
-		ts, err := time.ParseInLocation(hourLayout, strings.TrimPrefix(scope, "h:"), time.Local)
+		ts, err := time.ParseInLocation(timex.HourLayout, strings.TrimPrefix(scope, "h:"), time.Local)
 		return ts, err == nil
 	}
-	ts, err := time.ParseInLocation(dayLayout, strings.TrimPrefix(scope, "d:"), time.Local)
+	ts, err := time.ParseInLocation(timex.DateLayout, strings.TrimPrefix(scope, "d:"), time.Local)
 	return ts, err == nil
 }
 

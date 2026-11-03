@@ -9,6 +9,7 @@ import (
 
 	"yg-gateway/internal/auth"
 	"yg-gateway/internal/logfmt"
+	"yg-gateway/internal/pkg/timex"
 	"yg-gateway/internal/upstream"
 )
 
@@ -38,7 +39,7 @@ var cstZone = time.FixedZone("CST", 8*60*60)
 
 // travelDay 返回 t 所属的上游自然日（CST），格式 2006-01-02。
 func travelDay(t time.Time) string {
-	return t.In(cstZone).Format("2006-01-02")
+	return timex.Date(t.In(cstZone))
 }
 
 // RunTravelNow 立即对池内所有可用账号执行一趟旅行巡检。

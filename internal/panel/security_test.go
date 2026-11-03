@@ -18,6 +18,18 @@ func TestSecurityHeadersOnAllPanelResponses(t *testing.T) {
 	paths := []struct{ method, path string }{
 		{"GET", "/panel/"},
 		{"GET", "/panel/app.js"},
+		// 拆分出来的组件脚本同样要带全套安全头（2026-11-02 组件库拆分第 2、3 步）：
+		// 新路由漏 setSecurityHeaders 时，这条会红，而不是等浏览器拒绝执行才发现。
+		{"GET", "/panel/app_core.js"},
+		{"GET", "/panel/app_views_models.js"},
+		{"GET", "/panel/app_views_packages.js"},
+		{"GET", "/panel/app_views_keys.js"},
+		{"GET", "/panel/app_views_accounts.js"},
+		{"GET", "/panel/app_views_usage.js"},
+		{"GET", "/panel/app_views_config.js"},
+		{"GET", "/panel/app_views_tasks.js"},
+		{"GET", "/panel/app_views_logs.js"},
+		{"GET", "/panel/app_qr.js"},
 		{"GET", "/panel/api/overview"}, // 401（未提供 key）
 		{"POST", "/panel/api/config"},  // 401
 		{"GET", "/panel/api/nonexistent"},
