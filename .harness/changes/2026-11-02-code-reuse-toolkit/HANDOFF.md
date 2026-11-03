@@ -58,16 +58,37 @@ app_qr.js              144  QR 编码器（唯一排在 app.js 之后的组件�
 | 代理 fail-open 直连 | 待 owner 决策（配错时反而用共享 IP 出去） |
 | `jsonsafe` 全量迁移 | **明确不做**（62 处逐处读过：绝大多数紧跟守卫，已等价 ok 检查）；新代码必用、存量改到哪迁哪 |
 
-## 六、工作区状态（重要）
+## 六、工作区状态（2026-11-03 已拆完，干净）
 
-工作区**混装两个 feature**，都没有提交：
+**两个 feature 已拆成两个提交，工作区 `脏文件=0`**：
 
-1. 本任务：`internal/pkg/*`、`internal/upstream/protocol.go`、`internal/panel/app*.js`、
-   `.harness/{snippets,prompts}`、`scripts/check-boundaries.ps1`（`pkg` 层）、`AGENTS.md` 数字。
-2. 上一轮 `2026-11-02-ban-risk-reduction`：per-account proxy、X-Session-ID 进程随机、
-   MinRequestInterval、11102 白名单、回归脚本改造、`scripts/yg-gateway-watch-hidden.vbs`。
+| 提交 | feature | 文件数 |
+|---|---|---|
+| `4fb5639` | `feat(upstream): per-account proxy + 进程级 Session-ID + 11102 三值白名单`（上一轮 ban-risk） | 30 |
+| `48cb585` | `refactor: 代码复用体系（pkg 原语 + 前端组件库 + 代码块库 + 提示词模板）`（本任务） | 72 |
 
-`deploy-prod.ps1 -Build` 遇脏树会拒绝——**必须先拆两个提交**才能按提交号追溯部署。
+### 拆分要点（下次拆提交照这个来）
+
+- **4 个文件混装两个 feature，必须按 hunk 拆**：`AGENTS.md`、`internal/upstream/client.go`、
+  `internal/upstream/headers.go`、`internal/upstream/models_fetch.go`。
+  hunk 边界是干净的（A 侧 = proxy / session / `doJSON(req,a)` 签名；B 侧 = R8 常量换源 +
+  文档数字），**没有"同一 hunk 里两件事"**，所以能拆。
+- **送 hunk 子集时补丁必须 LF + 无 BOM**：用 `git apply --cached`，补丁由
+  `[System.IO.File]::WriteAllText(..., UTF8Encoding($false))` 写盘。
+  PowerShell `Out-File -Encoding utf8` 会带 CRLF → 直接 `patch does not apply`。
+- **两个提交各自单独验过绿**：A 单独检出（stash 掉 B）跑 `go build/vet/gofmt -l` + `go test ./...`
+  + `check-boundaries` + `check-depth` 全过；B 跑 `pre-commit.ps1` **11/11**。
+  所以按提交号追溯部署不会拿到编译不过的快照。
+- 拆分时漏过两个未跟踪文件（`internal/upstream/transport_proxy_test.go`、
+  `scripts/yg-gateway-watch-hidden.vbs`），已 `--amend` 补进 A。**教训：`git status` 输出被
+  `Select-Object -First N` 截断时，未跟踪文件最容易漏**。
+- `deploy-prod.ps1 -DryRun` 已确认 `脏文件=0`，`-Build` 不再被脏树拒绝。
+
+### 部署前必读
+
+工作区里现存的 `yg-gateway.exe` 与生产在跑的 sha256 **相同**（`3DE689C1…`），
+即那是**旧二进制**。要发这两个提交必须 `deploy-prod.ps1 -Build`（干净树重建），
+直接 `-Exe yg-gateway.exe` 等于没换版。
 
 ## 七、验证命令
 
