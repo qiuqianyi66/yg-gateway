@@ -6,6 +6,9 @@ let view = 'accounts';
 let overviewData = null, cfgLoaded = null;
 let logPin = true, loginState = null, loginTimer = null;
 let refTimer = null;
+/* 队列轮询状态：visibilitychange（注册在本文件中段）可能在顶层 let 求值前触发，
+   `typeof x` 对 TDZ 里的 let 无效（会抛 ReferenceError），故声明上提到顶部。 */
+let queueTimer = null, lastQueueSeq = 0;
 /* 视图级筛选状态（模块级声明放在文件顶部，避免顶层 go() 早于声明执行时踩 TDZ）。 */
 let mdFilter = { q: '', realm: '', cap: '', effort: '', promo: '', sort: 'default' };
 let mdAll = [], mdProbes = {}, mdProbeOf = () => undefined;
@@ -1023,15 +1026,16 @@ async function checkAuthGate() {
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) {
     if (refTimer) { clearInterval(refTimer); refTimer = null; }
-    // queueTimer 声明在本文件更下方（let，存在 TDZ）：用 typeof 守卫避免
-    // 在声明前触发 visibilitychange 时抛 ReferenceError。
-    if (typeof queueTimer !== 'undefined' && queueTimer) { clearInterval(queueTimer); queueTimer = null; }
+    if (queueTimer) { clearInterval(queueTimer); queueTimer = null; }
   } else {
     start();
     if (view === 'taskscenter') reattachQueueView();
   }
 });
-start();
+
+/* 启动调用移到本文件末尾：此前在顶层此处调用 start()，它经 loadOverview →
+   loadUsage 读到的 US_DIMS/US_DIM_TABS 等 const 在文件后半段才求值（TDZ），
+   表现为用量页首次进入即「读取失败」、成就带不渲染。 */
 
 /* ── 积分任务 + 任务中心已拆到 app_views_tasks.js（2026-11-02 组件库拆分第 4 步）──────────
    只许声明、先于 app.js 加载；顶层事件绑定与状态仍留在下方。 */
@@ -1138,7 +1142,6 @@ const SCHOOL_TITLES = {
 $('btnSchoolVouchers').onclick = loadSchoolVouchers;
 $('btnVcClose').onclick = () => $('vcVeil').classList.remove('on');
 $('btnVcRefresh').onclick = loadSchoolVouchers;
-let queueTimer = null, lastQueueSeq = 0;
 const GROWTH_TITLES = {}; // code → 展示名（扫描时从任务列表带出）
 async function runScanAll(btn) {
   // 停掉队列轮询：显式扫描 = 切到待办视图（否则在途队列下一 tick 会冲掉结果）。
@@ -1696,3 +1699,6 @@ if ($('btnPgSend')) $('btnPgSend').onclick = sendPlayground;
 if ($('btnPgStop')) $('btnPgStop').onclick = pgStop;
 if ($('btnPgClose')) $('btnPgClose').onclick = () => { pgStop(); $('pgVeil').classList.remove('on'); };
 if ($('btnPgClear')) $('btnPgClear').onclick = () => { pgSetOut('—', ''); $('pgMeta').textContent = '未发送'; };
+
+/* 首屏启动：整份脚本求值完毕后再跑，避免 start() 读到尚未初始化的模块级 const（TDZ）。 */
+start();

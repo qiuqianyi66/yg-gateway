@@ -113,7 +113,9 @@ function renderStreak() {
     el.id = 'streakStrip';
     el.className = 'streak';
     el.setAttribute('aria-label', '本机连续操作天数');
-    if (qprog) host.insertBefore(el, qprog);
+    // #qProg 的父节点是 .box（不是 host 的直接子节点）：insertBefore 的参照节点
+    // 必须是目标容器的直接子节点，否则抛 NotFoundError（此前整条 start() 被中断）。
+    if (qprog && qprog.parentNode) qprog.parentNode.insertBefore(el, qprog);
     else host.appendChild(el);
   }
   const set = new Set(streakLoad());

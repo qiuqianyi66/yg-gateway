@@ -184,6 +184,9 @@ func setSecurityHeaders(w http.ResponseWriter) {
 	w.Header().Set("Referrer-Policy", "no-referrer")    // 不外泄面板地址给外部站点
 	w.Header().Set("Cross-Origin-Opener-Policy", "same-origin")
 	w.Header().Set("Cross-Origin-Resource-Policy", "same-origin")
+	// 资源 URL 不随内容变化（go:embed 打进 exe，换版路径不变）。没有缓存头时浏览器按
+	// 启发式缓存 app.js/css，换版后看到的仍是旧界面——2026-11-04 实际踩到。
+	w.Header().Set("Cache-Control", "no-cache, must-revalidate")
 }
 
 // index 输出面板页面（静态无秘密；数据接口 /panel/api/* 才走鉴权）。

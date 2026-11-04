@@ -46,7 +46,8 @@ function renderAchievements() {
     el.className = 'ach';
     el.setAttribute('aria-label', '本机成就');
     const ref = document.getElementById('streakStrip') || document.getElementById('qProg');
-    if (ref) host.insertBefore(el, ref);
+    // 参照节点可能是孙层节点（#qProg 在 .box 内）：只能用它的父节点做插入容器。
+    if (ref && ref.parentNode) ref.parentNode.insertBefore(el, ref);
     else host.appendChild(el);
   }
   const s = { ops: achOps(), streak: streakDays() };
