@@ -35,7 +35,7 @@ func TestProxyConfigFailClosed(t *testing.T) {
 			if eff != proxyFailed {
 				t.Fatalf("代理配置错误 %q 的生效状态 = %v，want proxyFailed（/status 观测依赖此态）", c.proxyURL, eff)
 			}
-			client := newUpstreamHTTP(5*time.Second, tr)
+			client := (&Client{}).newUpstreamHTTP(5*time.Second, tr)
 			resp, err := client.Get(srv.URL)
 			if err == nil {
 				resp.Body.Close()
@@ -52,7 +52,7 @@ func TestProxyConfigFailClosed(t *testing.T) {
 // 不静默直连。fail-closed 的另一面——构造期与连接期的失败都不得降级为直连。
 func TestProxyDialFailureSurfaces(t *testing.T) {
 	tr, _ := newTransportWithProxy("socks5://127.0.0.1:1")
-	client := newUpstreamHTTP(5*time.Second, tr)
+	client := (&Client{}).newUpstreamHTTP(5*time.Second, tr)
 	_, err := client.Get("http://127.0.0.1:65500")
 	if err == nil {
 		t.Fatal("代理不可达时请求仍成功（dial 错误未冒泡）")

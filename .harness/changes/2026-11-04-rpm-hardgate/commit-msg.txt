@@ -1,0 +1,19 @@
+upstream: 出站 RPM 硬闸（rpmRoundTripper，可配置默认关）[P1-1B]
+
+REA P0 最高优先级真实缺口的机制维度落地：全部出站 client 的 Transport 外层
+统一包 rpmRoundTripper，按账号（X-Machine-ID）60s 滑动窗 + 1s 槽位限速；
+窗口满阻塞等待最早槽位滑出（不失败、不换号），ctx 取消即返回。
+
+- upstream/rpm.go（新）：rpmLimiter（now/after 可注入）+ rpmRoundTripper +
+  Client.rpmWait（限速器注册表）；CloseIdleConnections 透传（不吞清池能力）
+- transport.go：newUpstreamHTTP 方法化，统一挂闸（直连 + per-proxy 全路径）
+- client.go：RpmPerAccount + 注册表字段；New() 拆两步（wrapper 需引用 c）
+- cmd/server：upstream.rpm_per_account 配置（0=关默认、负值钳 0）+ 装配；
+  config.example.json 补示例
+- 测试：rpm_test.go（先红后绿：窗口/槽位/ctx 取消/分桶/关闭态）；既有测试
+  适配方法化与 wrapper（解包后共享断言，语义不变）
+
+默认 0 关零回归；机制与 P1-1 校准结论（min_request_interval=0 关）解耦，
+打开时防「短时间把一个号打热」（养号最直接封号路径）。
+
+五门禁全绿：test 30 包 / vet / gofmt 零输出 / boundaries / depth。

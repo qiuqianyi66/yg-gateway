@@ -205,10 +205,15 @@ func newTransportWithProxy(proxyURL string) (*http.Transport, proxyEffective) {
 // CheckRedirect 必须显式给出（不依赖 net/http 的默认跟随行为）：上游 base 是配置
 // 固定的受信端点，重定向只应发生在同 host 内（http→https 升级、路径调整）；
 // 跨 host 跳转一律拒绝。与 newTransport 同属「出站连接单一事实来源」。
-func newUpstreamHTTP(timeout time.Duration, tr http.RoundTripper) *http.Client {
+//
+// 出站 RPM 硬闸（rpmRoundTripper）在此统一挂载：全部出站 client（直连 HTTP/
+// ChatHTTP + per-proxy proxyClients）的 Transport 外层都过同一闸。
+// 开关在 RoundTrip 时判（RpmPerAccount>0 才限速），故 New() 时 RpmPerAccount
+// 仍为零值也安全（直接放行）；装配后设值即生效。
+func (c *Client) newUpstreamHTTP(timeout time.Duration, tr http.RoundTripper) *http.Client {
 	return &http.Client{
 		Timeout:       timeout,
-		Transport:     tr,
+		Transport:     &rpmRoundTripper{c: c, next: tr},
 		CheckRedirect: sameHostRedirect,
 	}
 }

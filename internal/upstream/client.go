@@ -116,6 +116,19 @@ type Client struct {
 	// 每次启动生成新会话 ID 的行为）。固定 Session-ID 在上游风控眼里像机器人。
 	sessionID string
 
+	// RpmPerAccount 出站 RPM 硬闸（REA P0，可配置默认关）：每账号 60s 滑动窗口
+	// 最大出站请求数。0 = 关闭（默认，零回归）。装配期字段（需重启）。
+	// 与 pool.min_request_interval（选号侧间隔）区分：本字段是出站侧硬闸，
+	// 全部出站请求（chat/billing/models/签到）经 rpmRoundTripper 卡槽位。
+	RpmPerAccount int
+
+	// rpmMu/rpmLimiters 出站限速器注册表（按 X-Machine-ID 分桶）。
+	// rpmWindow/rpmSlot 可注入（测试用短窗口）；零值回落 60s/1s。
+	rpmMu       sync.Mutex
+	rpmLimiters map[string]*rpmLimiter
+	rpmWindow   time.Duration
+	rpmSlot     time.Duration
+
 	// proxyClients 按 proxyURL 缓存的 per-account HTTP client 池。
 	// 空 key = 直连（用全局 HTTP）；非空 key = 带对应代理的 client。
 	// 用途：切断多账号共用出口 IP 的风控关联。
@@ -178,7 +191,7 @@ func (c *Client) clientForProxy(proxyURL string, timeout time.Duration, cacheKey
 		return pc
 	}
 	tr, eff := newTransportWithProxy(proxyURL)
-	pc := newUpstreamHTTP(timeout, tr)
+	pc := c.newUpstreamHTTP(timeout, tr)
 	if c.proxyClients == nil {
 		c.proxyClients = make(map[string]*http.Client)
 	}
@@ -240,8 +253,6 @@ func (c *Client) ProxyStatusSnapshot() map[string]string {
 func New() *Client {
 	tr := newTransport()
 	c := &Client{
-		HTTP:          newUpstreamHTTP(120*time.Second, tr),
-		ChatHTTP:      newUpstreamHTTP(0, tr), // 无总时长；首字节由 ResponseHeaderTimeout 管
 		ChatBaseCN:    "https://copilot.tencent.com",
 		BillingBaseCN: DefaultBillingBaseCN,
 		WebBaseCN:     "https://www.workbuddy.cn",
@@ -249,6 +260,10 @@ func New() *Client {
 		// CN 账号恒判 cn，global base 只在 realm=global 的账号上被使用）。
 		GlobalEnabled: true,
 	}
+	// 出站 client 在 c 就绪后构造：newUpstreamHTTP 挂 rpmRoundTripper 需引用 c
+	// （RpmPerAccount 装配期零值=关闭，RoundTrip 时判开关，零回归）。
+	c.HTTP = c.newUpstreamHTTP(120*time.Second, tr)
+	c.ChatHTTP = c.newUpstreamHTTP(0, tr) // 无总时长；首字节由 ResponseHeaderTimeout 管
 	c.SanitizeFingerprints.Store(true)
 	c.refreshGroup = &refreshGroup{}
 	c.sessionID = newProcessSessionID()

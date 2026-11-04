@@ -315,6 +315,13 @@ type Config struct {
 		DeviceTokenFile string `json:"device_token_file"`
 		// PassthroughIP 是否透传客户端 IP 给上游（默认 false，反代安全边界）。
 		PassthroughIP bool `json:"passthrough_ip"`
+		// RpmPerAccount 出站 RPM 硬闸（REA P0，可配置默认关）：每账号 60s 滑动
+		// 窗口最大出站请求数（RoundTripper 层卡槽位，覆盖 chat/billing/models/
+		// 签到全路径）。0 = 关闭（默认，零回归）。负值钳位 0。
+		// 与 pool.min_request_interval（选号侧间隔，已校准 0 关）区分：本项是
+		// 出站侧硬闸，防「短时间把一个号打热」——养号场景最直接的封号路径。
+		// 装配期字段（需重启）。
+		RpmPerAccount int `json:"rpm_per_account"`
 		//
 		// 已知风控风险（架构级，配置无法解决）：
 		// 多账号共用同一出口 IP。4 个账号的请求全部从网关机器同一个 IP 发出，
@@ -916,6 +923,11 @@ func (c *Config) normalize() error {
 	}
 	if c.MinRequestIntervalGlobalDur < 0 {
 		c.MinRequestIntervalGlobalDur = 0
+	}
+	// 出站 RPM 硬闸（REA P0，装配期字段）：负值钳 0（= 关闭，零回归）。
+	// 0 = 关闭（默认）；>0 时每账号 60s 窗口最多该数出站请求。
+	if c.Upstream.RpmPerAccount < 0 {
+		c.Upstream.RpmPerAccount = 0
 	}
 	// 积分保底：负值钳 0（= 关闭）。0 是合法默认（关闭），无需空值回落。
 	if c.Pool.CreditFloor < 0 {
