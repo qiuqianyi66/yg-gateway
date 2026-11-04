@@ -70,8 +70,8 @@ proxy URL 解析失败、SOCKS5 初始化失败、不支持 scheme 时，**静�
 **magpie 对照**：60s+1s 滑动窗 RPM 硬闸 + 429 五分类分档退避 + 零成本 /v1/models 探测复活。
 
 **候选比较**：
-- A（建议先做）：给 yg 设合理 `min_request_interval` 默认值（待校准参数，requires 观测账号请求分布），文档 + 面板展示生效值。
-- B（P2 独立项）：实现 magpie 式 rpmTransport 滑动窗硬闸——改动大，需单独设计。
+- A：给 yg 设合理 `min_request_interval` 默认值——**已完成校准并保持 0 关**（8 天 request-logs 观测：429 极低，默认不开零回归；`cmd/server/ratelimit_config_test.go` 钉住归一口径）。
+- B：实现 magpie 式 rpmTransport 滑动窗硬闸——**已实施（P1-1B，081e200）**：rpmRoundTripper 按账号 60s 滑动窗+1s 槽位，全出站路径统一挂闸，`upstream.rpm_per_account` 默认 0 关。A 选号侧 / B 出站侧，机制与默认值解耦。
 
 429 分类：yg 现有 kind 体系（6004 rate_limit / 11102 model_unavailable，`pool/entry.go:171`）已分主类，是否需要细化到 magpie 五类（频率/额度/月度/单模型）→ 评估后定，不预设。
 
@@ -156,7 +156,7 @@ P1-3 面板鉴权（requires 先读 panel 现状）
 | 🟢-2 头处理白名单+黑名单 | P1 | ✅ **构造式白名单**：出站头全新构造（CommonHeaders 显式 Set，非透传客户端头），自定义 X-* 均为协议/稳定性头（X-Machine-ID/X-Session-ID 即 magpie 同源特性，4fb5639） | headers.go:173-192 |
 | 🟢-4 模型快照复制 | — | ✅ 已确认消除（4fb5639） | 全仓 grep |
 | 02.2 UA 版本号随上游更新+硬下限 | P3 | 留档：R8 钉死三段式 UA，版本号已有抽象（clientVersion/cliVersion）；风控收紧时评估随官方更新 | headers.go:43-80 |
-| **出站 RPM 硬闸**（rpmTransport 按账号限 RPM/并发） | **P0（REA 最高）** | **真实缺口**：yg 无出站前强制槽位；8 天数据（429 极低）仅支撑「默认不开」，不支撑「机制不需要」。**形态：实现为可配置能力（默认关），与 min_request_interval「0 关」结论不冲突**——前者选号侧、后者出站侧 | 待实施（见下） |
+| **出站 RPM 硬闸**（rpmTransport 按账号限 RPM/并发） | **P0（REA 最高）** | ✅ **已实施+部署（P1-1B，081e200）**：rpmRoundTripper 60s 滑动窗+1s 槽位按 X-Machine-ID 分桶，全出站路径统一挂闸；`upstream.rpm_per_account` 可配置默认 0 关（与 min_request_interval「0 关」结论不冲突——前者选号侧、后者出站侧） | upstream/rpm.go |
 | warm-up 错峰范式 | P0 | ✅ 不排期：yg 已有 scheduler 签到/token 保活（等价活跃保持）；养号动作须走正常客户端路径（R8）原则隐含 | internal/scheduler |
 | Web 面板鉴权组合拳 | P1 | ✅ 已实施（P1-3，b544037）：先审计再抄——Bearer 非 cookie → cookie/BREACH 面不存在，真缺口是机制化（api() 强制） | panel.go + routes.go |
 | PII 脱敏管线 | P2 | 闭合不适用：prompt_cache_key 已确定性哈希派生 | cache_key.go:91 |
@@ -165,5 +165,6 @@ P1-3 面板鉴权（requires 先读 panel 现状）
 | 02.9 agent 识别双重证据 | P3 | 留档：request log 有 agent_kind 字段；UA 可伪造，识别须「文件存在+可执行文件存在」双重证据（未来按 agent 分权时启用） | REA 02.9 |
 
 **补审结论**：1 处真实缺口重新开放（出站 RPM 硬闸，REA P0 最高优先级，
-被我先前并入「校准 0 关」轻率闭合——校准只回答了默认值，机制仍是缺口）；
-1 处此前完全漏映射（P3 签名纪律，已补）；其余全部核实为已覆盖/已闭合/留档。
+被我先前并入「校准 0 关」轻率闭合——校准只回答了默认值，机制仍是缺口）
+**已实施（P1-1B，081e200 + 生产部署）**；1 处此前完全漏映射（P3 签名纪律，
+已补）；其余全部核实为已覆盖/已闭合/留档。
