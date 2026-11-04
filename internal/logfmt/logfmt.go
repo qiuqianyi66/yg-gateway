@@ -12,9 +12,35 @@
 package logfmt
 
 import (
+	"net/url"
 	"strings"
 	"unicode/utf8"
 )
+
+// RedactProxyURL 抹掉代理 URL 里的 userinfo（`user:pass@`），只保留 scheme://host。
+//
+// 为什么必须抹（2026-11-02 独立复审 🔴-1，R1/R2 红线）：ProxyURL 按设计就是含凭据的
+// 形态（见 internal/auth/auth.go 的注释示例 `http://user:pass@proxy:8080`），原样打进
+// 日志 / /status / 面板 JSON 等于把账号代理密码写进任何可见面，而运维巡检与归档都会读它。
+//
+// 解析失败时**连原文都不能打**：此时无法判断是否含 userinfo，一律按"可能含凭据"处理。
+//
+// 本函数是代理 URL 脱敏的**单一实现**（auth 视图 / pool.Status / upstream 日志共用）；
+// 上游 internal/upstream 的 redactProxyURL 是它的薄包装，禁止另起实现（漂移即泄密）。
+func RedactProxyURL(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		if strings.Contains(raw, "@") {
+			return "<代理 URL 解析失败且含 userinfo，已隐去>"
+		}
+		return raw
+	}
+	if u.User == nil {
+		return raw
+	}
+	u.User = nil // String() 会省掉 userinfo 段
+	return u.String()
+}
 
 // Truncate 截断字符串到 n 字节上限（先 TrimSpace，与旧 upstream/内部实现口径
 // 一致），切点落在多字节字符中间时回退到 UTF-8 rune 边界——错误 body 多为中文

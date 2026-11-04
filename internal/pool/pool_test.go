@@ -1056,6 +1056,38 @@ func TestList(t *testing.T) {
 	}
 }
 
+// TestStatusProxyURLRedacted 验证 List() 透出的 ProxyURL 是脱敏值（P0-2/R1-R2 红线）：
+// /status、panel、opsagent 全部直出 Status，原文若在此泄漏等于代理密码进所有可见面。
+// 牙齿：把 statusOf 里的 RedactedProxyURL() 改回 a.ProxyURL，本测试立即红。
+func TestStatusProxyURLRedacted(t *testing.T) {
+	p := New("")
+	p.Add(&auth.Auth{UID: "u1", ProxyURL: "http://alice:s3cr3t@proxy:8080"})
+	p.Add(&auth.Auth{UID: "u2"}) // 直连
+
+	list := p.List()
+	if len(list) != 2 {
+		t.Fatalf("list=%d", len(list))
+	}
+	var s1, s2 Status
+	for _, s := range list {
+		if s.UID == "u1" {
+			s1 = s
+		}
+		if s.UID == "u2" {
+			s2 = s
+		}
+	}
+	if s1.ProxyURL != "http://proxy:8080" {
+		t.Fatalf("u1.ProxyURL = %q，want 脱敏后的 http://proxy:8080", s1.ProxyURL)
+	}
+	if strings.Contains(s1.ProxyURL, "alice") || strings.Contains(s1.ProxyURL, "s3cr3t") {
+		t.Fatalf("u1.ProxyURL %q 泄露了代理凭据（R1/R2 红线）", s1.ProxyURL)
+	}
+	if s2.ProxyURL != "" {
+		t.Fatalf("直连账号 ProxyURL 应为空，got %q", s2.ProxyURL)
+	}
+}
+
 func TestRemoveMissingFromDir(t *testing.T) {
 	p := New("")
 	p.Add(&auth.Auth{UID: "u1"})

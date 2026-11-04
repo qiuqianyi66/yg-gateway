@@ -122,6 +122,12 @@ type Client struct {
 	proxyMu      sync.RWMutex
 	proxyClients map[string]*http.Client
 
+	// proxyEff 代理生效状态表（P0-2 /status 观测）：proxyURL 原文 → proxyActive/proxyFailed。
+	// 直连（ProxyURL 为空）不登记（查询端默认 direct，账号级由 accounts[].proxy_url 为空表达）。
+	// 键存原文（查询端经 logfmt.RedactProxyURL 脱敏输出）；与 proxyClients 同一把锁、
+	// 同一临界区登记（构造即登记，无并发窗口）。
+	proxyEff map[string]proxyEffective
+
 	// DeviceToken 设备风控 Token（X-Device-Token 头）全局兜底来源：config upstream.device_token。
 	// 解析优先级：auth.Auth.DeviceToken > DeviceToken（config）> DeviceTokenFile（文件）。
 	DeviceToken string
@@ -169,12 +175,16 @@ func (c *Client) clientFor(a *auth.Auth) *http.Client {
 	if pc, ok := c.proxyClients[a.ProxyURL]; ok {
 		return pc
 	}
-	tr := newTransportWithProxy(a.ProxyURL)
+	tr, eff := newTransportWithProxy(a.ProxyURL)
 	pc := newUpstreamHTTP(120*time.Second, tr)
 	if c.proxyClients == nil {
 		c.proxyClients = make(map[string]*http.Client)
 	}
+	if c.proxyEff == nil {
+		c.proxyEff = make(map[string]proxyEffective)
+	}
 	c.proxyClients[a.ProxyURL] = pc
+	c.proxyEff[a.ProxyURL] = eff
 	return pc
 }
 
@@ -201,13 +211,41 @@ func (c *Client) chatClientFor(a *auth.Auth) *http.Client {
 	if pc, ok := c.proxyClients["chat:"+a.ProxyURL]; ok {
 		return pc
 	}
-	tr := newTransportWithProxy(a.ProxyURL)
+	tr, eff := newTransportWithProxy(a.ProxyURL)
 	pc := newUpstreamHTTP(0, tr)
 	if c.proxyClients == nil {
 		c.proxyClients = make(map[string]*http.Client)
 	}
+	if c.proxyEff == nil {
+		c.proxyEff = make(map[string]proxyEffective)
+	}
 	c.proxyClients["chat:"+a.ProxyURL] = pc
+	c.proxyEff[a.ProxyURL] = eff
 	return pc
+}
+
+// ProxyStatusSnapshot 返回代理生效状态视图（/status 的 proxy_status 键，P0-2）：
+// 已登记的非空代理 URL（logfmt 脱敏）→ "active" / "failed"。
+//
+// 语义（四态纪律）：
+//   - active   = 代理已配置且 Transport 构造成功（出站走该代理；连接期失败由 dial 错误冒泡，
+//     不改变此态——那是"瞬时不可达"，不是"配置错误"）。
+//   - failed   = 代理已配置但构造失败（fail-closed，该账号出站必失败，请求持续换号）。
+//   - 未配置代理（直连）的账号不出现：账号级直连由 accounts[].proxy_url 为空表达。
+//   - 尚未有任何代理被构造过 → 空 map（/status 输出 {}，键恒存在，零回归只增键）。
+func (c *Client) ProxyStatusSnapshot() map[string]string {
+	c.proxyMu.RLock()
+	defer c.proxyMu.RUnlock()
+	out := make(map[string]string, len(c.proxyEff))
+	for raw, eff := range c.proxyEff {
+		switch eff {
+		case proxyActive:
+			out[logfmt.RedactProxyURL(raw)] = "active"
+		case proxyFailed:
+			out[logfmt.RedactProxyURL(raw)] = "failed"
+		}
+	}
+	return out
 }
 
 // New 生产默认值。Client 由 newUpstreamHTTP 集中构造（共享 newTransport 的连接层

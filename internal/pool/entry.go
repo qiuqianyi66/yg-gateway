@@ -92,6 +92,10 @@ type Status struct {
 	Realm string `json:"realm,omitempty"`
 	// Group 账号池分组标签（P1-B，auth.Auth.Group 透传）。空 = 未分组。
 	Group string `json:"group,omitempty"`
+	// ProxyURL 账号出站代理地址（**脱敏值**，auth.Auth.RedactedProxyURL；R1/R2 红线——
+	// 原始 proxy_url 含 userinfo 凭据，本字段只允许存脱敏结果，/status 与面板直出安全）。
+	// 空 = 直连（缺省形态）；对照 /status 顶层 proxy_status 可读「配了代理但 failed」。
+	ProxyURL string `json:"proxy_url,omitempty"`
 	// Enterprise 企业版账号（auth.EnterpriseID 非空，计算值不落盘）。
 	// 企业版无个人成长体系（签到/成长任务/连登/旅行/夜猫子 上游均拒），
 	// 面板据此隐藏对应按钮；选号、保活、额度展示不受影响。

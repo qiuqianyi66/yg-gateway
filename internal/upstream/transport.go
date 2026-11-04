@@ -18,6 +18,8 @@ import (
 	"time"
 
 	"golang.org/x/net/proxy"
+
+	"yg-gateway/internal/logfmt"
 )
 
 // 连接层参数集中定义（与 server/backoff.go 同风格：一处定义，测试可回读断言）。
@@ -80,7 +82,8 @@ func newDialer() *net.Dialer {
 //   - TCP 层：DialContext 10s 建连上限 + 15s keepalive 探测，半开连接在建立期
 //     和复用期都能被快速识别（见 dialTimeout/dialKeepAlive 注释）。
 func newTransport() *http.Transport {
-	return newTransportWithProxy("")
+	tr, _ := newTransportWithProxy("")
+	return tr
 }
 
 // redactProxyURL 抹掉代理 URL 里的 userinfo（`user:pass@`），只保留 scheme://host。
@@ -90,20 +93,29 @@ func newTransport() *http.Transport {
 // WARN 日志等于把账号代理密码写进 stderr / 日志文件，而运维巡检与归档都会读它。
 //
 // 解析失败时**连原文都不能打**：此时无法判断是否含 userinfo，一律按"可能含凭据"处理。
+//
+// 脱敏逻辑的单一实现已下沉 internal/logfmt（auth 视图 / pool.Status / 本日志三处共用），
+// 本函数只是薄包装——禁止在此另起实现（漂移即泄密）。
 func redactProxyURL(raw string) string {
-	u, err := url.Parse(raw)
-	if err != nil {
-		if strings.Contains(raw, "@") {
-			return "<代理 URL 解析失败且含 userinfo，已隐去>"
-		}
-		return raw
-	}
-	if u.User == nil {
-		return raw
-	}
-	u.User = nil // String() 会省掉 userinfo 段
-	return u.String()
+	return logfmt.RedactProxyURL(raw)
 }
+
+// proxyEffective 账号出站代理的生效状态（/status 观测三态，P0-2）。
+//
+// 为什么需要第三态 proxyFailed（而非只有"配了/没配"）：fail-closed 之后，代理构造失败
+// 的账号**出站全失败**（请求错误冒泡换号）——运维必须能从观测看出「这个号为什么一直
+// 在换号失败」，否则会误判成账号本身的问题。magpie REA 第④节结论：显式代理必须
+// fail-closed，且 per-account 观测是 yg 自己能补的（magpie 自身也是 unknown）。
+type proxyEffective int
+
+const (
+	// proxyDirect 未配置代理（直连，ProxyURL 为空）。
+	proxyDirect proxyEffective = iota
+	// proxyActive 代理已配置且 Transport 构造成功（连接期失败由 dial 错误冒泡，不在此态）。
+	proxyActive
+	// proxyFailed 代理已配置但构造失败（fail-closed，该账号出站必失败）。
+	proxyFailed
+)
 
 // errProxyConfig 显式代理配置错误的哨兵（fail-closed 语义，见 failDial）。
 // 显式配置了代理的账号，代理构造失败 = 该账号出站失败（请求错误冒泡 → chatrun
@@ -131,7 +143,10 @@ func failDial(cause error) func(ctx context.Context, network, addr string) (net.
 // 每个不同的 proxyURL 对应一个独立的 Transport 实例（连接池隔离）。
 //
 // 日志纪律：本函数只打印 redactProxyURL(proxyURL)——绝不打印含 userinfo 的原文（R1/R2）。
-func newTransportWithProxy(proxyURL string) *http.Transport {
+// newTransportWithProxy 构造带 HTTP/SOCKS5 代理的出站 Transport，并返回代理生效状态
+// （P0-2 /status 观测三态）：proxyURL 为空 = proxyDirect；构造失败 = proxyFailed
+// （fail-closed，该账号出站必失败）；构造成功 = proxyActive。
+func newTransportWithProxy(proxyURL string) (*http.Transport, proxyEffective) {
 	dialer := newDialer()
 	tr := &http.Transport{
 		DialContext: dialer.DialContext,
@@ -146,13 +161,13 @@ func newTransportWithProxy(proxyURL string) *http.Transport {
 		ResponseHeaderTimeout: responseHeaderTimeout,
 	}
 	if proxyURL == "" {
-		return tr
+		return tr, proxyDirect
 	}
 	u, err := url.Parse(proxyURL)
 	if err != nil {
 		log.Printf("WARN: [upstream] 代理 URL 解析失败（fail-closed，该账号出站将失败）: %s (%v)", redactProxyURL(proxyURL), err)
 		tr.DialContext = failDial(fmt.Errorf("%w: url parse %s: %v", errProxyConfig, redactProxyURL(proxyURL), err))
-		return tr
+		return tr, proxyFailed
 	}
 	switch u.Scheme {
 	case "http", "https":
@@ -172,7 +187,7 @@ func newTransportWithProxy(proxyURL string) *http.Transport {
 		if err != nil {
 			log.Printf("WARN: [upstream] SOCKS5 代理初始化失败（fail-closed，该账号出站将失败）: %s (%v)", redactProxyURL(proxyURL), err)
 			tr.DialContext = failDial(fmt.Errorf("%w: socks5 init %s: %v", errProxyConfig, redactProxyURL(proxyURL), err))
-			return tr
+			return tr, proxyFailed
 		}
 		// 类型断言：确保是 ContextDialer
 		if cd, ok := socksDialer.(proxy.ContextDialer); ok {
@@ -181,8 +196,9 @@ func newTransportWithProxy(proxyURL string) *http.Transport {
 	default:
 		log.Printf("WARN: [upstream] 不支持的代理 scheme %q（fail-closed，该账号出站将失败）: %s", u.Scheme, redactProxyURL(proxyURL))
 		tr.DialContext = failDial(fmt.Errorf("%w: unsupported proxy scheme %q", errProxyConfig, u.Scheme))
+		return tr, proxyFailed
 	}
-	return tr
+	return tr, proxyActive
 }
 
 // newUpstreamHTTP 构造出站 http.Client：共享 Transport + 显式重定向策略。

@@ -55,7 +55,18 @@ type Auth struct {
 	// 用途：多账号共用出口 IP 是风控关联的高风险点——上游很容易识别
 	// "这个 IP 上有 N 个账号在活动"。给不同账号配不同代理出口，可切断关联。
 	// 从 auth 文件的 "proxy_url" 键读取。
+	//
+	// 注意：本字段存原文（含 userinfo 凭据）。任何出日志 / 出 /status / 出面板的
+	// 视图一律走 RedactedProxyURL（R1/R2 红线，见 logfmt.RedactProxyURL）。
 	ProxyURL string
+}
+
+// RedactedProxyURL 返回脱敏后的代理 URL（抹掉 userinfo 凭据，R1/R2 红线）。
+// 供 /status accounts[].proxy_url、面板与日志使用——原始 ProxyURL 含
+// `user:pass@`，原样输出等于把账号代理密码写进任何可见面。
+// 空 ProxyURL（直连）返回空串。脱敏逻辑单一实现：internal/logfmt.RedactProxyURL。
+func (a *Auth) RedactedProxyURL() string {
+	return logfmt.RedactProxyURL(a.ProxyURL)
 }
 
 // Lock 供同进程内其他包（upstream.RefreshToken）在改写 Auth 字段期间加锁。
