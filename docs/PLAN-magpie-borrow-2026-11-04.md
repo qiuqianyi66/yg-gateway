@@ -97,7 +97,11 @@ proxy URL 解析失败、SOCKS5 初始化失败、不支持 scheme 时，**静�
 
 ### P2（留档不排期）
 
-- **🟢-4 模型快照复制**：`internal/upstream` 当前未搜到 Copy/copyModels/deepCopy/cloneModels（零命中）——**requires** 全仓 grep 原始输出确认是否已被 4fb5639 消除；确认前不写「已修复」。
+- **🟢-4 模型快照复制**：已确认消除（2026-11-04 全仓 grep 原始输出：
+  `git grep -i -E "copyModels|deepcopy|cloneModels|snapshot.*(copy|clone)|copy.*snapshot" -- '*.go'`
+  仅命中 `internal/session/coverage_test.go:510-512`（会话快照独立副本测试，session 域，
+  非 upstream 模型目录）；`internal/upstream` 下 Copy/copyModels/deepCopy/cloneModels
+  零命中。**结论：upstream 模型快照复制已被 4fb5639 消除，无需再修**。
 - **warm-up 错峰**：yg 已有每日签到 + token 保活（等价活跃保持），增量有限；仅当需要「最低成本 Haiku 探测」时才评估，当前不做。
 - **三层锁（进程内 RWMutex + 跨进程 .renew.lock）**：单实例单进程当前无并发写凭证场景；未来多实例/CLI 并行切号时再引入。
 - **PII 确定性占位符**：请求归并/缓存键稳定性的长期项。
@@ -126,7 +130,7 @@ P1-3 面板鉴权（requires 先读 panel 现状）
 
 | 项 | 状态 | requires |
 |---|---|---|
-| 🟢-4 快照复制现状 | unknown | 全仓 grep models 复制原始输出 |
-| 面板鉴权细节 | unknown | 读 internal/panel 鉴权实现 |
+| 🟢-4 快照复制现状 | **已消除**（2026-11-04 全仓 grep 确认，见 P2 节） | — |
+| 面板鉴权细节 | **已实施**（P1-3，b544037：Bearer 鉴权审计 + api() 强制鉴权机制化） | — |
 | min_request_interval 默认值 | 待校准参数 | 观测账号 7 天请求分布 |
 | 429 是否需要五分类细化 | 待评估 | 看 6004/11102 之外还有哪些上游错误词表 |
