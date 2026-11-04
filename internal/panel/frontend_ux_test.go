@@ -280,6 +280,34 @@ process.stdout.write(JSON.stringify({
 	}
 }
 
+// TestAppJSProxyStatusObservability P0-2：overview 的 proxy_status 必须在首页
+// 提示行有渲染（运维开面板即见代理 failed，不必 curl /status）。
+//
+// 背景：/status 恒输出 proxy_status（ADR-021），但面板前端此前零消费——代理
+// failed 只藏在 /status 细节里，首页 overview 不可见。本次把 proxy_status 注入
+// overview body + 首页提示行渲染（failed 红字 + 悬停明细）。
+//
+// 牙齿：删掉 overview 渲染段（d.proxy_status 消费）或退回 textContent（无高亮）
+// → 本测试 FAIL。
+func TestAppJSProxyStatusObservability(t *testing.T) {
+	src := readAppJS(t)
+	checks := []struct {
+		name string
+		want string
+	}{
+		{"overview 消费 proxy_status", "const ps = d.proxy_status;"},
+		{"failed 三态判定", "s === 'failed'"},
+		{"failed 红字高亮", "color:var(--bad)"},
+		{"提示行改 innerHTML 支持高亮", "$('accNote').innerHTML = accNotes.join(' · ');"},
+		{"代理条目进提示行", "accNotes.push('代理：' + pLabel);"},
+	}
+	for _, c := range checks {
+		if !strings.Contains(src, c.want) {
+			t.Errorf("缺少「%s」：未找到 %q", c.name, c.want)
+		}
+	}
+}
+
 // TestAppJSFirstLoadErrorVisible 首屏 overview 失败必须可见且可就地重试。
 //
 // 背景：start() 调 loadOverview(true)（quiet），而 catch 是 `if (!quiet) toast(...)`

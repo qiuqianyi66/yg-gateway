@@ -156,7 +156,7 @@ P1-3 面板鉴权（requires 先读 panel 现状）
 | 🟢-2 头处理白名单+黑名单 | P1 | ✅ **构造式白名单**：出站头全新构造（CommonHeaders 显式 Set，非透传客户端头），自定义 X-* 均为协议/稳定性头（X-Machine-ID/X-Session-ID 即 magpie 同源特性，4fb5639） | headers.go:173-192 |
 | 🟢-4 模型快照复制 | — | ✅ 已确认消除（4fb5639） | 全仓 grep |
 | 02.2 UA 版本号随上游更新+硬下限 | P3 | 留档：R8 钉死三段式 UA，版本号已有抽象（clientVersion/cliVersion）；风控收紧时评估随官方更新 | headers.go:43-80 |
-| **出站 RPM 硬闸**（rpmTransport 按账号限 RPM/并发） | **P0（REA 最高）** | ✅ **已实施+部署（P1-1B，081e200）**：rpmRoundTripper 60s 滑动窗+1s 槽位按 X-Machine-ID 分桶，全出站路径统一挂闸；`upstream.rpm_per_account` 可配置默认 0 关（与 min_request_interval「0 关」结论不冲突——前者选号侧、后者出站侧） | upstream/rpm.go |
+| **出站 RPM 硬闸**（rpmTransport 按账号限 RPM/并发） | **P0（REA 最高）** | ✅ **已实施+部署（P1-1B，081e200）**：rpmRoundTripper 60s 滑动窗+1s 槽位按 X-Machine-ID 分桶，全出站路径统一挂闸；`upstream.rpm_per_account` 可配置默认 0 关（与 min_request_interval「0 关」结论不冲突——前者选号侧、后者出站侧）；**开启阈值已校准（2026-11-04，8 天日志：真实账号 60s 峰值最高 37 → 建议 40，零误伤，防御更宽 50）**，见 .harness/changes/2026-11-04-rpm-calibration/ | upstream/rpm.go |
 | warm-up 错峰范式 | P0 | ✅ 不排期：yg 已有 scheduler 签到/token 保活（等价活跃保持）；养号动作须走正常客户端路径（R8）原则隐含 | internal/scheduler |
 | Web 面板鉴权组合拳 | P1 | ✅ 已实施（P1-3，b544037）：先审计再抄——Bearer 非 cookie → cookie/BREACH 面不存在，真缺口是机制化（api() 强制） | panel.go + routes.go |
 | PII 脱敏管线 | P2 | 闭合不适用：prompt_cache_key 已确定性哈希派生 | cache_key.go:91 |

@@ -287,6 +287,13 @@ func (p *Panel) overview(w http.ResponseWriter, r *http.Request) {
 	if p.cfg.KeyRPMStats != nil {
 		body["key_rpm"] = p.cfg.KeyRPMStats()
 	}
+	// proxy_status 代理生效观测（P0-2 三态，与 /status 同源同键）：
+	// 未接线（Upstream nil）时键省略（未观测）；接线后恒输出，{} = 未观测到任何
+	// 代理（零回归只增键）。运维开面板即见代理 failed（配置错误出站必失败），
+	// 不必再 curl /status 翻细节。
+	if p.cfg.Upstream != nil {
+		body["proxy_status"] = p.cfg.Upstream.ProxyStatusSnapshot()
+	}
 	writeJSON(w, http.StatusOK, body)
 }
 

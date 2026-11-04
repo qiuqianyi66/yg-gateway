@@ -246,11 +246,33 @@ async function loadOverview(quiet) {
     const p = $('navPulse');
     p.className = 'pulse' + (d.healthy > 0 ? '' : (d.total ? ' warn' : ' bad'));
     // 账号池提示行：在途占满 + 未知成本总数（明细在账号卡片悬停里）。
+    // 用 innerHTML（不再 textContent）：本行现在包含代理状态高亮（failed 红），
+    // 其余提示文本一律经 esc() 转义，不引入注入面。
     const accNotes = [];
-    if (d.in_flight_full) accNotes.push(d.in_flight_full + ' 个账号在途占满');
+    if (d.in_flight_full) accNotes.push(esc(d.in_flight_full + ' 个账号在途占满'));
     const unkNote = unkNoteText(d.accounts);
-    if (unkNote) accNotes.push(unkNote);
-    $('accNote').textContent = accNotes.join(' · ');
+    if (unkNote) accNotes.push(esc(unkNote));
+    // 代理状态观测（P0-2 三态：direct/active/failed；failed=配置错误，出站必失败）。
+    // overview 接线后恒输出 proxy_status（未接线省略键）；{} = 无代理配置，不打扰。
+    // failed 高亮 + 悬停出明细：运维开面板即见，不必翻 /status。
+    const ps = d.proxy_status;
+    if (ps) {
+      const pEntries = Object.entries(ps);
+      if (pEntries.length) {
+        const pFailed = pEntries.filter(([, s]) => s === 'failed');
+        const pActive = pEntries.length - pFailed.length;
+        let pLabel = '';
+        if (pFailed.length) {
+          const detail = pFailed.map(([u]) => u).join(' · ');
+          pLabel = '<span style="color:var(--bad)" title="' + esc(detail) + '">' + pFailed.length
+            + ' 个代理 failed</span>（配置错误，出站必失败）';
+        } else if (pActive) {
+          pLabel = pActive + ' 个代理 active';
+        }
+        if (pLabel) accNotes.push('代理：' + pLabel);
+      }
+    }
+    $('accNote').innerHTML = accNotes.join(' · ');
     const up = Math.floor(d.uptime_sec);
     $('subMeta').textContent = '运行 ' + (up >= 86400 ? Math.floor(up / 86400) + ' 天 ' : '') + Math.floor(up % 86400 / 3600) + ' 时 ' + Math.floor(up % 3600 / 60) + ' 分';
     renderAccounts(d.accounts || []);

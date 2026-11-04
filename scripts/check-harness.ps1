@@ -537,6 +537,72 @@ if (-not (Test-Path -LiteralPath $lessonsPath)) {
 }
 
 # ---------------------------------------------------------------------------
+# 检项 [10]：changes/*/summary.md 引用的 REQ/ADR 决策文档存在（断链检查）
+#
+# 为什么加（与检项 [1] 同族）：summary.md 是「这次改动可审计」的落点，它引用的
+# REQ/ADR 是决策证据链；引用了不存在的文件 = 证据链断（当场不报错，读者按
+# 文件名去找找不到）。判据与解析（三条，都按实测校准过）：
+#   1. 路径**双基地**：先试仓库根，再试该 summary 所在变更目录内
+#      （.harness/changes/{feat}/docs/prd/... 是合法落点——AGENTS.md「变更追踪」
+#      允许 REQ 配在变更目录内，summary 引用时写相对路径，实测 4 处）；
+#   2. 带 docs/ 前缀的引用**保留原样**（docs/REQ-INDEX.md 在仓库根 docs/ 下，
+#      不是 docs/prd/，实测 1 处）；
+#   3. **跳过命令输出形态行**（行首 `[OK]/[FAIL]/[SKIP]/$ ` 是验证快照不是引用，
+#      实测 1 处：necessity summary 里的探针输出）。
+# 含通配（*）的引用无法判定，跳过。
+# ---------------------------------------------------------------------------
+$refBad = New-Object System.Collections.ArrayList
+$refCount = 0
+if (-not (Test-Path -LiteralPath $changesRoot)) {
+    Add-Untested '[10] changes 引用断链' '.harness/changes 目录不存在，无法判定'
+    Write-Check 10 'changes 引用断链' '未测' 'changes 目录不存在'
+} else {
+    $summaries = @(Get-ChildItem -LiteralPath $changesRoot -Recurse -Filter 'summary.md' -File -ErrorAction SilentlyContinue)
+    foreach ($s in $summaries) {
+        $txt = Read-TextFile $s.FullName
+        foreach ($ln in ($txt -split "`r?`n")) {
+            if ($ln -match '^\s*(\$ |\[OK\]|\[FAIL\]|\[SKIP\])') { continue }
+            foreach ($m in [regex]::Matches($ln, '(?:docs/(?:prd|adr)/|docs/)?(?:REQ-[A-Za-z0-9_\-]+\.md|ADR-\d+-[A-Za-z0-9_\-]+\.md)')) {
+                $ref = $m.Value
+                if ($ref -match '[*?<>{}]') { continue }
+                $refCount++
+                $found = $false
+                if ($ref -match '^docs/') {
+                    # 带前缀：先按仓库根原样判（docs/REQ-INDEX.md 形态），
+                    # 再剥掉 docs/(prd|adr)/ 前缀查变更目录内（summary 相对路径引用形态）
+                    if (Test-Path -LiteralPath $ref) { $found = $true }
+                    if (-not $found) {
+                        $inner = ($ref -replace '^docs/(?:prd|adr)/', '')
+                        if ($inner -match '^ADR-') {
+                            if (Test-Path -LiteralPath ((Join-Path $s.Directory.FullName ('docs/adr/' + $inner)))) { $found = $true }
+                        } elseif ($inner -match '^REQ-') {
+                            if (Test-Path -LiteralPath ((Join-Path $s.Directory.FullName ('docs/prd/' + $inner)))) { $found = $true }
+                        }
+                    }
+                } else {
+                    # 无前缀：先试仓库根，再试该变更目录内（双基地）
+                    if ($ref -match '^ADR-') {
+                        if (Test-Path -LiteralPath ('docs/adr/' + $ref)) { $found = $true }
+                        if (-not $found -and (Test-Path -LiteralPath ((Join-Path $s.Directory.FullName ('docs/adr/' + $ref))))) { $found = $true }
+                    } else {
+                        if (Test-Path -LiteralPath ('docs/prd/' + $ref)) { $found = $true }
+                        if (-not $found -and (Test-Path -LiteralPath ((Join-Path $s.Directory.FullName ('docs/prd/' + $ref))))) { $found = $true }
+                    }
+                }
+                if (-not $found) { [void]$refBad.Add((Get-RepoRelPath $s.FullName) + " → " + $ref) }
+            }
+        }
+    }
+    if ($refBad.Count -gt 0) {
+        foreach ($b in $refBad) { Write-Host ('       引用断链: ' + $b) -ForegroundColor Red }
+        Write-Check 10 'changes 引用断链' 'FAIL' ("{0} 处断链（检查 {1} 处引用）" -f $refBad.Count, $refCount)
+        Add-Error ("changes summary 引用 REQ/ADR 断链 {0} 处" -f $refBad.Count)
+    } else {
+        Write-Check 10 'changes 引用断链' 'OK' ("检查 {0} 处引用，0 断链" -f $refCount)
+    }
+}
+
+# ---------------------------------------------------------------------------
 # 结论
 # ---------------------------------------------------------------------------
 Write-Host ''

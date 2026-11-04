@@ -462,6 +462,44 @@ func TestPanelHandlersOverviewKeyRPM(t *testing.T) {
 	}
 }
 
+// TestPanelHandlersOverviewProxyStatus P0-2：Upstream 未接线 → overview 省略
+// proxy_status 键（未观测）；接线 → 恒输出 map（{} = 未观测到代理，非 unknown；
+// 有登记 → active/failed 原样透出，与 /status 同源——面板首页直接可见代理 failed，
+// 不必翻 /status）。零值 Client 即可（ProxyStatusSnapshot 只读 proxyEff 快照）。
+func TestPanelHandlersOverviewProxyStatus(t *testing.T) {
+	// 1) 未接线：键必须省略（不是 null/{}，否则前端把「未观测」读成「无代理」）。
+	p := chPanel(t, Config{Pool: pool.New("")})
+	out := chWant(t, chDo(t, p, "GET", "/panel/api/overview", ""), http.StatusOK)
+	if _, ok := out["proxy_status"]; ok {
+		t.Errorf("proxy_status 未接线时不应输出: %+v", out["proxy_status"])
+	}
+
+	// 2) 接线且零代理：恒输出 {}（键恒存在，零回归只增键——ADR-021 语义）。
+	p2 := chPanel(t, Config{Pool: pool.New(""), Upstream: &upstream.Client{}})
+	out = chWant(t, chDo(t, p2, "GET", "/panel/api/overview", ""), http.StatusOK)
+	ps, ok := out["proxy_status"]
+	if !ok {
+		t.Fatal("proxy_status 接线后应恒输出（空 map = 未观测到代理）")
+	}
+	if m, ok := ps.(map[string]any); !ok || len(m) != 0 {
+		t.Errorf("零代理时 proxy_status = %+v, want {}", ps)
+	}
+
+	// 3) 接线且有登记：failed 原样透出（配置错误，出站必失败——首页红字依赖此键）。
+	//    经导出入口 ChatStream 触发登记（clientForProxy 为内部路径，panel 测试不得直碰）。
+	c := &upstream.Client{}
+	c.ChatStream(&auth.Auth{ProxyURL: "://missing-scheme"}, []byte("{}"), "", upstream.ChatMeta{}) // fail-closed：err 预期，登记已完成
+	p3 := chPanel(t, Config{Pool: pool.New(""), Upstream: c})
+	out = chWant(t, chDo(t, p3, "GET", "/panel/api/overview", ""), http.StatusOK)
+	m, ok := out["proxy_status"].(map[string]any)
+	if !ok {
+		t.Fatalf("proxy_status 应为对象: %+v", out["proxy_status"])
+	}
+	if got := chStr(t, m["://missing-scheme"]); got != "failed" {
+		t.Errorf("proxy_status[bad] = %q, want failed（proxy_status 全量=%+v）", got, m)
+	}
+}
+
 // TestPanelHandlersLogsRing 日志环快照：频道分类（task/chat）+ 行首时间戳剥离后原样透出。
 func TestPanelHandlersLogsRing(t *testing.T) {
 	p := chPanel(t, Config{Pool: pool.New("")})
