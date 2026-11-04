@@ -3,6 +3,7 @@ package panel
 import (
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -277,6 +278,43 @@ process.stdout.write(JSON.stringify({
 	}
 	if !strings.Contains(got, "text/csv") {
 		t.Error("CSV MIME 类型不对")
+	}
+}
+
+// TestAppJSStandaloneFetchBearer P1-3 机制化补漏：任何独立前端文件只要发起
+// /panel/api fetch，就必须带 Bearer 注入（api_key 鉴权下不带 = 401 死路）。
+//
+// 背景：P1-3「api() 强制鉴权机制化」只覆盖 app.js 主路径；trends/agent_profile/
+// bench 三处自包含 fetch 漏带 Authorization，生产开鉴权后用量页趋势/流量画像
+// 两模块「读取…失败（未授权）」。opsagent/savings_note 已带（正确先例）。
+//
+// 牙齿：未来新增独立前端文件（自包含 fetch）漏带 Bearer → 本测试 FAIL；
+// 删掉任意一处 Authorization 注入 → 本测试 FAIL。
+func TestAppJSStandaloneFetchBearer(t *testing.T) {
+	js, err := filepath.Glob("*.js")
+	if err != nil {
+		t.Fatalf("glob *.js: %v", err)
+	}
+	if len(js) == 0 {
+		t.Fatal("找不到前端脚本文件（测试目录不对？）")
+	}
+	checked := 0
+	for _, f := range js {
+		raw, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatalf("读 %s: %v", f, err)
+		}
+		src := string(raw)
+		if !strings.Contains(src, "fetch('/panel/api") {
+			continue
+		}
+		checked++
+		if !strings.Contains(src, "'Authorization'") && !strings.Contains(src, "\"Authorization\"") {
+			t.Errorf("%s 含 /panel/api fetch 但未注入 Authorization（api_key 鉴权下 401，P1-3 漏网同款）", f)
+		}
+	}
+	if checked == 0 {
+		t.Fatal("没有任何文件含 /panel/api fetch（断言失效，检查目录）")
 	}
 }
 

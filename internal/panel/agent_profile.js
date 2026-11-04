@@ -44,7 +44,12 @@
   }
 
   async function api(path) {
-    const resp = await fetch('/panel/api/' + path, { headers: { 'Accept': 'application/json' } });
+    // api_key 鉴权下必须带 Bearer（app.js LS_KEY='yg-gateway.key'，此处硬编码保持同步；
+    // 自包含不依赖 app.js——P1-3 强制鉴权漏掉独立文件族曾致 401「未授权」）。
+    const k = localStorage.getItem('yg-gateway.key');
+    const h = k ? { 'Authorization': 'Bearer ' + k } : {};
+    h['Accept'] = 'application/json';
+    const resp = await fetch('/panel/api/' + path, { headers: h });
     if (resp.status === 401) throw new Error('未授权');
     const text = await resp.text();
     let data = null;
