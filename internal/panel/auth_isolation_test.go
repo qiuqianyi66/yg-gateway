@@ -48,6 +48,42 @@ func TestPanelAuthRejectsDownstreamKey(t *testing.T) {
 	}
 }
 
+// TestPanelAPIMethodRequiresAuth 钉住 p.api 注册机制（P1-3 面板鉴权组合拳）：
+// 经 api() 注册的端点**强制** Bearer 鉴权——新增端点走 api() 不可能裸奔。
+// 无 token → 401；管理员 token → 到达 handler。
+//
+// 牙齿：把 api() 内部的 p.withAuth(h) 换回裸 h，第一条断言立即红（200 ≠ 401）。
+func TestPanelAPIMethodRequiresAuth(t *testing.T) {
+	p := New(Config{Version: "test", APIKey: "sk-admin"})
+	reached := false
+	p.api("GET", "authz-test", func(w http.ResponseWriter, r *http.Request) {
+		reached = true
+		w.WriteHeader(http.StatusOK)
+	})
+
+	// 无 token → 401，且不达 handler
+	rec := httptest.NewRecorder()
+	p.ServeHTTP(rec, httptest.NewRequest("GET", "/panel/api/authz-test", nil))
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("无 token 访问经 api() 注册的端点应 401，got %d", rec.Code)
+	}
+	if reached {
+		t.Fatal("401 不应到达 handler")
+	}
+
+	// 管理员 token → 200 且达 handler
+	rec2 := httptest.NewRecorder()
+	req2 := httptest.NewRequest("GET", "/panel/api/authz-test", nil)
+	req2.Header.Set("Authorization", "Bearer sk-admin")
+	p.ServeHTTP(rec2, req2)
+	if rec2.Code != http.StatusOK {
+		t.Fatalf("管理员 token 应到达 handler（200），got %d", rec2.Code)
+	}
+	if !reached {
+		t.Fatal("鉴权通过后应到达 handler")
+	}
+}
+
 // TestPanelAuthEmptyKeyMultiEnabled 多 Key 已启用但 api_key 为空：面板应 fail closed
 // （拒绝匿名访问），不能因为管理员密钥为空就开放管理权限（阻断项 2，第二轮）。
 func TestPanelAuthEmptyKeyMultiEnabled(t *testing.T) {

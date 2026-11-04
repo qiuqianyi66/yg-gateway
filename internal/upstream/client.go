@@ -157,13 +157,15 @@ type Client struct {
 //
 // 用途：切断多账号共用出口 IP 的风控关联。
 // 连接池按 proxyURL 隔离：不同代理走不同 transport，互不干扰。
-func (c *Client) clientFor(a *auth.Auth) *http.Client {
-	if a == nil || a.ProxyURL == "" {
-		return c.HTTP
-	}
-	// 先读缓存
+//
+// clientForProxy 构造并缓存 per-proxyURL 的 HTTP client（双检锁 + 代理状态登记）。
+//
+// timeout>0 = 总时长上限（普通请求）；0 = 无总时长（SSE 聊天，复用既有语义）。
+// cacheKey 区分两种消费（"chat:" 前缀）——两调用方共享同一缓存表、同一把锁；
+// 代理状态（proxyEff）按 proxyURL 原文登记，与缓存 key 解耦（P0-2）。
+func (c *Client) clientForProxy(proxyURL string, timeout time.Duration, cacheKey string) *http.Client {
 	c.proxyMu.RLock()
-	if pc, ok := c.proxyClients[a.ProxyURL]; ok {
+	if pc, ok := c.proxyClients[cacheKey]; ok {
 		c.proxyMu.RUnlock()
 		return pc
 	}
@@ -172,20 +174,27 @@ func (c *Client) clientFor(a *auth.Auth) *http.Client {
 	c.proxyMu.Lock()
 	defer c.proxyMu.Unlock()
 	// 双检：可能在等锁时被其他 goroutine 创建了
-	if pc, ok := c.proxyClients[a.ProxyURL]; ok {
+	if pc, ok := c.proxyClients[cacheKey]; ok {
 		return pc
 	}
-	tr, eff := newTransportWithProxy(a.ProxyURL)
-	pc := newUpstreamHTTP(120*time.Second, tr)
+	tr, eff := newTransportWithProxy(proxyURL)
+	pc := newUpstreamHTTP(timeout, tr)
 	if c.proxyClients == nil {
 		c.proxyClients = make(map[string]*http.Client)
 	}
 	if c.proxyEff == nil {
 		c.proxyEff = make(map[string]proxyEffective)
 	}
-	c.proxyClients[a.ProxyURL] = pc
-	c.proxyEff[a.ProxyURL] = eff
+	c.proxyClients[cacheKey] = pc
+	c.proxyEff[proxyURL] = eff
 	return pc
+}
+
+func (c *Client) clientFor(a *auth.Auth) *http.Client {
+	if a == nil || a.ProxyURL == "" {
+		return c.HTTP
+	}
+	return c.clientForProxy(a.ProxyURL, 120*time.Second, a.ProxyURL)
 }
 
 // chatClientFor 返回账号对应的聊天 SSE client（带 per-account proxy 支持）。
@@ -198,30 +207,7 @@ func (c *Client) chatClientFor(a *auth.Auth) *http.Client {
 		}
 		return c.HTTP
 	}
-	// 复用 clientFor 的缓存逻辑：key 相同就共享 client 实例
-	// （但 SSE client 无总时长上限，需要单独构造）
-	c.proxyMu.RLock()
-	if pc, ok := c.proxyClients["chat:"+a.ProxyURL]; ok {
-		c.proxyMu.RUnlock()
-		return pc
-	}
-	c.proxyMu.RUnlock()
-	c.proxyMu.Lock()
-	defer c.proxyMu.Unlock()
-	if pc, ok := c.proxyClients["chat:"+a.ProxyURL]; ok {
-		return pc
-	}
-	tr, eff := newTransportWithProxy(a.ProxyURL)
-	pc := newUpstreamHTTP(0, tr)
-	if c.proxyClients == nil {
-		c.proxyClients = make(map[string]*http.Client)
-	}
-	if c.proxyEff == nil {
-		c.proxyEff = make(map[string]proxyEffective)
-	}
-	c.proxyClients["chat:"+a.ProxyURL] = pc
-	c.proxyEff[a.ProxyURL] = eff
-	return pc
+	return c.clientForProxy(a.ProxyURL, 0, "chat:"+a.ProxyURL)
 }
 
 // ProxyStatusSnapshot 返回代理生效状态视图（/status 的 proxy_status 键，P0-2）：

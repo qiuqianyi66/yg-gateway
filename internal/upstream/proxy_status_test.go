@@ -69,3 +69,23 @@ func TestProxyStatusChatClientShared(t *testing.T) {
 		t.Fatalf("chat 路径未登记代理状态：%v", got)
 	}
 }
+
+// TestProxyCacheKeyIsolation 验证 P1-2 去重后缓存 key 隔离不变：
+// 同一 proxyURL 的普通 client 与 chat client 是不同实例（"chat:" 前缀区分），
+// 但都命中各自缓存（不重复构造）。
+func TestProxyCacheKeyIsolation(t *testing.T) {
+	c := &Client{}
+	a := &auth.Auth{ProxyURL: "socks5://127.0.0.1:1080"}
+	normal := c.clientFor(a)
+	chat := c.chatClientFor(a)
+
+	if normal == chat {
+		t.Fatal("普通 client 与 chat client 应隔离（不同实例，cacheKey 区分）")
+	}
+	if c.clientFor(a) != normal {
+		t.Fatal("普通 client 应命中缓存（同一实例，不重复构造）")
+	}
+	if c.chatClientFor(a) != chat {
+		t.Fatal("chat client 应命中缓存（同一实例，不重复构造）")
+	}
+}
