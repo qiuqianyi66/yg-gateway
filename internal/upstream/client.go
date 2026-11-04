@@ -671,7 +671,8 @@ func (c *Client) ChatStreamContext(ctx context.Context, a *auth.Auth, body []byt
 	// reqCtx 的 cancel 在每个出口显式调用（Do 失败 / ≥400 / 成功分支移交 monitorBody），
 	// 循环本身各分支必 return——无循环尾兜底代码（此前外层 var cancel 从未赋值 +
 	// 尾部不可达 cancel() 是潜伏 nil-panic，已删；chatPaths 恒非空由构造保证）。
-	for _, path := range c.chatPaths(a) {
+	paths := c.chatPaths(a)
+	for i, path := range paths {
 		endpoint := c.chatBase(a) + path
 		req, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(prepared))
 		if err != nil {
@@ -701,9 +702,13 @@ func (c *Client) ChatStreamContext(ctx context.Context, a *auth.Auth, body []byt
 			// 404/405 且还有下一个候选路径：换路径重试（global /console→/v2 回退）。
 			// 其他 ≥400（含 11128/11101/内容审核/账号风控）不换路径——那是请求内容或
 			// 账号问题，换路径也会再错一遍，还多罚一次号。
-			if resp.StatusCode == 404 || resp.StatusCode == 405 {
+			if (resp.StatusCode == 404 || resp.StatusCode == 405) && i < len(paths)-1 {
 				continue
 			}
+			// 全部候选路径都 404/405 → 落回下方 ≥400 返回。此前循环耗尽撞
+			// panic("unreachable: chatPaths is never empty")：chatPaths 恒非空只保证
+			// 至少一条路径，不保证路径不全 404/405（P0-3 e2e 踩实：上游对全部
+			// 候选路径回 404 时进程 panic——单路径 404 是真实可达形态）。
 			// body 读失败（掐流/截断）→ 传输层错误：半截 raw 不交回调用方进 Classify，
 			// 否则 handler 侧 applyErrorPolicy 会按误判分类罚号。
 			if rerr != nil {
