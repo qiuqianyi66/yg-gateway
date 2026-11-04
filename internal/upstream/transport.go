@@ -6,7 +6,10 @@
 package upstream
 
 import (
+	"context"
 	"crypto/tls"
+	"errors"
+	"fmt"
 	"log"
 	"net"
 	"net/http"
@@ -102,6 +105,21 @@ func redactProxyURL(raw string) string {
 	return u.String()
 }
 
+// errProxyConfig 显式代理配置错误的哨兵（fail-closed 语义，见 failDial）。
+// 显式配置了代理的账号，代理构造失败 = 该账号出站失败（请求错误冒泡 → chatrun
+// 网络层抖动分支换号），**不**静默回退直连——直连会让多账号共用一个出口 IP，
+// per-account 代理想切断的风控关联重新出现，且不报错（最危险的形态）。
+// 直连路径（proxyURL == ""）不受影响，仍是唯一合法的直连来源。
+var errProxyConfig = errors.New("proxy config error (fail-closed)")
+
+// failDial 构造一个 dial 必然失败的 DialContext，作为代理配置错误的载体。
+// 错误消息必须经 redactProxyURL 脱敏（R1/R2：代理 URL 可含 userinfo，绝不出日志/错误）。
+func failDial(cause error) func(ctx context.Context, network, addr string) (net.Conn, error) {
+	return func(ctx context.Context, network, addr string) (net.Conn, error) {
+		return nil, cause
+	}
+}
+
 // newTransportWithProxy 构造带 HTTP/SOCKS5 代理的出站 Transport。
 // proxyURL 为空 = 直连（与 newTransport 等价）。
 //
@@ -132,7 +150,8 @@ func newTransportWithProxy(proxyURL string) *http.Transport {
 	}
 	u, err := url.Parse(proxyURL)
 	if err != nil {
-		log.Printf("WARN: [upstream] 代理 URL 解析失败，回退直连: %s (%v)", redactProxyURL(proxyURL), err)
+		log.Printf("WARN: [upstream] 代理 URL 解析失败（fail-closed，该账号出站将失败）: %s (%v)", redactProxyURL(proxyURL), err)
+		tr.DialContext = failDial(fmt.Errorf("%w: url parse %s: %v", errProxyConfig, redactProxyURL(proxyURL), err))
 		return tr
 	}
 	switch u.Scheme {
@@ -151,7 +170,8 @@ func newTransportWithProxy(proxyURL string) *http.Transport {
 		}
 		socksDialer, err := proxy.SOCKS5("tcp", u.Host, socksAuth, dialer)
 		if err != nil {
-			log.Printf("WARN: [upstream] SOCKS5 代理初始化失败，回退直连: %s (%v)", redactProxyURL(proxyURL), err)
+			log.Printf("WARN: [upstream] SOCKS5 代理初始化失败（fail-closed，该账号出站将失败）: %s (%v)", redactProxyURL(proxyURL), err)
+			tr.DialContext = failDial(fmt.Errorf("%w: socks5 init %s: %v", errProxyConfig, redactProxyURL(proxyURL), err))
 			return tr
 		}
 		// 类型断言：确保是 ContextDialer
@@ -159,7 +179,8 @@ func newTransportWithProxy(proxyURL string) *http.Transport {
 			tr.DialContext = cd.DialContext
 		}
 	default:
-		log.Printf("WARN: [upstream] 不支持的代理 scheme %q，回退直连: %s", u.Scheme, redactProxyURL(proxyURL))
+		log.Printf("WARN: [upstream] 不支持的代理 scheme %q（fail-closed，该账号出站将失败）: %s", u.Scheme, redactProxyURL(proxyURL))
+		tr.DialContext = failDial(fmt.Errorf("%w: unsupported proxy scheme %q", errProxyConfig, u.Scheme))
 	}
 	return tr
 }
