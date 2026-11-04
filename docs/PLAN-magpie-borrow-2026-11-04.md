@@ -135,3 +135,35 @@ P1-3 面板鉴权（requires 先读 panel 现状）
 | min_request_interval 默认值 | **已校准：保持 0 关**（2026-11-04，8 天 5745 请求观测：生产账号 0 次 429、无风控事件、忙时亚秒并发真实存在，数据支撑 0 关即正确默认；分析见 .harness/changes/2026-11-04-min-interval-calibration/） | — |
 | 429 是否需要五分类细化 | **已评估：不细化**（2026-11-04 闭合：13 类 kind 已覆盖 magpie 五分类决策维度，429 可区分形态仅 14018 与 generic 两类；见 .harness/changes/2026-11-04-chatpaths-404-panic/summary.md） | — |
 | PII 确定性占位符 | **不适用**（2026-11-04 闭合：prompt_cache_key 已确定性哈希派生，无请求归并依赖 PII） | — |
+
+---
+
+## 5. REA 可借鉴清单完整映射（2026-11-04 补审，逐条对 yg 现状）
+
+> 触发：用户指出「magpie 只学到这么点」——补审 REA ④清单 + 02.x 全部
+> 「与 yg 的对照」句，确认无漏映射。REA 源：
+> `docs/reference/magpie-rea-full-2026-11-03.md` ④节 + 02.1–02.9 对照句。
+
+| REA 可借鉴点 | 优先级 | yg 状态 | 证据 |
+|---|---|---|---|
+| #11 代理 fail-closed 语义 | P0 | ✅ 已实施+部署（P0-1，316c0e7） | transport.go fail-closed |
+| #11 代理三态观测 | P0 | ✅ 已实施+部署（P0-2，6bef0d2） | /status proxy_status |
+| #12 11102 三值判定 | P0 | ✅ 已实施（4fb5639 + P0-3 e2e） | modelCatalogVerdict |
+| 02.7 proxyMoved 主动断池 | — | **不适用**：yg 无代理配置热更新入口（cmd/server 无 SetProxy/ReloadConfig 命中），proxyClients 缓存生命周期=进程，无「改代理仍走旧缓存」bug 面。留档：未来加热更新须同步清 proxyClients | client.go:119-188 |
+| #12 429 五分类词表 | P1 | **闭合不细化**：13 类 kind 已覆盖决策维度，429 可区分形态仅 14018/generic | errors.go:572-593 |
+| #12 probeOne 只探最早解封 | P1 | ✅ **已覆盖且更完整**：半开探测（breaker_halfopen）+ 有界退避不越堆越厚（cooldown.go:145-150/370-375）+ earliest-expiry 选号（entry.go:82）+ BlockModelClear 半开清除 | pool/ |
+| 🔵-1 会话不编造 | — | ✅ REA 确认 yg 已符合，无改动 | conversations.go:22-23 |
+| 🟢-2 头处理白名单+黑名单 | P1 | ✅ **构造式白名单**：出站头全新构造（CommonHeaders 显式 Set，非透传客户端头），自定义 X-* 均为协议/稳定性头（X-Machine-ID/X-Session-ID 即 magpie 同源特性，4fb5639） | headers.go:173-192 |
+| 🟢-4 模型快照复制 | — | ✅ 已确认消除（4fb5639） | 全仓 grep |
+| 02.2 UA 版本号随上游更新+硬下限 | P3 | 留档：R8 钉死三段式 UA，版本号已有抽象（clientVersion/cliVersion）；风控收紧时评估随官方更新 | headers.go:43-80 |
+| **出站 RPM 硬闸**（rpmTransport 按账号限 RPM/并发） | **P0（REA 最高）** | **真实缺口**：yg 无出站前强制槽位；8 天数据（429 极低）仅支撑「默认不开」，不支撑「机制不需要」。**形态：实现为可配置能力（默认关），与 min_request_interval「0 关」结论不冲突**——前者选号侧、后者出站侧 | 待实施（见下） |
+| warm-up 错峰范式 | P0 | ✅ 不排期：yg 已有 scheduler 签到/token 保活（等价活跃保持）；养号动作须走正常客户端路径（R8）原则隐含 | internal/scheduler |
+| Web 面板鉴权组合拳 | P1 | ✅ 已实施（P1-3，b544037）：先审计再抄——Bearer 非 cookie → cookie/BREACH 面不存在，真缺口是机制化（api() 强制） | panel.go + routes.go |
+| PII 脱敏管线 | P2 | 闭合不适用：prompt_cache_key 已确定性哈希派生 | cache_key.go:91 |
+| 三层锁 | P2 | ✅ 留档不排期（单实例单进程无并发写凭证） | 规划 P2 |
+| **update SHA256 + Authenticode 签名纪律** | P3 | **补留档（此前漏映射）**：yg 当前无自更新功能；若未来做自更新，Windows 端必须补 Authenticode——magpie 裸 SHA256 换 Windows exe 是反面教材 | REA ④-6 |
+| 02.9 agent 识别双重证据 | P3 | 留档：request log 有 agent_kind 字段；UA 可伪造，识别须「文件存在+可执行文件存在」双重证据（未来按 agent 分权时启用） | REA 02.9 |
+
+**补审结论**：1 处真实缺口重新开放（出站 RPM 硬闸，REA P0 最高优先级，
+被我先前并入「校准 0 关」轻率闭合——校准只回答了默认值，机制仍是缺口）；
+1 处此前完全漏映射（P3 签名纪律，已补）；其余全部核实为已覆盖/已闭合/留档。
