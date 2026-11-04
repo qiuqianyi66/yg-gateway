@@ -1,7 +1,6 @@
-# LESSONS 索引（条目 + 一句话 + Seen）· 正文按需：`.harness/lessons/L-NN.md`
+# LESSONS 索引（一句话+Seen）· 正文按需：lessons/L-NN.md
 
-> **Seen 计数制**：第 2 次出现的坑必须升级为规则（`rules/`）或机器检查（`scripts/`），`Seen ≥ 2` 未升级由检项 [7] 判 error。
-> 动手前先读本索引、命中再读正文；新增记 `Seen 1`；会伪造结论的坑才记，flake 见 [flake.md](lessons/flake.md)。
+> **Seen 计数制**：第 2 次出现即升级为规则或机器检查（`rules/`/`scripts/`），`Seen ≥ 2` 未升级由检项 [7] 判 error；新增记 `Seen 1`，只记会伪造结论的坑。
 
 | 条目 | 一句话 | Seen | 状态 | 正文 |
 |---|---|---|---|---|
@@ -27,3 +26,4 @@
 | L-20 | 外部进程 stdout/stderr 要分开捕获 | 1 | 自检测试 panel | [L-20](lessons/L-20.md) |
 | L-21 | 提交只含本任务产生的文件，外部落入工作树的文件不碰 | 1 | 规则（用户指令） | [L-21](lessons/L-21.md) |
 | L-22 | 结论/方案前必须穷尽证据（只读片段断言全貌/未验证前提当事实） | 1 | 规则 AGENTS | [L-22](lessons/L-22.md) |
+| L-23 | 首屏三连崩：TDZ / insertBefore 孙层 / embed 无 no-cache | 1 | 机器检查 | [L-23](lessons/L-23.md) |
