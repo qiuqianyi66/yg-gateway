@@ -494,6 +494,49 @@ if (-not (Test-Path -LiteralPath $preCommitPath)) {
 }
 
 # ---------------------------------------------------------------------------
+# 检项 [9]：LESSONS 索引与 lessons/ 正文双向一致（防索引漂移）
+#
+# 为什么加（2026-11-04 实锤 1 次）：L-24/L-25 正文已在 lessons/ 目录，LESSONS.md 索引
+# 却未收录——「教训缺失」被静默掩盖（当场不报错，几周后以「AI 又做错了」显形）。
+# 判据（双向）：索引行 L-NN 必须有对应 lessons/L-NN.md；lessons/L-*.md 必须在索引里。
+# 排除：lessons/ 下非 L-NN 命名的文件（flake.md 是运行笔记，不是教训条目）。
+# ---------------------------------------------------------------------------
+$lessonsDir = Join-Path $harnessDir 'lessons'
+if (-not (Test-Path -LiteralPath $lessonsPath)) {
+    Add-Untested '[9] LESSONS 索引完整性' '.harness/LESSONS.md 不存在，无索引可判'
+    Write-Check 9 'LESSONS 索引完整性' '未测' 'LESSONS 索引不存在'
+} elseif (-not (Test-Path -LiteralPath $lessonsDir)) {
+    Add-Untested '[9] LESSONS 索引完整性' '.harness/lessons 目录不存在，无正文可判'
+    Write-Check 9 'LESSONS 索引完整性' '未测' 'lessons 目录不存在'
+} else {
+    $indexed = @{}
+    foreach ($ln in @(Get-Content -LiteralPath $lessonsPath -Encoding UTF8)) {
+        if ($ln -match '^\s*\|\s*L-(\d+)\s*\|') {
+            $indexed[("L-" + $Matches[1].PadLeft(2, '0'))] = $true
+        }
+    }
+    $onDisk = @{}
+    foreach ($f in @(Get-ChildItem -LiteralPath $lessonsDir -Filter 'L-*.md' -File -ErrorAction SilentlyContinue)) {
+        if ($f.BaseName -match '^L-\d+$') { $onDisk[$f.BaseName] = $true }
+    }
+    $indexBad = New-Object System.Collections.ArrayList
+    foreach ($k in ($indexed.Keys | Sort-Object)) {
+        if (-not $onDisk.ContainsKey($k)) { [void]$indexBad.Add(("索引列了但正文缺失: " + $k)) }
+    }
+    foreach ($k in ($onDisk.Keys | Sort-Object)) {
+        if (-not $indexed.ContainsKey($k)) { [void]$indexBad.Add(("正文存在但索引未收录（漂移）: " + $k)) }
+    }
+    if ($indexBad.Count -gt 0) {
+        foreach ($b in $indexBad) { Write-Host ('       ' + $b) -ForegroundColor Red }
+        Write-Host '       → 新增教训必须同 commit 同步索引（LESSONS.md）与正文（lessons/L-NN.md）两处' -ForegroundColor Gray
+        Write-Check 9 'LESSONS 索引完整性' 'FAIL' ("{0} 处不一致（索引 {1} / 磁盘 {2}）" -f $indexBad.Count, $indexed.Count, $onDisk.Count)
+        Add-Error ("LESSONS 索引与正文不一致 {0} 处" -f $indexBad.Count)
+    } else {
+        Write-Check 9 'LESSONS 索引完整性' 'OK' ("索引 {0} 条与正文 {1} 个完全一致" -f $indexed.Count, $onDisk.Count)
+    }
+}
+
+# ---------------------------------------------------------------------------
 # 结论
 # ---------------------------------------------------------------------------
 Write-Host ''
