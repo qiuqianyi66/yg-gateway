@@ -1,9 +1,9 @@
 {
     "_comment":  "常驻上下文预算基线（scripts/check-context-budget.ps1 维护，口径见该脚本头部）。budgetTokens 只许下调，-Update 收紧；perFile 仅用于定位「最该砍的文件」，不作门禁判据。",
-    "updatedAt":  "2026-11-04",
-    "budgetTokens":  14842,
+    "updatedAt":  "2026-11-05",
+    "budgetTokens":  14835,
     "perFile":  {
-                    ".harness/LESSONS.md":  709,
+                    ".harness/LESSONS.md":  702,
                     ".harness/rules/CODE-STANDARDS-CHECKLIST.md":  2200,
                     ".harness/rules/COST-CONTROL.md":  563,
                     ".harness/rules/ERROR-HANDLING.md":  2340,
