@@ -206,14 +206,20 @@ func newTransportWithProxy(proxyURL string) (*http.Transport, proxyEffective) {
 // 固定的受信端点，重定向只应发生在同 host 内（http→https 升级、路径调整）；
 // 跨 host 跳转一律拒绝。与 newTransport 同属「出站连接单一事实来源」。
 //
-// 出站 RPM 硬闸（rpmRoundTripper）在此统一挂载：全部出站 client（直连 HTTP/
-// ChatHTTP + per-proxy proxyClients）的 Transport 外层都过同一闸。
-// 开关在 RoundTrip 时判（RpmPerAccount>0 才限速），故 New() 时 RpmPerAccount
-// 仍为零值也安全（直接放行）；装配后设值即生效。
+// 出站节奏双闸在此统一挂载：全部出站 client（直连 HTTP/ChatHTTP + per-proxy
+// proxyClients）的 Transport 外层都过同一套闸——
+//   - concurrencyRoundTripper（外层）：在途并发闸，限"同时几个"；
+//   - rpmRoundTripper（内层）：速率闸，限"多快"。
+//
+// 两闸开关都在 RoundTrip 时判（字段 > 0 才生效），故 New() 时零值也安全（直接放行）；
+// 装配后设值即生效。
 func (c *Client) newUpstreamHTTP(timeout time.Duration, tr http.RoundTripper) *http.Client {
 	return &http.Client{
-		Timeout:       timeout,
-		Transport:     &rpmRoundTripper{c: c, next: tr},
+		Timeout: timeout,
+		Transport: &concurrencyRoundTripper{
+			c:    c,
+			next: &rpmRoundTripper{c: c, next: tr},
+		},
 		CheckRedirect: sameHostRedirect,
 	}
 }

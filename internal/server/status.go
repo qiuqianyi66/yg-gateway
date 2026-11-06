@@ -64,6 +64,11 @@ func (h *Handler) status(w http.ResponseWriter, r *http.Request) {
 		// global_in_flight 全局在途计数（ADR-003 D-401）：与 gateway.max_in_flight
 		// 对照可判断是否触顶（触顶时新请求收 429）。
 		"global_in_flight": h.cfg.Pool.GlobalInFlight(),
+		// rhythm 并发闸观测（F1，magpie REA §2.5 节奏面收口）：每账号 {in_flight,
+		// queue_depth}——与 concurrency_per_account 对照即可看出「某号现在几个在途、
+		// 几个排队、离上限多远」。magpie 明确没有 per-账号在途观测（REA §2.7 自承
+		// unknown），本键是 yg 可审计定位的增量。零回归只增键；未装配/零配置时 {}。
+		"rhythm": h.rhythmSnapshot(),
 		// sticky_paid_hits 粘性命中收费号且池里有免费/未知号的累计次数
 		// （ADR-004 遗留轻量版）。纯观测，不自动换号。
 		"sticky_paid_hits": h.cfg.Pool.StickyPaidHits(),
@@ -120,6 +125,15 @@ func (h *Handler) proxyStatusSnapshot() map[string]string {
 		return map[string]string{}
 	}
 	return h.cfg.Upstream.ProxyStatusSnapshot()
+}
+
+// rhythmSnapshot 返回并发闸观测视图（/status 的 rhythm 键）。Upstream 未装配时
+// 返回空表（键仍存在，{}）——与 proxy_status 同语义，避免键缺失被读成「无此观测」。
+func (h *Handler) rhythmSnapshot() map[string]any {
+	if h.cfg.Upstream == nil {
+		return map[string]any{}
+	}
+	return h.cfg.Upstream.RhythmStatus()
 }
 
 // agentProfileSnapshot 读 archive 并聚合 agent 流量画像。无数据（无 RequestLog、

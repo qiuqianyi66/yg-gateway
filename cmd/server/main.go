@@ -270,6 +270,9 @@ func main() {
 	// 出站 RPM 硬闸（REA P0，装配期字段）：每账号 60s 窗口最大出站请求数，
 	// 0 = 关闭（默认）。RoundTripper 层卡槽位，覆盖全出站路径。
 	up.RpmPerAccount = cfg.Upstream.RpmPerAccount
+	// 出站在途并发闸（REA §2.5，装配期字段）：每账号同时在途请求数上限，
+	// 0 = 关闭（默认）。与 RPM 正交；开启后 /status rhythm 键暴露在途/排队深度。
+	up.ConcurrencyPerAccount = cfg.Upstream.ConcurrencyPerAccount
 	// global realm 路由（config global 段）：上游侧开关（第一道闸）+ base 覆盖；
 	// auth 侧开关（auth.SetGlobalEnabled）是第二道闸，两者同 config global.enabled。
 	up.GlobalEnabled = cfg.Global.Enabled

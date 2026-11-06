@@ -482,11 +482,19 @@ func TestBasesAlwaysCN(t *testing.T) {
 	}
 }
 
-// unwrapRpm 解包出站 RPM 硬闸的无状态包装（rpmRoundTripper），返回底层
-// RoundTripper。仅测试用：断言连接池共享性时比较解包后的实例。
-func unwrapRpm(rt http.RoundTripper) http.RoundTripper {
-	if r, ok := rt.(*rpmRoundTripper); ok {
-		return r.next
+// unwrapTransport 逐层解包出站无状态包装（concurrencyRoundTripper 外层 →
+// rpmRoundTripper 内层），返回底层 RoundTripper。仅测试用：断言连接池共享性时
+// 比较解包后的实例。层数有上限（防意外自环导致死循环）。
+func unwrapTransport(rt http.RoundTripper) http.RoundTripper {
+	for i := 0; i < 4; i++ {
+		switch r := rt.(type) {
+		case *concurrencyRoundTripper:
+			rt = r.next
+		case *rpmRoundTripper:
+			rt = r.next
+		default:
+			return rt
+		}
 	}
 	return rt
 }
@@ -500,12 +508,12 @@ func TestNewChatClientNoTotalTimeoutAndSharedTransport(t *testing.T) {
 		t.Errorf("ChatHTTP.Timeout=%v want 0 (no total cap)", c.ChatHTTP.Timeout)
 	}
 	// 共享同一个 Transport 实例，连接池不重复。出站 RPM 硬闸（rpmRoundTripper）
-	// 是无状态包装：两个 client 各包一层 wrapper，但解包后是同一个 *http.Transport
-	// （连接池共享语义不变）。
-	if unwrapRpm(c.ChatHTTP.Transport) != unwrapRpm(c.HTTP.Transport) {
+	// 与并发闸（concurrencyRoundTripper）都是无状态包装：两个 client 各包两层
+	// wrapper，但解包后是同一个 *http.Transport（连接池共享语义不变）。
+	if unwrapTransport(c.ChatHTTP.Transport) != unwrapTransport(c.HTTP.Transport) {
 		t.Errorf("ChatHTTP and HTTP must share the same *http.Transport")
 	}
-	htr, ok := unwrapRpm(c.ChatHTTP.Transport).(*http.Transport)
+	htr, ok := unwrapTransport(c.ChatHTTP.Transport).(*http.Transport)
 	if !ok {
 		t.Fatalf("Transport type=%T", c.ChatHTTP.Transport)
 	}

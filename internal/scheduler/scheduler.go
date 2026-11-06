@@ -6,7 +6,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"log"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -17,6 +19,29 @@ import (
 	"yg-gateway/internal/pool"
 	"yg-gateway/internal/upstream"
 )
+
+// keepaliveSpread 保活分片窗口（F2，magpie REA §2.5 节奏面收口）。
+// 触发时刻起各号在 [start, start+spread) 内按 UID 哈希散布（fnv32(uid) % spread 秒），
+// 按偏移升序执行——同一号每天同一相对位置（重启可复现）、N 号总时长 ≤ spread
+// （不随号数线性拖长）、窗口内整体散布（不批量登录动作，magpie keepalive.go
+// 「一天内 N 个号一起刷」是风控面）。0 = 关闭分片（保持现状立即全刷，测试用）。
+// 与 activityAccountDelay（travel.go:29-30）同口径：包级 var、测试可置 0，不做配置化。
+var keepaliveSpread = 10 * time.Minute
+
+// keepaliveOffset 账号的保活分片偏移：fnv32(uid) % spread 秒。确定性——
+// 同一号每次运行偏移一致；spread<=0 → 0（立即串行，保持现状）。
+func keepaliveOffset(uid string) time.Duration {
+	if keepaliveSpread <= 0 {
+		return 0
+	}
+	secs := int64(keepaliveSpread / time.Second)
+	if secs <= 0 {
+		secs = 1
+	}
+	h := fnv.New32a()
+	h.Write([]byte(uid))
+	return time.Duration(h.Sum32()%uint32(secs)) * time.Second
+}
 
 // Config 调度器依赖。
 //
@@ -433,7 +458,7 @@ func (s *Scheduler) runBatch(ctx context.Context, kinds []taskKind) {
 			case taskActivity:
 				s.runActivity(ctx)
 			case taskKeepalive:
-				s.RunKeepaliveNow()
+				s.runKeepalive(ctx)
 			case taskBlackcat:
 				s.RunBlackcatNow()
 			case taskGrowth:
@@ -585,15 +610,31 @@ func (s *Scheduler) checkActivityStreak(a *auth.Auth) bool {
 	return false
 }
 
-// RunKeepaliveNow 立即对所有账号刷新 token；session 死亡的自动禁用。
+// RunKeepaliveNow 立即对所有账号刷新 token（无 ctx 入口，供面板/测试/外部调用）。
+// 委托 runKeepalive（background ctx）；分片语义见 runKeepalive 注释。
+func (s *Scheduler) RunKeepaliveNow() {
+	s.runKeepalive(context.Background())
+}
+
+// runKeepalive 对所有账号刷新 token；session 死亡的自动禁用。分片执行：
+// 按 keepaliveOffset(uid) 升序、睡到各自计划时刻——同一号每天同一相对位置、
+// 总时长 ≤ keepaliveSpread、窗口内散布。ctx 取消立即放弃剩余（下一轮补刷）。
 // 禁用账号默认跳过；若 schedule.include_disabled_in_tasks 打开，禁用号也会续期 token
 // （这是轮换用法下把闲置号保持可用的关键），但**不再对已禁用的号重复计数 12153**——
 // 它已经是终态，再计一次只会打出一行「— 禁用」的误导日志。
 // 12153 禁用走 Pool.NoteSessionDead 的**连续计数**语义：一次刷新失败不再立即杀号，
 // 连续 sessionDeadThreshold 次（3 次）才禁用（P0-1：13 个 disabled 号全是历史误判）。
 // 刷新成功 → ClearSessionDead 清计数（错误判定的账号有复活路径）。
-func (s *Scheduler) RunKeepaliveNow() {
+func (s *Scheduler) runKeepalive(ctx context.Context) {
 	includeDisabled := s.includeDisabledInTasks()
+	type slot struct {
+		uid      string
+		nick     string
+		a        *auth.Auth
+		off      time.Duration
+		disabled bool
+	}
+	var slots []slot
 	for _, st := range s.cfg.Pool.List() {
 		if st.Disabled && !includeDisabled {
 			continue
@@ -602,19 +643,33 @@ func (s *Scheduler) RunKeepaliveNow() {
 		if a == nil || a.RefreshTokenValue() == "" {
 			continue
 		}
-		if err := s.cfg.Upstream.RefreshToken(a); err != nil {
-			log.Printf("keepalive %s: %v", logfmt.Label(st.UID, st.Nickname), err)
+		slots = append(slots, slot{uid: st.UID, nick: st.Nickname, a: a, off: keepaliveOffset(st.UID), disabled: st.Disabled})
+	}
+	// 按偏移升序执行：确定性（同一号每天同一相对位置）+ 窗口内散布（不批量）。
+	sort.Slice(slots, func(i, j int) bool { return slots[i].off < slots[j].off })
+	start := time.Now()
+	for _, sl := range slots {
+		if d := time.Until(start.Add(sl.off)); d > 0 {
+			if !timex.SleepCtx(ctx, d) {
+				return // ctx 取消：放弃剩余，下一轮补刷
+			}
+		}
+		if keepaliveSpread > 0 {
+			log.Printf("keepalive %s: slot +%s（offset=%s）", logfmt.Label(sl.uid, sl.nick), sl.off, sl.off)
+		}
+		if err := s.cfg.Upstream.RefreshToken(sl.a); err != nil {
+			log.Printf("keepalive %s: %v", logfmt.Label(sl.uid, sl.nick), err)
 			var ue *upstream.Error
-			if errors.As(err, &ue) && ue.Kind == upstream.ErrSessionDead && !st.Disabled {
-				if s.cfg.Pool.NoteSessionDead(st.UID) {
-					log.Printf("keepalive %s: 连续 %d 次 12153 session dead — 禁用", logfmt.Label(st.UID, st.Nickname), pool.SessionDeadThreshold())
+			if errors.As(err, &ue) && ue.Kind == upstream.ErrSessionDead && !sl.disabled {
+				if s.cfg.Pool.NoteSessionDead(sl.uid) {
+					log.Printf("keepalive %s: 连续 %d 次 12153 session dead — 禁用", logfmt.Label(sl.uid, sl.nick), pool.SessionDeadThreshold())
 				}
 			}
 			continue
 		}
-		s.cfg.Pool.ClearSessionDead(st.UID) // 刷新成功清误判计数，失败不该累计
-		if err := a.SaveAtomic(); err != nil {
-			log.Printf("keepalive %s save: %v", logfmt.Label(st.UID, st.Nickname), err)
+		s.cfg.Pool.ClearSessionDead(sl.uid) // 刷新成功清误判计数，失败不该累计
+		if err := sl.a.SaveAtomic(); err != nil {
+			log.Printf("keepalive %s save: %v", logfmt.Label(sl.uid, sl.nick), err)
 		}
 	}
 }

@@ -129,6 +129,16 @@ type Client struct {
 	rpmWindow   time.Duration
 	rpmSlot     time.Duration
 
+	// ConcurrencyPerAccount 出站在途并发闸（REA §2.5 节奏面另一半）：每账号同时在途
+	// 出站请求数上限。0 = 关闭（默认，零回归）。装配期字段（需重启）。
+	// 与 RpmPerAccount（速率闸）正交：RPM 限"多快"，并发闸限"同时几个"。
+	ConcurrencyPerAccount int
+
+	// concMu/concLimiters 并发闸注册表（按 X-Machine-ID 分桶，与 rpm 同口径）。
+	// RhythmStatus() 供 /status 观测每账号在途/排队深度（可见优先于精确）。
+	concMu       sync.Mutex
+	concLimiters map[string]*concurrencyLimiter
+
 	// proxyClients 按 proxyURL 缓存的 per-account HTTP client 池。
 	// 空 key = 直连（用全局 HTTP）；非空 key = 带对应代理的 client。
 	// 用途：切断多账号共用出口 IP 的风控关联。

@@ -322,6 +322,9 @@ type Config struct {
 		// 出站侧硬闸，防「短时间把一个号打热」——养号场景最直接的封号路径。
 		// 装配期字段（需重启）。
 		RpmPerAccount int `json:"rpm_per_account"`
+		// ConcurrencyPerAccount 每账号在途并发闸（0=关闭默认，负值钳 0，装配期）。
+		// 与 RpmPerAccount 正交：限"同时几个"而非"多快"；开启后 /status rhythm 可见。
+		ConcurrencyPerAccount int `json:"concurrency_per_account"`
 		//
 		// 已知风控风险（架构级，配置无法解决）：
 		// 多账号共用同一出口 IP。4 个账号的请求全部从网关机器同一个 IP 发出，
@@ -928,6 +931,10 @@ func (c *Config) normalize() error {
 	// 0 = 关闭（默认）；>0 时每账号 60s 窗口最多该数出站请求。
 	if c.Upstream.RpmPerAccount < 0 {
 		c.Upstream.RpmPerAccount = 0
+	}
+	// 出站在途并发闸（REA §2.5，装配期字段）：负值钳 0（= 关闭，零回归）。
+	if c.Upstream.ConcurrencyPerAccount < 0 {
+		c.Upstream.ConcurrencyPerAccount = 0
 	}
 	// 积分保底：负值钳 0（= 关闭）。0 是合法默认（关闭），无需空值回落。
 	if c.Pool.CreditFloor < 0 {

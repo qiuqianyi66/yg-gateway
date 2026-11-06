@@ -96,7 +96,8 @@
     "device_token": "",
     "device_token_file": "",
     "passthrough_ip": false,
-    "rpm_per_account": 0
+    "rpm_per_account": 0,
+    "concurrency_per_account": 0
   },
   "features": {
     "sanitize_blacklist_fingerprints": true
