@@ -35,6 +35,7 @@ MaxConcurrency/semaphore/inflight 零命中）。
 ## 后果
 
 - `/status` 新增 `rhythm` 键（零回归：零配置返回 {}，旧消费方忽略未知键）。
-- 校准待办：用 `D:\yg-gateway\data\request-logs\requests-2026-{10-28..11-04}.jsonl`
-  统计单账号同时在途分布，结论落 `.harness/changes/2026-11-06-concurrency-calibration/`，
-  建议阈值由用户决定是否启用（当前默认 0）。
+- **阈值已校准（2026-11-06）**：8 天生产日志（5998 条有账号归属请求）实测到达时在途
+  p99=2 / 峰值 4；候选 N=4 误伤率 0.000%、N=3 为 0.850%。**建议
+  `concurrency_per_account: 4`**（默认仍 0 关，由用户决定启用）。结论与脚本见
+  `.harness/changes/2026-11-06-concurrency-calibration/`。
