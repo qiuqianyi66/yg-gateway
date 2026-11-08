@@ -35,3 +35,14 @@ upstream 是出站协议层，知道 machine-id 但**不该知道账号昵称**�
 ## 回滚
 
 纯展示层：回退本次 commit 即可，无状态、无配置项、无迁移。
+
+## 生产部署记录（2026-11-08）
+
+- `scripts/deploy-prod.ps1 -Build -Feature rhythm-readable-keys` exit **0**：
+  备份 `yg-gateway.exe.pre-rhythm-readable-keys-20261108.bak`（sha256=3BCD209B8CC502F0，与
+  上一版一致）→ 换版 → 新 exe sha256=**78B14E8B041C8A76**，PID 21072。
+- 冒烟三条全过（`cn:space-bunny ×0.08` 低成本模型）：非流式 finish_reason=stop、
+  流式 data 增量帧 + `[DONE]`。
+- 生产 `/status` 实测 rhythm 桶名已可读：
+  `.(269f9704)` / `🐻(0250aab9)` / `global`，三桶 `in_flight=0 queue_depth=0`（无泄漏）。
+  改动前为 `07f7cb98...` / `d27a4369...` 两个裸哈希 + `global`。
