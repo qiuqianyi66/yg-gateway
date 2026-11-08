@@ -48,3 +48,18 @@
 - 启用：`config.json` 的 `upstream.concurrency_per_account: 4`（装配期字段，需重启），
   重启后 `/status` 的 `rhythm` 键开始报每账号 in_flight/queue_depth。
 - 关闭：置 0 即关（零状态）。不需要回滚二进制。
+
+## 生产启用记录（2026-11-08）
+
+- 用户批准启用。改动前备份 `D:\yg-gateway\config.json.bak-20261107-conc4`（3298 字节），
+  文本插入 `"concurrency_per_account": 4`，JSON 校验通过。
+- 重启方式：项目自带 `start.bat`（停旧实例 → 起新实例 → 写 pid）。新 PID 4508，
+  `/healthz` 200 healthy=2/4，stderr 无异常。
+- 实测：
+  - `/status` 带 Bearer 200，`rhythm` 非空：`{<machine-id 派生桶>: {in_flight:0,
+    queue_depth:0}, global: {0,0}}`（启动 warm 已创建 limiter）。
+  - 冒烟三条全过：`/v1/models` 18 个；非流式 200 finish_reason=stop；
+    流式 18 个 data 帧 + `[DONE]`（免费模型，零积分）。
+  - 请求后所有桶 `in_flight` 归零（0,0,0）——无槽位泄漏。
+- 已知可读性缺陷（观察，未改）：桶 key 是 `X-Machine-ID` 的 sha256 派生值（40 hex），
+  运维从 `/status` 看不出对应哪个账号。要可读需加 uid 映射层，属后续可选项。
