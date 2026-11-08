@@ -177,3 +177,10 @@ func (c *Client) RhythmStatus() map[string]any {
 	}
 	return out
 }
+
+// MachineIDForUID 返回某账号出站时使用的 X-Machine-ID（即 rhythm 桶名）。
+// 与 injectAccountStableHeaders 共用同一派生（deriveAccountStableID）——导出它只为
+// 让 /status 把机器桶名换回可读账号名；它不是新指纹算法，改派生会同时影响两处。
+func MachineIDForUID(uid string) string {
+	return deriveAccountStableID(uid, "machine")
+}

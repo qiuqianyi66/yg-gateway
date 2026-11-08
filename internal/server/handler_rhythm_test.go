@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"yg-gateway/internal/auth"
+	"yg-gateway/internal/pool"
 	"yg-gateway/internal/upstream"
 )
 
@@ -53,5 +54,50 @@ func TestStatusExposesRhythmKey(t *testing.T) {
 	}
 	if len(rh2) != 0 {
 		t.Fatalf("无在途请求时 rhythm 应为 {}，got %v", rh2)
+	}
+}
+
+// TestRhythmRelabelReadable 钉死 rhythm 桶名可读化（rhythmRelabel）：
+// 已匹配账号的桶名换成「昵称(uid8)」/ 无昵称纯 uid8；global 与未知桶原样保留；
+// 桶数量与数值不变（只换展示名，不改语义）。
+//
+// 牙齿：把 rhythmRelabel 改成 `return raw` → 第一条「🐻(0250aab9) 不存在」红。
+func TestRhythmRelabelReadable(t *testing.T) {
+	const (
+		uidBear = "0250aab9-3697-47c9-9133-3a2cc7ec3af1"
+		uidDot  = "269f9704-e083-4c68-9ae8-2cbd9228140d"
+		uidAnon = "abcdef12-3456-7890-abcd-ef1234567890"
+	)
+	accounts := []pool.Status{
+		{UID: uidBear, Nickname: "🐻"},
+		{UID: uidDot, Nickname: "."},
+		{UID: uidAnon}, // 无昵称 → 只显示 uid8
+	}
+	raw := map[string]any{
+		upstream.MachineIDForUID(uidBear): map[string]int{"in_flight": 1, "queue_depth": 2},
+		upstream.MachineIDForUID(uidAnon): map[string]int{"in_flight": 0, "queue_depth": 0},
+		"global":                          map[string]int{"in_flight": 0, "queue_depth": 0},
+		"deadbeefnotanaccount":            map[string]int{"in_flight": 3, "queue_depth": 0},
+	}
+	got := rhythmRelabel(raw, accounts)
+
+	if len(got) != len(raw) {
+		t.Fatalf("桶数变了：%d → %d（重命名不得丢桶/合桶）", len(raw), len(got))
+	}
+	v, ok := got["🐻(0250aab9)"].(map[string]int)
+	if !ok || v["in_flight"] != 1 || v["queue_depth"] != 2 {
+		t.Fatalf("账号桶未可读化或数值变了：%v", got)
+	}
+	if _, ok := got["abcdef12"]; !ok {
+		t.Fatalf("无昵称账号应显示 uid8：%v", got)
+	}
+	if _, ok := got["global"]; !ok {
+		t.Fatalf("global 桶必须原样保留：%v", got)
+	}
+	if _, ok := got["deadbeefnotanaccount"]; !ok {
+		t.Fatalf("未知桶必须原样保留（未知就是未知）：%v", got)
+	}
+	if _, ok := got[upstream.MachineIDForUID(uidBear)]; ok {
+		t.Fatal("已匹配账号的桶名仍是 machine-id（重命名未生效）")
 	}
 }

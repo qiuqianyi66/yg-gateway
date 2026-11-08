@@ -7,6 +7,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"yg-gateway/internal/auth"
 )
 
 // TestConcurrencyLimiterFIFO：max=2 时第 3 个排队；release 后按 FIFO 转交槽位
@@ -221,4 +223,27 @@ func TestConcurrencyRoundTripperContextCancel(t *testing.T) {
 
 	close(gate)
 	<-done1
+}
+
+// TestMachineIDForUIDMatchesHeader 钉死「/status 可读桶名用的派生」与「出站头」同源：
+// rhythm 桶名 = X-Machine-ID，两者必须逐字节相等，否则运维换了可读名也对不上号。
+// 牙齿：给 MachineIDForUID 换盐或改截断长度 → 本测试红。
+func TestMachineIDForUIDMatchesHeader(t *testing.T) {
+	c := New()
+	req, err := http.NewRequest("POST", "https://upstream.test/x", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := &auth.Auth{UID: "0250aab9-3697-47c9-9133-3a2cc7ec3af1"}
+	c.injectAccountStableHeaders(req, a)
+	hdr := req.Header.Get("X-Machine-ID")
+	if hdr == "" {
+		t.Fatal("X-Machine-ID 未注入")
+	}
+	if got := MachineIDForUID(a.UID); got != hdr {
+		t.Fatalf("MachineIDForUID=%s 与出站头 %s 不一致（两处派生漂移）", got, hdr)
+	}
+	if n := len(MachineIDForUID(a.UID)); n != 36 {
+		t.Fatalf("machine id 长度=%d want 36", n)
+	}
 }

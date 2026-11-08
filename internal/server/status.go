@@ -5,6 +5,7 @@ package server
 import (
 	"net/http"
 
+	"yg-gateway/internal/pool"
 	"yg-gateway/internal/reqlog"
 	"yg-gateway/internal/upstream"
 )
@@ -129,11 +130,54 @@ func (h *Handler) proxyStatusSnapshot() map[string]string {
 
 // rhythmSnapshot 返回并发闸观测视图（/status 的 rhythm 键）。Upstream 未装配时
 // 返回空表（键仍存在，{}）——与 proxy_status 同语义，避免键缺失被读成「无此观测」。
+//
+// 桶名（上游 X-Machine-ID，36 hex）在这里换成「昵称(uid8)」：运维要判断「哪个号被打热 /
+// 被排队」，看哈希只能数个数。分桶语义不动（上游仍按 machine-id 计），只改展示名；
+// 未匹配到账号的桶（global / 无账号归属的请求）原样保留——未知就是未知，不隐藏不合并。
 func (h *Handler) rhythmSnapshot() map[string]any {
 	if h.cfg.Upstream == nil {
 		return map[string]any{}
 	}
-	return h.cfg.Upstream.RhythmStatus()
+	raw := h.cfg.Upstream.RhythmStatus()
+	if len(raw) == 0 || h.cfg.Pool == nil {
+		return raw
+	}
+	return rhythmRelabel(raw, h.cfg.Pool.List())
+}
+
+// rhythmRelabel 按账号表把 rhythm 桶名换成可读标签；纯函数便于单测。
+func rhythmRelabel(raw map[string]any, accounts []pool.Status) map[string]any {
+	labels := make(map[string]string, len(accounts))
+	for _, a := range accounts {
+		mid := upstream.MachineIDForUID(a.UID)
+		if mid == "" {
+			continue
+		}
+		label := shortUID(a.UID)
+		if a.Nickname != "" {
+			label = a.Nickname + "(" + shortUID(a.UID) + ")"
+		}
+		if _, dup := labels[mid]; !dup { // 同一 machine-id 只认首个（uid 互异时应无此情）
+			labels[mid] = label
+		}
+	}
+	out := make(map[string]any, len(raw))
+	for k, v := range raw {
+		if lb, ok := labels[k]; ok {
+			out[lb] = v
+			continue
+		}
+		out[k] = v
+	}
+	return out
+}
+
+// shortUID 取 uid 前 8 位（与请求日志/stdout 的显示口径一致）。
+func shortUID(uid string) string {
+	if len(uid) <= 8 {
+		return uid
+	}
+	return uid[:8]
 }
 
 // agentProfileSnapshot 读 archive 并聚合 agent 流量画像。无数据（无 RequestLog、

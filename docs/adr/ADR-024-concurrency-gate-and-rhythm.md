@@ -39,3 +39,8 @@ MaxConcurrency/semaphore/inflight 零命中）。
   p99=2 / 峰值 4；候选 N=4 误伤率 0.000%、N=3 为 0.850%。**建议
   `concurrency_per_account: 4`**（默认仍 0 关，由用户决定启用）。结论与脚本见
   `.harness/changes/2026-11-06-concurrency-calibration/`。
+- **桶名可读化（2026-11-08）**：`rhythm` 的桶 key 是 `X-Machine-ID`（36 hex），运维看不出
+  账号。改为在 **server 输出层**映射成 `昵称(uid8)`（无昵称 → uid8；`global`/未知桶原样保留），
+  上游分桶语义不动——upstream 是协议层，不该知道账号昵称。派生复用同一
+  `deriveAccountStableID`（导出 `MachineIDForUID`），测试钉死「桶名派生 = 出站头」。
+  见 `.harness/changes/2026-11-08-rhythm-readable-keys/`。
