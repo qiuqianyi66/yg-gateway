@@ -105,3 +105,57 @@ func TestTaskGateSerializesSameFamily(t *testing.T) {
 		t.Fatalf("串行后并发峰值=%d want 1", got)
 	}
 }
+
+// P3 修复：BlackcatBusy 必须如实反映 blackcat 门控的取/放，面板靠它在不抢锁的前提下
+// 判断排程是否在跑。窗口时钟钉死（不依赖运行墙钟），stub 在第一个请求处卡住。
+func TestBlackcatBusyFlagReflectsGate(t *testing.T) {
+	schedulerPinNightWindow(t, time.Date(2026, 10, 7, 23, 30, 0, 0, time.Local))
+
+	entered := make(chan struct{}, 1)
+	release := make(chan struct{})
+	var relOnce sync.Once
+	unblock := func() { relOnce.Do(func() { close(release) }) }
+	var calls atomic.Int32
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		select {
+		case entered <- struct{}{}:
+		default:
+		}
+		<-release
+		w.Write([]byte(`{"code":0}`))
+	}))
+	t.Cleanup(srv.Close) // LIFO：先登记的后执行
+	t.Cleanup(unblock)
+
+	p := pool.New("")
+	p.Add(schedulerCoverAuth("u1"))
+	s := New(Config{
+		Pool: p,
+		Upstream: &upstream.Client{
+			HTTP: srv.Client(), ChatHTTP: srv.Client(),
+			ChatBaseCN: srv.URL, BillingBaseCN: srv.URL, WebBaseCN: srv.URL,
+		},
+	})
+
+	done := make(chan struct{})
+	go func() {
+		s.RunBlackcatNow()
+		close(done)
+	}()
+	select {
+	case <-entered:
+	case <-time.After(10 * time.Second):
+		t.Fatal("blackcat 10s 内没发出请求：门控或窗口守卫把正常路径挡住了")
+	}
+	if !s.BlackcatBusy() {
+		t.Fatal("取锁后 BlackcatBusy=false want true（面板会因此误发夜间对话）")
+	}
+
+	unblock()
+	<-done
+	if s.BlackcatBusy() {
+		t.Fatal("释放后 BlackcatBusy=true want false")
+	}
+}

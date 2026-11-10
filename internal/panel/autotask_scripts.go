@@ -157,12 +157,21 @@ func runLibraryRead(p *Panel, a *auth.Auth) (string, error) {
 	return "已上报资料库介绍阅读事件", nil
 }
 
+// nowForBlackcat 是 runBlackCat 的窗口时钟（与 scheduler 的 nowForNightWindow 同模式）：
+// 测试需要钉在夜间窗口内，否则用例判别力取决于运行墙钟。
+var nowForBlackcat = time.Now
+
 // runBlackCat 完成 black_cat（夜猫子，夜间 23:00–08:00 计数）。
 // 判据 = 夜间窗口内 glm-5.2 真实对话 + chat 事件上报（WorkBuddy-Daily 实测口径）。
 // 窗口外不做（提示等排程）；网关 blackcat_hours（默认 23 点）排程会自动补足。
 func runBlackCat(p *Panel, a *auth.Auth) (string, error) {
-	if !upstream.InNightWindow(time.Now()) {
+	if !upstream.InNightWindow(nowForBlackcat()) {
 		return "当前不在 23:00–08:00 计数窗口，行为不计分；网关会在每日 23 点自动补足", nil
+	}
+	// P3 修复：排程 blackcat 正在跑时直接跳过——否则下面的 BlackcatNeed 读到的是
+	// 排程填补前的陈旧差额，会对同一账号多发真实夜间对话（autotask 的账号锁不认识排程）。
+	if p.cfg.Scheduler != nil && p.cfg.Scheduler.BlackcatBusy() {
+		return "排程正在自动补足夜猫子，跳过本次手动触发", nil
 	}
 	need, err := p.cfg.Upstream.BlackcatNeed(a)
 	if err != nil {

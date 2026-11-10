@@ -123,6 +123,9 @@ type Scheduler struct {
 	// 且余额/积分写回互相覆盖。锁只串行**同一族**：活跃上报要睡数分钟，不能挡住其他族。
 	// 用定长数组按 taskKind 下标取锁（零值即可用，Scheduler 的零值构造也不会 panic）。
 	taskGates [taskGateSlots]sync.Mutex
+	// gateBusy 与 taskGates 同槽：sync.Mutex 没有「是否持有」查询，面板需要在不抢锁的
+	// 前提下知道排程是否在跑（P3 修复），由 gate 取锁/释放时同步维护。
+	gateBusy [taskGateSlots]atomic.Bool
 
 	// balanceGate 余额刷新的同类保护：StartBalanceRefresh 的循环与面板手动触发都会调
 	// RunBalanceRefreshNow；余额不是 taskKind（独立分钟级排程），单列一把锁。
@@ -433,7 +436,18 @@ func (s *Scheduler) gate(k taskKind, name string) func() {
 		log.Printf("%s: 同族任务已在执行，跳过本次触发（P2-5）", name)
 		return nil
 	}
-	return mu.Unlock
+	s.gateBusy[int(k)].Store(true)
+	return func() {
+		s.gateBusy[int(k)].Store(false)
+		mu.Unlock()
+	}
+}
+
+// BlackcatBusy 报告 blackcat 排程批处理是否正在执行（P3 修复）。面板自动任务
+// runBlackCat 与排程是同一族计次调用，在排程窗口内手动触发会读到陈旧的 BlackcatNeed
+// 而多发真实对话——面板据此先查后跳，不抢锁、不阻塞。
+func (s *Scheduler) BlackcatBusy() bool {
+	return s.gateBusy[taskBlackcat].Load()
 }
 
 // Run 主循环，阻塞直到 ctx 取消。
