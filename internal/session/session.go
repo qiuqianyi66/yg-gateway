@@ -14,6 +14,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"log"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -129,15 +130,19 @@ func (r *Router) LoadFromStore() {
 	now := time.Now()
 	r.mu.Lock()
 	loaded := 0
+	var evicted []string
 	for key, uid := range binds {
 		if _, exists := r.entries[key]; exists {
 			continue
 		}
-		r.ensureCapacityLocked(key)
+		evicted = append(evicted, r.ensureCapacityLocked(key)...)
 		r.entries[key] = entry{uid: uid, lastActive: now}
 		loaded++
 	}
 	r.mu.Unlock()
+	for _, k := range evicted {
+		r.cfg.Store.DelBind(k)
+	}
 	if loaded > 0 {
 		log.Printf("[session] 从 Redis 恢复 %d 条粘性会话绑定", loaded)
 	}
@@ -180,7 +185,14 @@ func (r *Router) ResolveForModel(key, model string) (string, bool) {
 
 	// ── Slow path: 写锁 re-check 后分配 ────────────────────
 	r.mu.Lock()
-	defer r.mu.Unlock()
+	// 解锁后再镜像：容量淘汰产生的 DelBind 不能持 r.mu 调外部存储（与 gcOnce 同一模式）。
+	var evicted []string
+	defer func() {
+		r.mu.Unlock()
+		for _, k := range evicted {
+			r.cfg.Store.DelBind(k)
+		}
+	}()
 
 	// re-check：并发同 key 可能已被其他 goroutine 分配好。
 	if e2, found2 := r.entries[key]; found2 && !expired(e2, now, r.cfg.TTL) {
@@ -213,7 +225,7 @@ func (r *Router) ResolveForModel(key, model string) (string, bool) {
 	uid := pool2[hashIndex(key, len(pool2))]
 
 	prev, existed := r.entries[key]
-	r.ensureCapacityLocked(key)
+	evicted = r.ensureCapacityLocked(key)
 	r.entries[key] = entry{uid: uid, lastActive: now}
 	if existed && prev.uid != uid {
 		r.cfg.Store.DelBind(key)
@@ -230,33 +242,52 @@ func (r *Router) maxEntries() int {
 	return defaultMaxEntries
 }
 
-// evictOldestLocked 淘汰 lastActive 最旧的一条并镜像删除；调用方必须持写锁。
-// 空表时是无操作（不会死循环）。
-func (r *Router) evictOldestLocked() {
-	oldestKey := ""
-	var oldest time.Time
+// evictOldestBatchLocked 一次扫描按 lastActive 淘汰最旧的约 10%（至少 1 条），
+// 返回被删 key 列表（**镜像由调用方在解锁后做**：与 gcOnce 同一模式，避免持锁调外部存储）。
+//
+// 为什么批量而不是单条：条目饱和后**每条新 key 都会触发一次淘汰**，单条淘汰等于把一次
+// O(n) 全表扫描摊在每次插入上，而且是在全局写锁里 —— 唯一 conversationId 的高频流量会把
+// 它变成锁竞争热点。批量把成本摊到 ~10% 的新增上，代价是偶尔多淘汰几条（LRU 语义不变）。
+func (r *Router) evictOldestBatchLocked() []string {
+	if len(r.entries) == 0 {
+		return nil
+	}
+	type aged struct {
+		key  string
+		last time.Time
+	}
+	all := make([]aged, 0, len(r.entries))
 	for k, e := range r.entries {
-		if oldestKey == "" || e.lastActive.Before(oldest) {
-			oldestKey, oldest = k, e.lastActive
-		}
+		all = append(all, aged{key: k, last: e.lastActive})
 	}
-	if oldestKey == "" {
-		return
+	sort.Slice(all, func(i, j int) bool { return all[i].last.Before(all[j].last) })
+
+	n := len(all) / 10
+	if n < 1 {
+		n = 1
 	}
-	delete(r.entries, oldestKey)
-	r.cfg.Store.DelBind(oldestKey)
+	if n > len(all) {
+		n = len(all)
+	}
+	victims := make([]string, 0, n)
+	for _, a := range all[:n] {
+		delete(r.entries, a.key)
+		victims = append(victims, a.key)
+	}
+	return victims
 }
 
-// ensureCapacityLocked 保证插入 key 后条目数不超过上限；调用方必须持写锁。
+// ensureCapacityLocked 保证插入 key 后条目数不超过上限，返回需要镜像删除的 key；调用方必须持写锁。
 // 只对**新 key** 腾位置：覆盖已有 key 不会增长容量。
-func (r *Router) ensureCapacityLocked(key string) {
+func (r *Router) ensureCapacityLocked(key string) []string {
 	if _, ok := r.entries[key]; ok {
-		return
+		return nil
 	}
 	limit := r.maxEntries()
-	for len(r.entries) >= limit {
-		r.evictOldestLocked()
+	if len(r.entries) < limit {
+		return nil
 	}
+	return r.evictOldestBatchLocked()
 }
 
 // touch 滚动 lastActive 并异步镜像（只在快路径命中时写最后一次）。
@@ -284,9 +315,12 @@ func (r *Router) Bind(key, uid string) {
 	}
 	now := time.Now()
 	r.mu.Lock()
-	r.ensureCapacityLocked(key)
+	evicted := r.ensureCapacityLocked(key)
 	r.entries[key] = entry{uid: uid, lastActive: now}
 	r.mu.Unlock()
+	for _, k := range evicted {
+		r.cfg.Store.DelBind(k)
+	}
 	r.cfg.Store.SetBind(key, uid, r.cfg.TTL)
 }
 

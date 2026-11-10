@@ -1,6 +1,7 @@
 package session
 
 import (
+	"fmt"
 	"testing"
 	"time"
 )
@@ -46,6 +47,37 @@ func TestRouterMaxEntriesEvictsOldest(t *testing.T) {
 	r.Bind("k2", "uid-b2")
 	if got := r.Count(); got != sizeBefore {
 		t.Fatalf("覆盖已有 key 改变了容量：%d → %d", sizeBefore, r.Count())
+	}
+}
+
+// 饱和后一次淘汰约 10%（不是单条）：单条会在"每条新 key 一次 O(n) 全表扫描 + 持写锁"下
+// 变成锁竞争热点，批量把成本摊到约 10% 的新增上。
+func TestRouterEvictsBatchAtSaturation(t *testing.T) {
+	const limit = 20
+	r := New(Config{MaxEntries: limit})
+	base := time.Now().Add(-time.Hour)
+	r.mu.Lock()
+	for i := 0; i < limit; i++ {
+		key := fmt.Sprintf("k%02d", i)
+		r.entries[key] = entry{uid: "u", lastActive: base.Add(time.Duration(i) * time.Second)}
+	}
+	r.mu.Unlock()
+
+	r.Bind("fresh", "u")
+	if got := r.Count(); got != limit-2+1 {
+		t.Fatalf("Count=%d want %d（应一批淘汰 %d 条再插入）", got, limit-2+1, limit/10)
+	}
+	seen := map[string]bool{}
+	for _, b := range r.Snapshot() {
+		seen[b.Key] = true
+	}
+	for _, gone := range []string{"k00", "k01"} {
+		if seen[gone] {
+			t.Fatalf("%s 应被淘汰：%v", gone, seen)
+		}
+	}
+	if !seen["k02"] || !seen["fresh"] {
+		t.Fatalf("存活集合不对（应保留较新条目）：%v", seen)
 	}
 }
 
