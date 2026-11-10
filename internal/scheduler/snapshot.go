@@ -35,6 +35,11 @@ func (s *Scheduler) RunSnapshotNow() {
 	if dir == "" {
 		return
 	}
+	release := s.gate(taskSnapshot, "snapshot")
+	if release == nil {
+		return
+	}
+	defer release()
 	now := snapshotNow()
 	// 全量读取发生在落盘时刻；Pool.List() 内部自锁，无需在此额外加锁。
 	statuses := s.cfg.Pool.List()

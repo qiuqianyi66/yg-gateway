@@ -24,6 +24,11 @@ func (s *Scheduler) RunBlackcatNow() {
 		log.Printf("blackcat: 当前不在 23:00–08:00 计数窗口，跳过")
 		return
 	}
+	release := s.gate(taskBlackcat, "blackcat")
+	if release == nil {
+		return
+	}
+	defer release()
 	for _, st := range s.cfg.Pool.List() {
 		// 暂停选号（paused）账号跳过：夜猫子是全任务体系中唯一「整任务都是
 		// 真实模型对话」的（RunNightChats 逐条 ChatStream 发 glm-5.2 短对话），

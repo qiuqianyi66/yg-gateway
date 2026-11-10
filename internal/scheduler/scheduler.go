@@ -116,7 +116,22 @@ type Scheduler struct {
 	// balanceInterval 余额刷新间隔（纳秒，0=暂停）。atomic 读写：执行循环每轮读当前值，
 	// SetBalanceInterval 可任意时刻热改（面板保存配置）。
 	balanceInterval atomic.Int64
+
+	// taskGates 每个任务族一把互斥锁（P2-5）：面板手动触发是 `go Scheduler.RunXxxNow()`
+	// （panel.go:687-733），与排程 runBatch 对同一族会同时进——签到/活跃上报/黑猫都是
+	// 「对同一批账号打计次型上游接口」，并发重入等于把请求量翻倍（养号最怕的风控面），
+	// 且余额/积分写回互相覆盖。锁只串行**同一族**：活跃上报要睡数分钟，不能挡住其他族。
+	// 用定长数组按 taskKind 下标取锁（零值即可用，Scheduler 的零值构造也不会 panic）。
+	taskGates [taskGateSlots]sync.Mutex
+
+	// balanceGate 余额刷新的同类保护：StartBalanceRefresh 的循环与面板手动触发都会调
+	// RunBalanceRefreshNow；余额不是 taskKind（独立分钟级排程），单列一把锁。
+	balanceGate sync.Mutex
 }
+
+// taskGateSlots 是 taskGates 的槽位数。taskKind 目前 7 个（checkin/travel/activity/
+// keepalive/blackcat/growth/snapshot），留一个余量；超出范围的 kind 由 gate 放行不拦。
+const taskGateSlots = 8
 
 // New 构建。
 func New(cfg Config) *Scheduler {
@@ -406,6 +421,21 @@ func (s *Scheduler) waitSlot(ctx context.Context, next time.Time, step time.Dura
 	}
 }
 
+// gate 尝试独占某任务族（P2-5）；返回 nil 表示该族正在执行，调用方应直接返回。
+// 用 TryLock 而非 Lock：手动点击撞上排程批处理时，同族任务本来就在跑，再排队只会
+// 在它结束后立刻补跑第二趟（等于并发重入变成串行重复），所以宁可跳过并留一行日志。
+func (s *Scheduler) gate(k taskKind, name string) func() {
+	if int(k) < 0 || int(k) >= taskGateSlots {
+		return func() {} // 未知 kind：不拦（宁可多跑一次，也不把没登记的族锁死）
+	}
+	mu := &s.taskGates[int(k)]
+	if !mu.TryLock() {
+		log.Printf("%s: 同族任务已在执行，跳过本次触发（P2-5）", name)
+		return nil
+	}
+	return mu.Unlock
+}
+
 // Run 主循环，阻塞直到 ctx 取消。
 // Reconfigure 触发 rearmSchedule 时提前唤醒重算（新时点/开关立即生效）。
 func (s *Scheduler) Run(ctx context.Context) {
@@ -488,6 +518,11 @@ func (s *Scheduler) runBatch(ctx context.Context, kinds []taskKind) {
 // 末尾追加连登管家（streak.go）：可兑换档位自动兑换 + 抽奖次数自动抽完——
 // 连登兑换按天数解锁，挂在每日签到后即「到天数那天自动完成兑换→抽奖闭环」。
 func (s *Scheduler) RunCheckinNow() {
+	release := s.gate(taskCheckin, "checkin")
+	if release == nil {
+		return
+	}
+	defer release()
 	expiringSoon := s.ExpiringSoonWindow()
 	includeDisabled := s.includeDisabledInTasks()
 	for _, st := range s.cfg.Pool.List() {
@@ -552,6 +587,11 @@ func (s *Scheduler) RunActivityNow() {
 
 // runActivity 活跃上报遍历，随 ctx 取消立即退出。
 func (s *Scheduler) runActivity(ctx context.Context) {
+	release := s.gate(taskActivity, "activity")
+	if release == nil {
+		return
+	}
+	defer release()
 	first := true
 	includeDisabled := s.includeDisabledInTasks()
 	for _, st := range s.cfg.Pool.List() {
@@ -626,6 +666,11 @@ func (s *Scheduler) RunKeepaliveNow() {
 // 连续 sessionDeadThreshold 次（3 次）才禁用（P0-1：13 个 disabled 号全是历史误判）。
 // 刷新成功 → ClearSessionDead 清计数（错误判定的账号有复活路径）。
 func (s *Scheduler) runKeepalive(ctx context.Context) {
+	release := s.gate(taskKeepalive, "keepalive")
+	if release == nil {
+		return
+	}
+	defer release()
 	includeDisabled := s.includeDisabledInTasks()
 	type slot struct {
 		uid      string
@@ -682,6 +727,11 @@ func (s *Scheduler) runKeepalive(ctx context.Context) {
 // 但不做签到、不刷新 token——只让"积分"这个观测量保持新鲜。
 // 供两类入口复用：后台周期任务（StartBalanceRefresh）与面板手动全量刷新。
 func (s *Scheduler) RunBalanceRefreshNow() {
+	if !s.balanceGate.TryLock() {
+		log.Printf("balance: 余额刷新已在执行，跳过本次触发（P2-5）")
+		return
+	}
+	defer s.balanceGate.Unlock()
 	var wg sync.WaitGroup
 	expiringSoon := s.ExpiringSoonWindow()
 	includeDisabled := s.includeDisabledInTasks()
