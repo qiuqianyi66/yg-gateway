@@ -88,3 +88,24 @@ func TestRouterDefaultMaxEntries(t *testing.T) {
 		t.Fatalf("maxEntries()=%d want %d", got, defaultMaxEntries)
 	}
 }
+
+// 冷启动超过内存上限时，只淘汰内存、**不许**删 Store 里的持久化记录：
+// 那些记录是刚从 Store 读出来的，删掉等于每次重启都永久清一批可恢复绑定。
+func TestLoadFromStoreDoesNotDeletePersistedBinds(t *testing.T) {
+	const limit = 20
+	st := newCountingStore()
+	for i := 0; i < limit+5; i++ {
+		st.binds[fmt.Sprintf("s%02d", i)] = "uid"
+	}
+	r := New(Config{MaxEntries: limit, Store: st})
+
+	r.LoadFromStore()
+
+	// 批量淘汰会给下一批插入留出余量，故稳态落在 (limit-10%, limit] 之间，而不是正好 limit。
+	if got := r.Count(); got > limit || got < limit-limit/10 {
+		t.Fatalf("Count=%d 落在 [%d, %d] 之外（内存仍须受上限约束）", got, limit-limit/10, limit)
+	}
+	if st.delBinds != 0 {
+		t.Fatalf("LoadFromStore 删了 %d 条持久化绑定：冷启动不该清理镜像", st.delBinds)
+	}
+}

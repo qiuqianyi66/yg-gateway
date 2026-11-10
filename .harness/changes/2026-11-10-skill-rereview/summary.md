@@ -1,7 +1,7 @@
 # 2026-11-10-skill-rereview 变更摘要
 
 需求：`docs/prd/REQ-2026-11-10-skill-rereview.md`
-评审记录：`review.md`
+评审记录：`review.md`（v2，按 `doubao-coding-review-code` + `~/.agents/skills/expert-reviewer` 重做）
 分级：L2（业务逻辑：会话容量淘汰的并发与成本形态）
 
 ---
@@ -11,7 +11,8 @@
 | 文件 | 作用 / 改动 |
 |---|---|
 | `修改：internal/session/session.go` | 淘汰改批量（一次扫描 + 排序删最旧约 10%，至少 1 条）；淘汰清单改为**解锁后**镜像 `Store.DelBind`（对齐 `gcOnce` 的「锁内收集、锁外镜像」）；`evictOldestLocked` → `evictOldestBatchLocked`；新增 `sort` 导入 |
-| `新增：internal/session/max_entries_test.go`（追加用例） | `TestRouterEvictsBatchAtSaturation`：20 条满载 → 插第 21 条 → `Count=19`、最旧 `k00/k01` 消失、`k02` 与新增存活 |
+| `修改：internal/session/session.go`（v2 幂等） | `LoadFromStore` 不再镜像删除被淘汰者：冷启动只腾内存，不清理上层持久化绑定（否则每次重启永久丢一批） |
+| `新增：internal/session/max_entries_test.go` | `TestRouterEvictsBatchAtSaturation`（饱和批量淘汰）、`TestLoadFromStoreDoesNotDeletePersistedBinds`（冷启动 delBinds==0） |
 | `新增：.harness/changes/2026-11-10-skill-rereview/**` | 本次复检的 REQ + review.md + 摘要 |
 
 **没做的（明写，免得下轮重提）**：
@@ -22,13 +23,15 @@
 
 | 验证 | 命令 | 结果 |
 |---|---|---|
-| session 整包 + 覆盖 | `go test ./internal/session/ -count=1 -cover` | ok，97.9%（改前 98.5%，新增分支摊薄） |
+| session 整包 + 覆盖 | `go test ./internal/session/ -count=3 -cover` | ok，98.1%（v1 时 97.9%，补冷启动用例后回升） |
 | 静态检查 | `go vet ./internal/session` / `gofmt -l internal\session` | 退出码 0 / 无输出 |
-| 体量棘轮 | `session.go` 行数 | 762 → 796，`maxFileLines` 1070 未触线 |
-| 全量门禁 | `powershell -NoProfile -File scripts/pre-commit.ps1` | 11/11 通过（日志 `%TEMP%\yg-precommit-rereview.log`） |
+| 体量棘轮 | `session.go` 行数 | 762 → 795，`maxFileLines` 1070 未触线 |
+| 抖动复跑 | reqlog `-count=8` / session `-count=5` / growth `-count=3` | 全绿 |
+| 全量门禁 | `powershell -NoProfile -File scripts/pre-commit.ps1` | 见日志 `%TEMP%\yg-precommit-rereview2.log` |
 
-**负向探针**（副本 `%TEMP%\ygg-mut-batch`，已删除）：把批量淘汰的 `n := len(all) / 10`
-变异成 `n := 1`（退回单条）→ `TestRouterEvictsBatchAtSaturation` 报红（`Count=20 want 19`）。
+**负向探针**（各在 `%TEMP%` 副本做，做完删除）：
+- `ygg-mut-batch`：批量淘汰 `n := len(all)/10` → `n := 1` → 报红 `Count=20 want 19`。
+- `ygg-mut-load`：`LoadFromStore` 变异回「删镜像」→ 报红 `LoadFromStore 删了 6 条持久化绑定`（25 条装载 / 上限 20）。
 
 ## 三、未完成 / 待补（诚实清单）
 

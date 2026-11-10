@@ -130,19 +130,18 @@ func (r *Router) LoadFromStore() {
 	now := time.Now()
 	r.mu.Lock()
 	loaded := 0
-	var evicted []string
 	for key, uid := range binds {
 		if _, exists := r.entries[key]; exists {
 			continue
 		}
-		evicted = append(evicted, r.ensureCapacityLocked(key)...)
+		// 容量约束照样生效，但**不镜像删除**淘汰者：这些记录是本函数刚从 Store 读出来的，
+		// 删它们等于把持久化镜像当垃圾清理——下次冷启动可恢复的绑定会少一批，且每次
+		// 重启都再删一批。内存上限只约束内存。
+		r.ensureCapacityLocked(key)
 		r.entries[key] = entry{uid: uid, lastActive: now}
 		loaded++
 	}
 	r.mu.Unlock()
-	for _, k := range evicted {
-		r.cfg.Store.DelBind(k)
-	}
 	if loaded > 0 {
 		log.Printf("[session] 从 Redis 恢复 %d 条粘性会话绑定", loaded)
 	}
