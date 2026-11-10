@@ -27,6 +27,14 @@ type entry struct {
 	lastActive time.Time
 }
 
+// defaultMaxEntries 绑定条目上限的默认值（Config.MaxEntries 未配时生效）。
+//
+// 为什么需要上限：entries 只按 TTL（默认 30m）过期清理，而 key 由客户端 conversationId
+// 派生 —— 用不完的唯一 ID 就能把 map 推成无界（7×24 常驻进程被慢慢撑爆，且不会报错）。
+// 单条约 100–150 字节（key 字符串 + entry + map 开销），20000 条约 3MB：留足真实并发量
+// 的余量，同时把最坏情况钉成常数。
+const defaultMaxEntries = 20000
+
 // Config 路由依赖；Available 返回"可用账号"（healthy 且未占满在途）的有序 uid 列表，
 // 由 pool.AvailableUIDs 提供。Store 可为 redisstore.Noop（纯内存）。
 type Config struct {
@@ -34,6 +42,9 @@ type Config struct {
 	GCInterval time.Duration
 	Store      redisstore.Store
 	Available  func() []string
+	// MaxEntries 内存绑定条目上限；<=0 取 defaultMaxEntries。达到上限时淘汰
+	// lastActive 最旧的一条（先删再插，容量恒 ≤ 上限）。
+	MaxEntries int
 	// AvailableForModel 按请求模型返回"在该模型上可用"的账号（healthy 且未占满在途，
 	// 且未被该模型限流/限额）。nil 时回落 Available（无模型维度，行为与引入前一致）。
 	//
@@ -122,6 +133,7 @@ func (r *Router) LoadFromStore() {
 		if _, exists := r.entries[key]; exists {
 			continue
 		}
+		r.ensureCapacityLocked(key)
 		r.entries[key] = entry{uid: uid, lastActive: now}
 		loaded++
 	}
@@ -201,12 +213,50 @@ func (r *Router) ResolveForModel(key, model string) (string, bool) {
 	uid := pool2[hashIndex(key, len(pool2))]
 
 	prev, existed := r.entries[key]
+	r.ensureCapacityLocked(key)
 	r.entries[key] = entry{uid: uid, lastActive: now}
 	if existed && prev.uid != uid {
 		r.cfg.Store.DelBind(key)
 	}
 	r.cfg.Store.SetBind(key, uid, r.cfg.TTL)
 	return uid, true
+}
+
+// maxEntries 生效上限（配置缺失时回落默认值）。
+func (r *Router) maxEntries() int {
+	if r.cfg.MaxEntries > 0 {
+		return r.cfg.MaxEntries
+	}
+	return defaultMaxEntries
+}
+
+// evictOldestLocked 淘汰 lastActive 最旧的一条并镜像删除；调用方必须持写锁。
+// 空表时是无操作（不会死循环）。
+func (r *Router) evictOldestLocked() {
+	oldestKey := ""
+	var oldest time.Time
+	for k, e := range r.entries {
+		if oldestKey == "" || e.lastActive.Before(oldest) {
+			oldestKey, oldest = k, e.lastActive
+		}
+	}
+	if oldestKey == "" {
+		return
+	}
+	delete(r.entries, oldestKey)
+	r.cfg.Store.DelBind(oldestKey)
+}
+
+// ensureCapacityLocked 保证插入 key 后条目数不超过上限；调用方必须持写锁。
+// 只对**新 key** 腾位置：覆盖已有 key 不会增长容量。
+func (r *Router) ensureCapacityLocked(key string) {
+	if _, ok := r.entries[key]; ok {
+		return
+	}
+	limit := r.maxEntries()
+	for len(r.entries) >= limit {
+		r.evictOldestLocked()
+	}
 }
 
 // touch 滚动 lastActive 并异步镜像（只在快路径命中时写最后一次）。
@@ -234,6 +284,7 @@ func (r *Router) Bind(key, uid string) {
 	}
 	now := time.Now()
 	r.mu.Lock()
+	r.ensureCapacityLocked(key)
 	r.entries[key] = entry{uid: uid, lastActive: now}
 	r.mu.Unlock()
 	r.cfg.Store.SetBind(key, uid, r.cfg.TTL)
