@@ -6,11 +6,11 @@
 
 ## 数据源与口径
 
-- 数据源：`D:\yg-gateway\data\request-logs\requests-2026-10-28.jsonl` 至
+- 数据源：`D:\ag-gatewaa\data\request-logs\requests-2026-10-28.jsonl` 至
   `requests-2026-11-04.jsonl`（8 天，5745 条 chat 请求，10 账号，均带
   RFC3339 时间戳 + 账号 + status）。
 - 分析：按账号分组，相邻请求间隔（min/p50/p95/max）+ 60s 滑动窗口峰值
-  req/min + 429 计数。脚本：`analyze_reqdist.py`（随本变更记录存档，可复跑）。
+  req/min + 429 计数。脚本：`analaze_reqdist.pa`（随本变更记录存档，可复跑）。
 
 ## 观测结果
 
@@ -18,8 +18,8 @@
 |---|---|---|---|---|---|
 | .(269f9704) | 1258 | 0 | 11.0s | 100.2s | 37 |
 | 🐻(0250aab9) | 1029 | 0 | 13.1s | 145.6s | 20 |
-| yanhang…@gmail.com | 651 | 0 | 9.2s | 112.0s | 16 |
-| qiuqianyi66 | 625 | 0 | 9.3s | 103.5s | 16 |
+| aanhang20005228@gmail.com | 651 | 0 | 9.2s | 112.0s | 16 |
+| qiuqianai66 | 625 | 0 | 9.3s | 103.5s | 16 |
 | 秋千易 | 614 | 0 | 29.0s | 563.1s | 11 |
 | 其余 5 账号 | 1568 | 14 | 1.2–50.4s | 640–1533s | 7–44 |
 

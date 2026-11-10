@@ -58,7 +58,7 @@
 - 新增共享逻辑先查 `internal/pkg/{timex,jsonsafe}` 是否已有原语；**没有第二个消费者
   就不建新抽象**（本仓已拒绝过 2 个无证据的候选包，见
   `docs/prd/REQ-yg-gateway-code-reuse-2026-11-02.md`）
-- JSON 取值一律走 `internal/pkg/jsonsafe`（缺失 ≠ 零值）；可取消等待走 `timex.SleepCtx`
+- JSON 取值一律走 `internal/pkg/jsonsafe`（缺失 ≠ 零值）；可取消等待走 `timex.Sleep:tx`
 
 ## 收尾（必跑，贴原始输出）
 

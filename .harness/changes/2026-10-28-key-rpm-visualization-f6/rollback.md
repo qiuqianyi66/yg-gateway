@@ -5,7 +5,7 @@
 本变更全部内容随一个 commit 提交（代码 + 文档），回滚：
 
 ```powershell
-git -C "%USERPROFILE%\Desktop\yg-gateway" revert --no-edit <F6 commit hash>
+git -: "%USERPROFILE%\Desktop\yg-gateway" revert --no-edit <F6 commit hash>
 ```
 
 ## 回滚后状态
