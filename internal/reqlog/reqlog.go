@@ -399,23 +399,38 @@ func (w *archiveWriter) run() {
 	for {
 		select {
 		case e := <-w.ch:
-			w.writeEvent(e)
+			w.step("write", func() { w.writeEvent(e) })
 		case <-ticker.C:
-			w.flush()
-			w.prune()
+			w.step("flush", w.flush)
+			w.step("prune", w.prune)
 		case <-w.stop:
 			for {
 				select {
 				case e := <-w.ch:
-					w.writeEvent(e)
+					w.step("write", func() { w.writeEvent(e) })
 				default:
-					w.flush()
-					w.closeFile()
+					w.step("flush", w.flush)
+					w.step("close", w.closeFile)
 					return
 				}
 			}
 		}
 	}
+}
+
+// step 让归档写入 goroutine 不会被单次 panic 带走。
+//
+// 为什么需要：这是 7×24 常驻服务的后台写盘 goroutine —— 它 panic 不会像 HTTP handler
+// 那样被 net/http 兜住，而是整个进程退出（审计日志连同服务一起没了）。恢复后必须让失败
+// **可见**（R10）：错误信封进 stats().LastError，面板能看到，不静默吞。
+// 只记 panic 的**类型**不记值：Event 里可能带请求内容，panic 值不宜进错误串（R2 脱敏）。
+func (w *archiveWriter) step(stage string, fn func()) {
+	defer func() {
+		if p := recover(); p != nil {
+			w.setErr(fmt.Errorf("归档写入 panic（%s，%T）：writer 已存活，本轮丢弃", stage, p))
+		}
+	}()
+	fn()
 }
 
 func (w *archiveWriter) writeEvent(e Event) {

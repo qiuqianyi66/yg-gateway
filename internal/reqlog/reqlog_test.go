@@ -384,6 +384,45 @@ func TestArchiveQueueDropCounter(t *testing.T) {
 	}
 }
 
+func TestArchiveWriterStepSurvivesPanic(t *testing.T) {
+	dir := t.TempDir()
+	w := newArchiveWriter(Config{Enabled: true, Dir: dir})
+	t.Cleanup(w.close)
+
+	// 单次 panic 不许带走写入 goroutine，且必须让失败可见（R10 → stats().LastError）。
+	w.step("write", func() { panic("boom") })
+	if got := w.errString(); !strings.Contains(got, "panic") {
+		t.Fatalf("LastError=%q 未记录 panic（失败会变成静默）", got)
+	}
+
+	// 恢复后写入链路仍然活着：后续事件必须落盘（writer 每秒 flush，故轮询等落盘）。
+	w.enqueue(Event{RequestID: "after-panic", Kind: "chat", Time: time.Now()})
+	deadline := time.Now().Add(4 * time.Second)
+	var content string
+	for time.Now().Before(deadline) {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			t.Fatalf("ReadDir: %v", err)
+		}
+		for _, e := range entries {
+			raw, rerr := os.ReadFile(filepath.Join(dir, e.Name()))
+			if rerr != nil {
+				continue
+			}
+			if strings.Contains(string(raw), "after-panic") {
+				content = string(raw)
+			}
+		}
+		if content != "" {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if content == "" {
+		t.Fatal("panic 之后 4s 内没有写出 after-panic：writer 已死")
+	}
+}
+
 func TestArchivePruneHonorsSize(t *testing.T) {
 	dir := t.TempDir()
 	for i, name := range []string{"requests-2026-09-20.jsonl", "requests-2026-09-21.jsonl", "requests-2026-09-22.jsonl"} {
