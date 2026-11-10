@@ -176,11 +176,7 @@ Unknown 是**一等公民实体**，不是面板上的一个展示区：
 ## 部署纪律
 
 - 生产实例在 `D:\yg-gateway`，端口 7863，配置 `D:\yg-gateway\config.json`
-- **替换二进制前必须备份**（R15）
-- 构建 + 复制 + 启动放同一条命令（跨命令空档是下手时机）
-- 部署后必须冒烟：`/healthz`、`/v1/models`、流式与非流式各一发
-
-**上面四条现在由脚本固化，换版不要手工分步做**：
+- 备份（R15）、构建 → 替换 → 启动、冒烟全部由脚本一条命令固化，**换版不要手工分步做**：
 
 ```powershell
 powershell -NoProfile -File scripts/deploy-prod.ps1 -Exe <新exe> [-Feature <标签>]
@@ -190,8 +186,7 @@ powershell -NoProfile -File scripts/deploy-prod.ps1 -DryRun                  # �
 
 它把「备份 → 等端口释放 → PE 预检 → 改名替换 → 启动（cmd 重定向落 stderr）→ 健康轮询 →
 冒烟 → 失败自动回滚」做成一条命令，`finally` 落 JSON 报告（`stage`、`exe_hash_before/after`、
-`backup_path`、`log_path`、`smoke[]`、`git_head`/`git_dirty`）。第一条（同一条命令）就是它
-存在的理由；第二条（先备份）由脚本内建。
+`backup_path`、`log_path`、`smoke[]`、`git_head`/`git_dirty`）。
 
 **退出码就是「生产现在能不能用」，`1` 与 `4` 不要混读**：
 

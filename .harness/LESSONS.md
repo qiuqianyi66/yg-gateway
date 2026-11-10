@@ -32,3 +32,4 @@
 | L-26 | 校准≠机制(0关≠无机制) | 1 | AGENTS 补审纪律 | [L-26](lessons/L-26.md) |
 | L-27 | 机制化改造须穷尽调用入口族 | 1 | 机器检查 TestAppJSStandaloneFetchBearer | [L-27](lessons/L-27.md) |
 | L-28 | unknown≠待办，未吸收须落待办 | 1 | 规则（REQ 不做清单） | [L-28](lessons/L-28.md) |
+| L-29 | `-coverpkg` 目录式静默报 0.0% | 1 | 规则（覆盖率写全导入路径） | [L-29](lessons/L-29.md) |
