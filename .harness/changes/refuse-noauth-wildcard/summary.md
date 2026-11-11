@@ -35,3 +35,7 @@
 - 新增 security.allow_unauthenticated（默认 false）：把「我知道自己在裸奔」落成可审计配置，而不是逼人降级版本。
 - 开启且无密钥时，启动日志每次打 WARN；config.example.json 补该键（false）。
 - 单测 TestCheckExposureAllowUnauthenticatedOptIn 锁死「默认拒绝 / 显式放行」。
+
+## 七、拆 config.go（解门禁压线）
+
+- Default() 与 defaultPricing() 原样迁到 cmd/server/config_defaults.go，config.go 892 行，留出后续改动余量；纯搬移，行为不变（go test ./... 全绿）。
