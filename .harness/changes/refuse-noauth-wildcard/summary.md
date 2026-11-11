@@ -39,3 +39,9 @@
 ## 七、拆 config.go（解门禁压线）
 
 - Default() 与 defaultPricing() 原样迁到 cmd/server/config_defaults.go，config.go 892 行，留出后续改动余量；纯搬移，行为不变（go test ./... 全绿）。
+
+## 八、残留凭证纳管（strays.go）
+
+- 起因：auths/ 下 workbuddy-*.json.bak-* 不被 LoadDirReport 的 workbuddy*.json glob 匹配，既不加载也不收紧 ACL，却含明文 token 并随备份离机。
+- 改法：StrayCredentialFiles 判定 + WarnStrayCredentialFiles 启动 WARN 与幂等 ACL 收紧，不删除（删除属破坏性处置）。
+- 单测：纳管文件不算残留、.bak/.tmp 被报出、不存在目录返回空集。

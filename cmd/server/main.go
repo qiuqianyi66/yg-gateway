@@ -1096,6 +1096,9 @@ func loadAccountsAndPool(cfg *Config) (auths []*auth.Auth, skipped []string, p *
 	if len(skipped) > 0 {
 		log.Printf("WARN: %d 个账号文件被跳过（见上方 WARN）—— 本次对齐只增不删", len(skipped))
 	}
+	// 残留凭证：workbuddy-*.json.bak-* 这类文件既不被加载也不在 ACL 兜底范围内，
+	// 却可能含明文 token 并随备份离机。只报告 + 幂等收紧，不删除（可能是运维留的旧版）。
+	auth.WarnStrayCredentialFiles(cfg.AuthDir)
 	// ADR-009 同族：state.json 加载失败不得静默「当成没有状态」——
 	// 历史上损坏文件被直接 return 忽略，健康度观测全丢，选号依据被无声重置。
 	p, err = newPool(cfg.StateFile)

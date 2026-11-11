@@ -49,3 +49,5 @@
 - G8：Given 实例以全网卡监听运行、面板提交清空 api_key / When 保存 / Then 返回错误且**不落盘、不热应用**（同一判据在 saveConfig 复检）。
 
 - G9：Given security.allow_unauthenticated=true / When 无密钥 + 全网卡启动 / Then 放行，且每次启动必打 WARN（默认 false 时仍拒绝）。
+
+- G10：Given auths/ 存在 workbuddy-*.json.bak-* 之类残留 / When 启动 / Then 逐个 WARN 并收紧 ACL，不删除文件。
