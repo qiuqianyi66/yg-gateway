@@ -117,3 +117,22 @@ func TestSaveConfigRejectsClearingKeyOnWildcard(t *testing.T) {
 		t.Fatalf("带密钥的保存应通过，got: %v", err)
 	}
 }
+
+// TestCheckExposureAllowUnauthenticatedOptIn 显式开关：默认拒绝，写 true 才放行。
+func TestCheckExposureAllowUnauthenticatedOptIn(t *testing.T) {
+	off, err := ParseConfig([]byte(`{"listen":":7863"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := CheckUnauthenticatedExposure(off); err == nil {
+		t.Fatal("默认必须拒绝")
+	}
+
+	on, err := ParseConfig([]byte(`{"listen":":7863","security":{"allow_unauthenticated":true}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := CheckUnauthenticatedExposure(on); err != nil {
+		t.Fatalf("显式开启后应放行，got: %v", err)
+	}
+}

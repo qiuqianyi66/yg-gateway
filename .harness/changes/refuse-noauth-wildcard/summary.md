@@ -29,3 +29,9 @@
 
 - 复核发现：api_key 属热生效字段，面板清空密钥会立即生效，冷启动闸不覆盖 → 实例在全网卡监听时会当场变成无鉴权。
 - 处置：saveConfig 在 ParseConfig 之后用同一判据复检，失败不落盘不热应用；单测 TestSaveConfigRejectsClearingKeyOnWildcard 锁死（含「磁盘原密钥未被改写」断言）。
+
+## 六、显式开关（替代硬墙的一刀切）
+
+- 新增 security.allow_unauthenticated（默认 false）：把「我知道自己在裸奔」落成可审计配置，而不是逼人降级版本。
+- 开启且无密钥时，启动日志每次打 WARN；config.example.json 补该键（false）。
+- 单测 TestCheckExposureAllowUnauthenticatedOptIn 锁死「默认拒绝 / 显式放行」。

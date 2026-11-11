@@ -203,6 +203,8 @@ type Config struct {
 		// 「Abusing Reverse Proxies」向量）。直连部署保持空；套反代时填反代地址段。
 		// 改动需重启进程。
 		TrustedProxy string `json:"trusted_proxy"`
+		// AllowUnauthenticated 显式允许「无生效密钥 + 非回环监听」启动（默认 false，判据见 config_exposure.go）；开启后启动日志必打 WARN。
+		AllowUnauthenticated bool `json:"allow_unauthenticated"`
 		// ReadOnlyRateLimit 只读端点（/v1/models、/status）限流：window 内最多 limit 次，
 		// 按来源 IP 计数，超阈返回 429。limit<=0 或 window<=0 = 不限流（旧行为）。
 		ReadOnlyRateLimit struct {

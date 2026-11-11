@@ -47,3 +47,5 @@
 - 不做「告警后继续启动」：该组合不是配置漂移，是暴露面，必须拒绝。
 
 - G8：Given 实例以全网卡监听运行、面板提交清空 api_key / When 保存 / Then 返回错误且**不落盘、不热应用**（同一判据在 saveConfig 复检）。
+
+- G9：Given security.allow_unauthenticated=true / When 无密钥 + 全网卡启动 / Then 放行，且每次启动必打 WARN（默认 false 时仍拒绝）。
