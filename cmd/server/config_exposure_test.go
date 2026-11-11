@@ -94,3 +94,26 @@ func TestCheckUnauthenticatedExposure(t *testing.T) {
 		})
 	}
 }
+
+// TestSaveConfigRejectsClearingKeyOnWildcard 锁定热更新路径：面板清空 api_key
+// 属热生效字段，若只挡冷启动，实例会当场变成无鉴权开放（本闸必须同口径复检）。
+func TestSaveConfigRejectsClearingKeyOnWildcard(t *testing.T) {
+	env := cmdserverNewEnv(t, `{"listen":":7863","api_key":"sk-live"}`)
+
+	if _, err := env.save(t, `{"api_key":""}`); err == nil {
+		t.Fatal("全网卡监听下清空 api_key 必须被拒绝")
+	} else if !strings.Contains(err.Error(), "拒绝启动") {
+		t.Fatalf("错误信息应带拒绝理由，got: %v", err)
+	}
+
+	// 失败不落盘：磁盘上原密钥必须还在。
+	disk := cmdserverFileMap(t, env.path)
+	if disk["api_key"] != "sk-live" {
+		t.Fatalf("被拒绝的保存不得改写磁盘，got api_key=%v", disk["api_key"])
+	}
+
+	// 保留密钥的保存照常通过（不误伤正常路径）。
+	if _, err := env.save(t, `{"api_key":"sk-new"}`); err != nil {
+		t.Fatalf("带密钥的保存应通过，got: %v", err)
+	}
+}

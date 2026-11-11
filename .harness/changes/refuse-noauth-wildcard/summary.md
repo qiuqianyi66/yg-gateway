@@ -24,3 +24,8 @@
 
 - 凭据静态加密未做（与插件共读 auth 文件冲突，需单独决策）。
 - 主机名形式的 listen 从严按非回环处理，宁可多拒一次。
+
+## 五、热更新路径补漏
+
+- 复核发现：api_key 属热生效字段，面板清空密钥会立即生效，冷启动闸不覆盖 → 实例在全网卡监听时会当场变成无鉴权。
+- 处置：saveConfig 在 ParseConfig 之后用同一判据复检，失败不落盘不热应用；单测 TestSaveConfigRejectsClearingKeyOnWildcard 锁死（含「磁盘原密钥未被改写」断言）。

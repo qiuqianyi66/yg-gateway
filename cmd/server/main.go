@@ -739,6 +739,13 @@ func saveConfig(raw []byte, path string, live *livecfg.Holder, p *pool.Pool, up 
 		return nil, err
 	}
 
+	// 2.5) 安全闸同口径复检：启动闸只覆盖冷启动，而 api_key 属热生效字段——实例以
+	// 全网卡监听运行时，面板清空 api_key 会当场把网关与 /panel/ 改成无鉴权开放，
+	// 不必等重启。这里用同一个判据挡住，失败既不落盘也不热应用。
+	if err := CheckUnauthenticatedExposure(newCfg); err != nil {
+		return nil, err
+	}
+
 	// 3) 落盘（原子替换）。
 	out, err := json.MarshalIndent(merged, "", "  ")
 	if err != nil {
