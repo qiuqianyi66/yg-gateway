@@ -153,6 +153,12 @@ func main() {
 		}
 	}
 
+	// 启动期安全闸：没有生效密钥 + 监听非回环 = 网关与面板裸暴露给同网段，拒绝启动。
+	// 判据见 config_exposure.go（单测 config_exposure_test.go），不再靠注释提醒。
+	if err := CheckUnauthenticatedExposure(cfg); err != nil {
+		log.Fatalf("%v", err)
+	}
+
 	// 启动期装配（账号扫描 + 池构造 + 加载错误判定）抽成函数：main() 里的 log.Fatalf 不可测，
 	// 而「扫描不完整只增不删」「加载失败拒绝启动」这两条语义必须被测试覆盖。
 	auths, skippedAuths, p, err := loadAccountsAndPool(cfg)
