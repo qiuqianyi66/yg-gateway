@@ -97,6 +97,9 @@ func CheckUnauthenticatedExposure(c *Config) error {
 	if c == nil || authConfigured(c) {
 		return nil
 	}
+	if c.Security.AllowUnauthenticated {
+		return nil
+	}
 	scope := classifyListen(c.Listen)
 	if scope == listenLoopback {
 		return nil
