@@ -158,11 +158,6 @@ func main() {
 	if err := CheckUnauthenticatedExposure(cfg); err != nil {
 		log.Fatalf("%v", err)
 	}
-	// 显式开关放行时必须留下痕迹：配置里写 allow_unauthenticated 是「我知道自己在裸奔」，
-	// 不是静默默认。每次启动都 WARN，避免它变成没人记得的既有事实。
-	if cfg.Security.AllowUnauthenticated && !authConfigured(cfg) {
-		log.Printf("WARN: security.allow_unauthenticated=true 且没有任何生效 API Key：网关与 /panel/ 对能访问 %s 的网络匿名开放", cfg.Listen)
-	}
 
 	// 启动期装配（账号扫描 + 池构造 + 加载错误判定）抽成函数：main() 里的 log.Fatalf 不可测，
 	// 而「扫描不完整只增不删」「加载失败拒绝启动」这两条语义必须被测试覆盖。

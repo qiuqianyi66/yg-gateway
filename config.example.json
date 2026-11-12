@@ -43,7 +43,6 @@
   },
   "security": {
     "trusted_proxy": "",
-    "allow_unauthenticated": false,
     "read_only_rate_limit": {
       "limit": 0,
       "window": "1m"

@@ -118,21 +118,22 @@ func TestSaveConfigRejectsClearingKeyOnWildcard(t *testing.T) {
 	}
 }
 
-// TestCheckExposureAllowUnauthenticatedOptIn 显式开关：默认拒绝，写 true 才放行。
-func TestCheckExposureAllowUnauthenticatedOptIn(t *testing.T) {
+// TestCheckExposureNoOptIn 开关已移除：空密钥 + 全网卡一律拒绝，不存在放行配置。
+func TestCheckExposureNoOptIn(t *testing.T) {
 	off, err := ParseConfig([]byte(`{"listen":":7863"}`))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := CheckUnauthenticatedExposure(off); err == nil {
-		t.Fatal("默认必须拒绝")
+		t.Fatal("空密钥 + 全网卡必须拒绝")
 	}
 
-	on, err := ParseConfig([]byte(`{"listen":":7863","security":{"allow_unauthenticated":true}}`))
+	// 旧配置里残留的 allow_unauthenticated 字段不得再成为放行依据。
+	legacy, err := ParseConfig([]byte(`{"listen":":7863","security":{"allow_unauthenticated":true}}`))
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("旧字段应被忽略而不是解析失败，got: %v", err)
 	}
-	if err := CheckUnauthenticatedExposure(on); err != nil {
-		t.Fatalf("显式开启后应放行，got: %v", err)
+	if err := CheckUnauthenticatedExposure(legacy); err == nil {
+		t.Fatal("旧的 allow_unauthenticated 字段不得放行")
 	}
 }
