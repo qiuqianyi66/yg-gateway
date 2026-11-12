@@ -743,6 +743,11 @@ func saveConfig(raw []byte, path string, live *livecfg.Holder, p *pool.Pool, up 
 	if err != nil {
 		return nil, err
 	}
+	// 2.1) 解析落盘前的旧配置，用于判断排程字段是否真的变了；旧文件解析失败时
+	// 保守按「有变化」处理，宁可多 poke 一次也不跳过该生效的热应用。
+	oldCfg, parseOldErr := ParseConfig(oldRaw)
+	scheduleChanged := parseOldErr != nil || scheduleReconfigureNeeded(oldCfg, newCfg)
+	balanceIntervalChanged := parseOldErr != nil || oldCfg.BalanceRefreshInterval != newCfg.BalanceRefreshInterval
 
 	// 2.5) 安全闸同口径复检：启动闸只覆盖冷启动，而 api_key 属热生效字段——实例以
 	// 全网卡监听运行时，面板清空 api_key 会当场把网关与 /panel/ 改成无鉴权开放，
@@ -809,15 +814,19 @@ func saveConfig(raw []byte, path string, live *livecfg.Holder, p *pool.Pool, up 
 	p.SetFailureWindow(newCfg.FailureWindowDur)                                               // 账号级故障窗热生效（P0-2）
 	p.SetMinRequestInterval(newCfg.MinRequestIntervalDur, newCfg.MinRequestIntervalGlobalDur) // 主动 RPM 限流热生效（风控规避）
 	p.SetPaceMode(newCfg.Pool.PaceMode)                                                       // pace 选号热生效（F9）
-	sch.SetExpiringSoonWindow(newCfg.ExpiringSoonDur)
-	sch.Reconfigure(
-		newCfg.Schedule.CheckinHours, newCfg.Schedule.TravelHours,
-		newCfg.Schedule.ActivityHours, newCfg.Schedule.KeepaliveHours, newCfg.Schedule.BlackcatHours,
-		newCfg.Schedule.GrowthHours,
-		!newCfg.Schedule.CheckinEnabled, !newCfg.Schedule.TravelEnabled,
-		!newCfg.Schedule.ActivityEnabled, !newCfg.Schedule.KeepaliveEnabled, !newCfg.Schedule.BlackcatEnabled,
-		!newCfg.Schedule.GrowthEnabled)
-	sch.SetBalanceInterval(newCfg.BalanceRefreshInterval)
+	sch.SetExpiringSoonWindow(newCfg.ExpiringSoonDur)                                         // 内部自带 changed 判断，无变化不清快照
+	if scheduleChanged {
+		sch.Reconfigure(
+			newCfg.Schedule.CheckinHours, newCfg.Schedule.TravelHours,
+			newCfg.Schedule.ActivityHours, newCfg.Schedule.KeepaliveHours, newCfg.Schedule.BlackcatHours,
+			newCfg.Schedule.GrowthHours,
+			!newCfg.Schedule.CheckinEnabled, !newCfg.Schedule.TravelEnabled,
+			!newCfg.Schedule.ActivityEnabled, !newCfg.Schedule.KeepaliveEnabled, !newCfg.Schedule.BlackcatEnabled,
+			!newCfg.Schedule.GrowthEnabled)
+	}
+	if balanceIntervalChanged {
+		sch.SetBalanceInterval(newCfg.BalanceRefreshInterval)
+	}
 	sch.SetIncludeDisabledInTasks(newCfg.Schedule.IncludeDisabledInTasks)
 
 	return restartRequiredFields(newCfg), nil

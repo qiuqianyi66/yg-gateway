@@ -132,3 +132,40 @@ func TestSessionStickyEnabledIsRestartRequired(t *testing.T) {
 		}
 	}
 }
+
+// TestScheduleReconfigureNeeded 热应用排程门控：只有 Reconfigure 入参（6 组小时窗
+// + 6 个启用开关）真的变化时才需要 poke，保存无关字段不重算排程。
+func TestScheduleReconfigureNeeded(t *testing.T) {
+	base, err := loadWith(`{"api_key":"k"}`, t)
+	if err != nil {
+		t.Fatalf("基线配置应可加载: %v", err)
+	}
+
+	// 完全相同 → 不需要重算。
+	same := *base
+	if scheduleReconfigureNeeded(base, &same) {
+		t.Error("配置完全相同时不应判定为需要 Reconfigure")
+	}
+
+	// 改一个小时窗 → 需要。
+	hourChanged := *base
+	hourChanged.Schedule.CheckinHours = append([]int(nil), base.Schedule.CheckinHours...)
+	hourChanged.Schedule.CheckinHours = append(hourChanged.Schedule.CheckinHours, 23)
+	if !scheduleReconfigureNeeded(base, &hourChanged) {
+		t.Error("小时窗变化时应判定为需要 Reconfigure")
+	}
+
+	// 翻一个启用开关 → 需要。
+	enabledChanged := *base
+	enabledChanged.Schedule.CheckinEnabled = !base.Schedule.CheckinEnabled
+	if !scheduleReconfigureNeeded(base, &enabledChanged) {
+		t.Error("启用开关变化时应判定为需要 Reconfigure")
+	}
+
+	// 只改余额轮询间隔（不属于 Reconfigure 入参）→ 不需要。
+	balanceOnly := *base
+	balanceOnly.BalanceRefreshInterval = base.BalanceRefreshInterval + time.Minute
+	if scheduleReconfigureNeeded(base, &balanceOnly) {
+		t.Error("余额间隔变化不应触发 Reconfigure 门控")
+	}
+}
