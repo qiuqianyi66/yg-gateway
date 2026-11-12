@@ -66,7 +66,7 @@
 
 - 已确认：A 档 setter 一律只赋值，不清熔断/在途计数/EWMA 样本（`internal/pool/pool.go:205-217,228-238,447-463`）。
   所以「改参数」等于「新判定用新参数、旧判定按旧参数继续」——这是有意的，不是漏。
-- 未知 1：`pool.SetDegrade` / `SetMinRequestInterval` 等是否在别处触发状态清理，只读了 setter 本体，
-  未逐个追调用方（requires：`grep 'SetDegrade\|SetMinRequestInterval' -r internal` 全量读引用点）。
-- 未知 2：`saveConfig` 热应用是**整段无条件执行**（`:795-821` 不判断字段是否真的变了），
+- 已确认（2026-11-12 补查）：12 个 `pool.Set*` 的生产调用点只有 `cmd/server/main.go` 一处（其余命中全是
+  `*_test.go`），不存在「别处调用 setter 顺带清状态」的旁路；先前「未逐个追调用方」的未知已消解。
+- 未知：`saveConfig` 热应用是**整段无条件执行**（`:795-821` 不判断字段是否真的变了），
   即保存一个无关字段也会重算排程。副作用是 B 档三处每次保存都被 poke 一次；是否可接受未实测。
