@@ -77,10 +77,15 @@
 
 ### P2（可维护性/格式，无正确性影响）
 
-1. 3 处 `_ = json.Unmarshal` + 2 处 `_ = os.Remove` 措辞未统一为「忽略：<原因>，不影响 <什么>」（R10 只在新增行强制，此处为存量对齐）。
+1. ✅ **已清**：5 处忽略点统一为 R10 措辞「忽略：<原因>，不影响 <什么>」——
+   `growth/travel.go:73`、`server/chatflow.go:126`、`panel/login.go:215`、
+   `cmd/server/main.go:781/794`（两处 `os.Remove(tmp)`）。零逻辑变更，仅注释。
 2. 已登记深度技术债：`upstream/sse.go` 1070 行、`cmd/server/main.go` 1062 行；7 个 >120 行函数（最大 `cmd/server/main.go` 321 行、`sse.go` 292、`pick.go` 220）。棘轮已冻结，拆分需单独立项。
 3. `internal/panel` 的 3 个可变全局（测试注入模式）无锁保护注释；若将来运行期改动需补说明（当前只 init/测试期改）。
-4. `config.example.json` 未示例的关键项（`min_request_interval`、`failure_window`、`rpm_per_account`、`cost_explore_interval`）建议补 2–3 条高频项，降低新用户理解成本。
+4. ✅ **已清**：`config.example.json` 的 `pool` 段补 `failure_window`/`min_request_interval`/`pace_mode` 三条高频项；
+   并新增 `cmd/server/example_config_test.go` 契约测试——反射收集 `Config` 全部 json tag，
+   与示例出现的键做比对，**拼错的键会被 encoding/json 静默忽略**（改了不生效也不报错），
+   该测试把这类文档漂移拦在门禁里（实测把 `failure_window` 改成笔误必 FAIL）。
 
 ### 性能实测（L3，`-benchtime=2s -count=3` 取中位；本机无 gcc，未开 -race）
 
