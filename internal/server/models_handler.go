@@ -4,6 +4,7 @@ package server
 
 import (
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -160,10 +161,52 @@ func (h *Handler) models(w http.ResponseWriter, r *http.Request) {
 	if key != nil {
 		realmFilter = key.Realm
 	}
+	data := h.appendProviderModels(h.modelList(realmFilter))
 	writeJSON(w, http.StatusOK, map[string]any{
 		"object": "list",
-		"data":   h.modelList(realmFilter),
+		"data":   data,
 	})
+}
+
+// appendProviderModels 把启用 provider 的 models[] 追加到 /v1/models 列表（F7 打磨：
+// 否则用户在 Cursor/Cline 等客户端里根本看不到自己配的 provider 模型，功能等于不可用）。
+// 用**裸名**（不带 cn:/global: 前缀、不带倍率后缀）——provider 是单域上游，realm 是
+// codebuddy 双域概念，加前缀会让客户端按错误域路由。已存在同 id 则跳过（codebuddy
+// 目录优先）。provider 顺序按 id 字典序保证列表稳定（否则 map 迭代顺序每次抖动）。
+func (h *Handler) appendProviderModels(out []map[string]any) []map[string]any {
+	if len(h.cfg.Providers) == 0 {
+		return out
+	}
+	seen := make(map[string]bool, len(out))
+	for _, m := range out {
+		if id, ok := m["id"].(string); ok {
+			seen[id] = true
+		}
+	}
+	pids := make([]string, 0, len(h.cfg.Providers))
+	for pid := range h.cfg.Providers {
+		pids = append(pids, pid)
+	}
+	sort.Strings(pids)
+	for _, pid := range pids {
+		ep := h.cfg.Providers[pid]
+		if !ep.Enabled {
+			continue
+		}
+		for _, m := range ep.Models {
+			if seen[m] {
+				continue
+			}
+			seen[m] = true
+			out = append(out, map[string]any{
+				"id":       m,
+				"object":   "model",
+				"created":  1753600000,
+				"owned_by": pid,
+			})
+		}
+	}
+	return out
 }
 
 // fmtCreditsPrefix 从上游 credits 原文提取倍率并格式化为 "[x0.05 credit]"。

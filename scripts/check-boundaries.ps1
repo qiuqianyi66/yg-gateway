@@ -64,7 +64,7 @@ $allow = @{
                    'pool','prompt','reqlog','session','upstream','usage')
     # 领域层：账号池依赖凭证、日志脱敏，以及 domain 层（四态标注 / 未知跟踪）
     # + pkg：签到日判定与本地日期格式化（timex.Date）
-    'pool'     = @('auth','evidence','logfmt','pkg','unknown')
+    'pool'     = @('auth','evidence','logfmt','pkg','router','unknown')
     # 运维 agent（ADR-017）：只依赖 domain 层；pool/metrics 的观察面由 cmd/server
     # 装配期闭包注入（依赖倒置），本包不直接 import 它们
     'opsagent' = @('evidence','logfmt','unknown')
@@ -114,6 +114,15 @@ $allow = @{
     # 各写一份」的复制（server/scheduler 的 sleepCtx 双份是实弹证据）。
     # 纪律：只放与业务语义无关的东西；带业务口径的留在各自领域包。
     'pkg'        = @()
+    # 上游提供方静态描述 + 注册表（ADR-026）：**叶子层**，只描述形状（协议族 /
+    # 额度语义 / 端点 / 模型目录），不带运行态（额度 / 健康 / 冷却仍在 pool）。
+    # P0 阶段无人接线，故零 internal 依赖；P1 接线后方向为 server -> provider。
+    'provider'   = @()
+    # 非 credits 额度语义（ADR-026 Quota 层）：metered / window。依赖 provider 的
+    # QuotaKind 枚举（叶子 -> 叶子，方向合法）；credits 留在 pool 不搬家。
+    'quota'      = @('provider')
+    # 非 credits 选号策略（ADR-026 Router 层）：纯函数+游标，零 internal 依赖。
+    'router'     = @()
 }
 
 # 取每个包的 import 列表。

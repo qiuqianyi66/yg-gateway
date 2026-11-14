@@ -128,6 +128,12 @@ type Config struct {
 	// CodeBuddy 选号全失败时，把请求按 endpoints 顺序转发到独立 OpenAI 兼容端点。
 	Fallback *FallbackConfig
 
+	// Providers 非 codebuddy provider 的出站端点表（ADR-026）：providerID → 端点。
+	// codebuddy 不在表内（走 Upstream.Client）。空/nil = 仅 codebuddy（零回归）。
+	// 出站分派见 chatrun.rotateAndServe：选中非 codebuddy 账号后走
+	// serveProviderCompat 的 OpenAI 兼容转发，不复用 codebuddy 的 SSE 解析。
+	Providers map[string]ProviderEndpoint
+
 	// Drift 协议漂移观测层（P1，可选；nil = 不观测）。
 	// /status 暴露其状态视图；观测 goroutine 在 main 侧启动。
 	Drift *upstream.DriftMonitor
@@ -137,6 +143,23 @@ type Config struct {
 	// 对客户端原始请求估算 prompt token，超 warn 阈值打标 + X-Gateway-Warning 头，
 	// 超 max 阈值 413 拒绝，按 sessKey 1 分钟窗口限流（429）。阈值 0 = 关（零回归）。
 	Guardrail *Guardrail
+}
+
+// ProviderEndpoint 一个非 codebuddy provider 的 OpenAI 兼容出站端点（ADR-026）。
+// 协议形状与 FallbackEndpoint 一致（/chat/completions + Bearer），但走账号池选号
+// 租约（选中该 provider 的账号后才出站），而非全池失败兜底。模型白名单路由由
+// pool.providerOfModel 承担（见 main 装配），不在此重复。
+type ProviderEndpoint struct {
+	BaseURL string
+	APIKey  string
+	// 以下为展示元数据（F7 /status providers[] + 面板汇总条）：
+	// Kind 协议族（provider.Kind，如 "openai_compat"）；Quota 额度语义（如 "metered"）；
+	// Models 模型白名单；Enabled 是否参与流量。均为静态描述，不参与出站路由决策
+	//（路由由 pool.providerOfModel 承担）。
+	Kind    string
+	Quota   string
+	Models  []string
+	Enabled bool
 }
 
 // FallbackEndpoint 单个 OpenAI 兼容备用端点（R-107 接入模板）。

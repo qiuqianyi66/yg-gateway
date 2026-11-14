@@ -10,6 +10,7 @@ import (
 
 	"yg-gateway/internal/auth"
 	"yg-gateway/internal/logfmt"
+	"yg-gateway/internal/router"
 )
 
 // Pick 单一选号入口（无请求级轮换、无 realm 过滤，模型感知缺省账号级）。
@@ -68,6 +69,15 @@ func (p *Pool) PickExcludingForRealmGroupClass(tried map[string]bool, reqModel, 
 // 轮换自愈（Acquire 失败即换号，不产生上游请求），且 per-account 在途上限
 // 天然限流，不构成正确性问题（防撞号窗口对「下一个进入者」继续生效）。
 func (p *Pool) pick(tried map[string]bool, reqModel, realm, group string, class RequestClass) *auth.Auth {
+	// 多 provider 路由（ADR-026）：请求模型命中某非 codebuddy provider 的 models[]
+	// 白名单时，改走非 credits 选号（metered/window + order 策略）。此判定在读锁外
+	// （providerOfModel 是注入的纯函数，无锁）。未命中 / 未注入 → 现有 credits 路径
+	// 逐位不变（零回归）。
+	if p.providerOfModel != nil {
+		if pid, ok := p.providerOfModel(reqModel); ok && pid != "" && pid != "codebuddy" {
+			return p.pickNonCredits(pid, tried, realm, group)
+		}
+	}
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	now := p.now()
@@ -145,6 +155,12 @@ func (p *Pool) pick(tried map[string]bool, reqModel, realm, group string, class 
 	var cands []*entry
 	for uid, e := range p.byUID {
 		if tried != nil && tried[uid] {
+			continue
+		}
+		// credits 路径只选 codebuddy 账号（provider 空/codebuddy）；非 codebuddy
+		// 账号由 providerOfModel 命中后走 pickNonCredits，不混入 credits 加权。
+		// 对无 provider 的存量账号（空）恒不过滤 → 零回归。
+		if e.provider != "" && e.provider != "codebuddy" {
 			continue
 		}
 		// 过期模型级冷却/成本台账由 saveLocked 的 pruneAllLocked 统一清理
@@ -371,6 +387,104 @@ func (p *Pool) pick(tried map[string]bool, reqModel, realm, group string, class 
 	return e.a
 }
 
+// pickNonCredits 非 credits 账号选号（metered / window，ADR-026）。
+//
+// 与 credits 路径（pick）刻意**分叉**而非同流：credits 的积分保底（floor）、成本
+// 分层（costTier）、加权随机（pickWeighted）都是积分语义，对 metered/window 账号
+// 无意义——若混入同一候选集会因「无成本观测恒 tier 1」被 credits 的硬过滤淘汰。
+//
+// 本批默认 order 策略：取第一个 healthy 且未占满在途的账号（rotate/usage 由 provider
+// 配置的 mode 在 P2 扩展）。共享的通用护栏与 pick 对齐：healthy（冷却/熔断/故障窗/
+// 最小间隔）、breakerHalfOpen、inFlightFull、realm/group 过滤。**不兜底**：模型已
+// 命中专属 provider，若该 provider 无可用账号应报错（返回 nil），不跨 provider 泄漏
+// 到 credits。
+//
+// 锁口径：与 pick 一致只持读锁；选中写回（lastUsed/usedSeq/pickReason）全原子化。
+func (p *Pool) pickNonCredits(pid string, tried map[string]bool, realm, group string) *auth.Auth {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	now := p.now()
+	realmOK := func(e *entry) bool {
+		if realm != "" && e.a.Realm() != realm {
+			return false
+		}
+		if group != "" && e.a.Group != group {
+			return false
+		}
+		return true
+	}
+	// 以下护栏闭包与 pick 内同名闭包逐字对齐（勿单改，改一处必须同步另一处）。
+	failureWindowBlocked := func(e *entry) bool {
+		return p.failureWindow > 0 && !e.lastErr.IsZero() && now.Sub(e.lastErr) < p.failureWindow
+	}
+	minIntervalBlocked := func(e *entry) bool {
+		interval := p.minRequestInterval
+		if e.a.IsGlobal() && p.minRequestIntervalGlobal > 0 {
+			interval = p.minRequestIntervalGlobal
+		}
+		if interval <= 0 {
+			return false
+		}
+		last := e.lastRequestAt.Load()
+		if last == 0 {
+			return false
+		}
+		return now.Sub(time.Unix(0, last)) < interval
+	}
+	breakerHalfOpen := func(e *entry) bool {
+		if p.breakerProbeGap <= 0 {
+			return false
+		}
+		if e.breakerUntil.IsZero() || now.Before(e.breakerUntil) {
+			return false
+		}
+		if e.retryCount == 0 {
+			return false
+		}
+		if t := e.probeAtTime(); t.IsZero() {
+			return false
+		} else {
+			return now.Sub(t) < p.breakerProbeGap
+		}
+	}
+	var cands []*entry
+	var views []router.View
+	for uid, e := range p.byUID {
+		if tried != nil && tried[uid] {
+			continue
+		}
+		if e.provider != pid {
+			continue
+		}
+		if !realmOK(e) || failureWindowBlocked(e) || minIntervalBlocked(e) || !e.healthy(now) {
+			continue
+		}
+		if breakerHalfOpen(e) {
+			continue
+		}
+		if p.inFlightFull(e) {
+			continue
+		}
+		cands = append(cands, e)
+		views = append(views, router.View{
+			Healthy:  true,
+			InFlight: int(e.inFlight.Load()),
+			LastUsed: e.lastUsedTime(),
+		})
+	}
+	// 本批默认 order 策略；P2 换 rotate/usage 只改这一行（View 已备好 InFlight/LastUsed）。
+	idx, ok := (router.Order{}).Pick(views)
+	if !ok {
+		return nil
+	}
+	e := cands[idx]
+	e.setLastUsed(now)
+	e.setPickReason(&pickReason{Mode: "provider", At: now})
+	seq := p.pickSeq.Add(1)
+	e.usedSeq.Store(seq)
+	return e.a
+}
+
 // floorBlockedForModel 积分保底拦截判定（pick 普通轮换与 PickByUIDForModel 粘性
 // 路径的单一事实来源）：floor>0 且账号触底（credits < floor）且该模型**收费**
 // 时为真。
@@ -438,6 +552,9 @@ func (p *Pool) pickEarliestExpiryLocked(tried map[string]bool, now time.Time, re
 	for uid, e := range p.byUID {
 		if tried != nil && tried[uid] {
 			continue
+		}
+		if e.provider != "" && e.provider != "codebuddy" {
+			continue // credits 兜底不跨 provider（非 codebuddy 由 pickNonCredits 兜底，其不跨 provider 直接返回 nil）
 		}
 		if realm != "" && e.a.Realm() != realm {
 			continue // 域过滤：池内跨 realm 的冷却账号不参与本 realm 兜底

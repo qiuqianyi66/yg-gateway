@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"yg-gateway/internal/provider"
 )
 
 // ModelPrice 一个模型的 OpenRouter 美元参考价（$/1M tokens）。纯展示层。
@@ -112,6 +114,12 @@ type Config struct {
 		// 第一个覆盖该模型且转发成功的端点终结请求。空 = 回退单端点旧配置。
 		Endpoints []FallbackEndpointConfig `json:"endpoints"`
 	} `json:"fallback"`
+
+	// Providers 多 provider 配置（ADR-026）。空 = 仅 CodeBuddy（零回归）。
+	// 每个条目 = 一个 internal/provider 的 Descriptor + 装配所需凭证/路由/静态额度。
+	// CodeBuddy 是内置默认 provider，不在此列表；credits 额度是 CodeBuddy 专属，
+	// 列表里的条目只能用 metered / window（见 normalizeProviders）。
+	Providers []ProviderConfig `json:"providers,omitempty"`
 
 	// Drift 上游协议漂移观测（R-102，P1）：周期探测模型目录端点，播种响应形状
 	// 基线后比对——发现目录条数腰斩/探测连续失败即判漂移并记 WARN。
@@ -465,6 +473,67 @@ type Config struct {
 	MaxBodyBytesEffective int64 `json:"-"`
 }
 
+// ProviderConfig 一个多 provider 的配置（ADR-026 装配层）。
+// 与 provider.Descriptor（静态形状）对应，多出装配所需：凭证、base、静态额度、启停。
+type ProviderConfig struct {
+	// ID provider 标识（对应 provider.Descriptor.ID），如 "ark"。
+	ID string `json:"id"`
+	// Kind 协议族："openai_compat" / "ark"。CodeBuddy 不在此配置（内置默认）。
+	Kind string `json:"kind"`
+	// Quota 额度语义："metered" / "window"。credits 是 CodeBuddy 专属，禁用。
+	Quota string `json:"quota"`
+	// BaseURL 出站基地址（如 https://ark.cn-beijing.volces.com/api/v3）。
+	BaseURL string `json:"base_url"`
+	// APIKey Bearer 凭证。只在配置源；运行时不出日志/面板（R1/R2）。
+	APIKey string `json:"api_key"`
+	// Models 显式白名单：请求模型命中才路由到此 provider；空 = unknown（不参与白名单路由）。
+	Models []string `json:"models"`
+	// Balance 静态余额（-1 = unknown）。P1 先静态配置，P2 接额度查询端点。
+	Balance int64 `json:"balance"`
+	// Enabled 显式启用。false = 不参与流量（保守默认）。
+	Enabled bool `json:"enabled"`
+}
+
+// normalizeProviders 校验多 provider 配置（ADR-026 装配层）。
+// 校验纪律（fail fast，不静默禁用）：
+//   - 启用条目必须 id / kind / quota / base_url 全合法，任一非法即报错（R10：不静默吞）
+//   - 未启用条目（enabled=false）不校验 kind/quota/base（不参与流量，保守跳过），
+//     但仍校验 id 非空、不重复、不占 codebuddy（保留占位也要可识别、防重复）
+//   - codebuddy 是内置默认，禁止在列表里重定义
+func (c *Config) normalizeProviders() error {
+	seen := map[string]bool{}
+	for i := range c.Providers {
+		p := &c.Providers[i]
+		if p.ID == "" {
+			return fmt.Errorf("providers[%d].id: 必须非空", i)
+		}
+		if p.ID == "codebuddy" {
+			return fmt.Errorf("providers[%d].id: codebuddy 是内置默认 provider，不可重定义", i)
+		}
+		if seen[p.ID] {
+			return fmt.Errorf("providers[%d].id: 重复 %q", i, p.ID)
+		}
+		seen[p.ID] = true
+		if !p.Enabled {
+			continue
+		}
+		switch provider.Kind(p.Kind) {
+		case provider.KindOpenAICompat, provider.KindArk:
+		default:
+			return fmt.Errorf("providers[%d] (%s).kind: 非法 %q（可选 openai_compat / ark）", i, p.ID, p.Kind)
+		}
+		switch provider.QuotaKind(p.Quota) {
+		case provider.QuotaMetered, provider.QuotaWindow:
+		default:
+			return fmt.Errorf("providers[%d] (%s).quota: 非法 %q（可选 metered / window；credits 是 CodeBuddy 专属）", i, p.ID, p.Quota)
+		}
+		if strings.TrimSpace(p.BaseURL) == "" {
+			return fmt.Errorf("providers[%d] (%s).base_url: 启用条目必须给 base_url", i, p.ID)
+		}
+	}
+	return nil
+}
+
 // FallbackEndpointConfig 级联列表中的单个备用端点（R-107）。
 type FallbackEndpointConfig struct {
 	BaseURL        string   `json:"base_url"`
@@ -677,6 +746,9 @@ func (c *Config) normalize() error {
 		}
 	}
 	if err := c.normalizeAPIKeys(); err != nil {
+		return err
+	}
+	if err := c.normalizeProviders(); err != nil {
 		return err
 	}
 	if c.Panel.PackageDetailLimit <= 0 {

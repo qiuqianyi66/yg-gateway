@@ -59,6 +59,17 @@ type Auth struct {
 	// 注意：本字段存原文（含 userinfo 凭据）。任何出日志 / 出 /status / 出面板的
 	// 视图一律走 RedactedProxyURL（R1/R2 红线，见 logfmt.RedactProxyURL）。
 	ProxyURL string
+
+	// Provider 上游提供方标识（"codebuddy" / "ark" / "openai_compat"…）。
+	// **空值语义 = "codebuddy"**：旧 auth 文件无此键，归一由 ProviderID() 承担，
+	// 本字段本身保持空以兼容旧文件与零值比较。对应 ADR-026：provider 静态描述在
+	// internal/provider，本字段只记录「该账号属于谁」。
+	Provider string
+
+	// APIKey 仅 OpenAI 兼容 / Ark 类 provider 使用（CodeBuddy 走 accessToken）。
+	// R1/R2 红线：本字段绝不进入日志 / /status / 面板的任何可见面；需要「是否已配置」
+	// 时用 APIKeyConfigured() 布尔，不得输出原文或截断。
+	APIKey string
 }
 
 // RedactedProxyURL 返回脱敏后的代理 URL（抹掉 userinfo 凭据，R1/R2 红线）。
@@ -67,6 +78,21 @@ type Auth struct {
 // 空 ProxyURL（直连）返回空串。脱敏逻辑单一实现：internal/logfmt.RedactProxyURL。
 func (a *Auth) RedactedProxyURL() string {
 	return logfmt.RedactProxyURL(a.ProxyURL)
+}
+
+// ProviderID 归一化返回账号所属 provider 标识。空值 = "codebuddy"（旧文件缺省），
+// 保证下游 pool / upstream 不必重复判定空串。
+func (a *Auth) ProviderID() string {
+	if a == nil || a.Provider == "" {
+		return "codebuddy"
+	}
+	return a.Provider
+}
+
+// APIKeyConfigured 报告是否配置了 APIKey。只返回布尔、绝不返回原文（R1/R2）。
+// APIKey 在 Parse 后不可变（不参与 refresh），无需加锁。
+func (a *Auth) APIKeyConfigured() bool {
+	return a != nil && a.APIKey != ""
 }
 
 // Lock 供同进程内其他包（upstream.RefreshToken）在改写 Auth 字段期间加锁。
@@ -283,6 +309,8 @@ func Parse(raw []byte) (*Auth, error) {
 			Group string `json:"group"`
 			// ProxyURL 顶层 proxy_url（per-account 出站代理，切断多账号 IP 关联风控）。
 			ProxyURL string `json:"proxy_url"`
+			Provider string `json:"provider"`
+			APIKey   string `json:"api_key"`
 		}
 		if err := json.Unmarshal(raw, &n); err != nil {
 			return nil, fmt.Errorf("storage_parse_error: %w", err)
@@ -299,6 +327,8 @@ func Parse(raw []byte) (*Auth, error) {
 			Group:        n.Group,
 			DeviceToken:  n.DeviceToken,
 			ProxyURL:     n.ProxyURL,
+			Provider:     n.Provider,
+			APIKey:       n.APIKey,
 		}
 	} else {
 		var f struct {
@@ -313,6 +343,8 @@ func Parse(raw []byte) (*Auth, error) {
 			DeviceToken  string `json:"device_token"`
 			Group        string `json:"group"`
 			ProxyURL     string `json:"proxy_url"`
+			Provider     string `json:"provider"`
+			APIKey       string `json:"api_key"`
 		}
 		if err := json.Unmarshal(raw, &f); err != nil {
 			return nil, fmt.Errorf("storage_parse_error: %w", err)
@@ -329,10 +361,18 @@ func Parse(raw []byte) (*Auth, error) {
 			Group:        f.Group,
 			DeviceToken:  f.DeviceToken,
 			ProxyURL:     f.ProxyURL,
+			Provider:     f.Provider,
+			APIKey:       f.APIKey,
 		}
 	}
 	if strings.TrimSpace(a.AccessToken) == "" {
-		return nil, fmt.Errorf("parse_error: missing accessToken")
+		// 非 codebuddy provider（APIKey 认证，如 Ark）不依赖 OAuth accessToken：凭证
+		// 是 api_key。但 api_key 也必须非空——否则是无凭证账号，进池后选中必定出站
+		// 失败，比 Parse 期直接拒绝更晚暴露。codebuddy 账号仍强制 accessToken（旧路径
+		// 逐位不变）。
+		if a.ProviderID() == "codebuddy" || strings.TrimSpace(a.APIKey) == "" {
+			return nil, fmt.Errorf("parse_error: missing accessToken")
+		}
 	}
 	return &a, nil
 }
@@ -343,9 +383,10 @@ func Parse(raw []byte) (*Auth, error) {
 func (a *Auth) SaveAtomic() error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if strings.TrimSpace(a.AccessToken) == "" {
+	if strings.TrimSpace(a.AccessToken) == "" && strings.TrimSpace(a.APIKey) == "" {
+		// 非 codebuddy provider 的凭证是 api_key 而非 OAuth token；两者都空才拒绝。
 		// R2：错误串会随 error 链被调用方原样打日志——UID 只留前 8 位。
-		return fmt.Errorf("save refused: empty accessToken (uid=%s)", logfmt.UID8(a.UID))
+		return fmt.Errorf("save refused: empty accessToken and apiKey (uid=%s)", logfmt.UID8(a.UID))
 	}
 	if a.FilePath == "" {
 		return fmt.Errorf("no FilePath set")
@@ -372,6 +413,14 @@ func (a *Auth) SaveAtomic() error {
 	// Group 非空才写回顶层 group（P1-B：账号池分组标签）。
 	if a.Group != "" {
 		doc["group"] = a.Group
+	}
+	// Provider / APIKey 非空才写回顶层（避免旧文件引入空键）。
+	// APIKey 落盘后由 LockdownFile 收紧 ACL（0o600 + 服务账户），符合 R1「凭证不出 auths/」。
+	if a.Provider != "" {
+		doc["provider"] = a.Provider
+	}
+	if a.APIKey != "" {
+		doc["api_key"] = a.APIKey
 	}
 	raw, err := json.MarshalIndent(doc, "", "  ")
 	if err != nil {

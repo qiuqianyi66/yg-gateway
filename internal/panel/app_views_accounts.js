@@ -86,13 +86,18 @@ function renderAccountsUnsafe(list) {
       tag = '<span class="tag warn">' + kind + ' ' + dur(cool) + '</span>';
     } else tag = '<span class="tag ok">可用</span>';
     const short = s.uid.length > 16 ? s.uid.slice(0, 16) + '…' : s.uid;
+    // provider 账号（非 codebuddy）没有积分/签到/任务概念：credits 恒显示「—」且
+    // 进度条留空，否则显示 0 分会让用户误以为账号是空号（F7 打磨修复）。
+    const isProvider = !!(s.provider && s.provider !== 'codebuddy');
     const unlimited = s.credits_total === -1;
-    const cred = unlimited ? '不限'
-      : (s.credits == null ? '—' : (s.credits_total > 0 ? s.credits + '<span class="of">/' + s.credits_total + '</span>' : String(s.credits)));
-    const pct = unlimited ? 100
-      : (s.credits_total > 0
-        ? Math.min(100, Math.round((s.credits || 0) / s.credits_total * 100))
-        : Math.round((s.credits || 0) / maxCred * 100));
+    const cred = isProvider ? '—'
+      : unlimited ? '不限'
+        : (s.credits == null ? '—' : (s.credits_total > 0 ? s.credits + '<span class="of">/' + s.credits_total + '</span>' : String(s.credits)));
+    const pct = isProvider ? 0
+      : (unlimited ? 100
+        : (s.credits_total > 0
+          ? Math.min(100, Math.round((s.credits || 0) / s.credits_total * 100))
+          : Math.round((s.credits || 0) / maxCred * 100)));
     const frozen = s.disabled || cool > 0;
     const tu = s.token_usage || {};
     const req = tu.request_count || 0;
@@ -102,6 +107,11 @@ function renderAccountsUnsafe(list) {
     const avatar = (s.nickname || '?').charAt(0).toUpperCase();
     const realmTag = s.realm === 'global' ? '<span class="realm-tag">国际</span>' : (s.enterprise ? '<span class="realm-tag">企业</span>' : '');
     const groupTag = s.group ? '<span class="realm-tag" style="background:var(--accent,#4a9)">组:' + esc(s.group) + '</span>' : '';
+    // provider 徽标（F7）：非 codebuddy 账号标出归属（ark 蓝）；codebuddy 是默认
+    // 不标（省略 = codebuddy，避免整池噪音）；字段缺失（未派生）同样不标——四态纪律：
+    // 缺失 ≠ "不支持"，只是不显式标注。
+    const providerTag = isProvider
+      ? '<span class="realm-tag pv-tag">' + esc(s.provider) + '</span>' : '';
     // unknown 成本徽章（AGENTS.md「Unknown 消解纪律」）：该账号还有哪些 (账号,模型)
     // 的实际成本没摸清。正常运营下多为 0——有值即提示"这条未知还欠一次真实观测"，
     // 悬停看 question + requires（需要什么才能消解）。数据来自 overview→accounts→unknowns。
@@ -110,7 +120,7 @@ function renderAccountsUnsafe(list) {
     return '<div class="acc-card ' + cls + '" title="uid: ' + esc(s.uid) + '">' +
       '<div class="acc-card-head">' +
         '<div class="acc-avatar">' + esc(avatar) + '</div>' +
-        '<div><div class="acc-name">' + (s.nickname ? esc(s.nickname) : '<span style="color:var(--ink-3)">未命名</span>') + ' ' + realmTag + ' ' + groupTag + '</div>' +
+        '<div><div class="acc-name">' + (s.nickname ? esc(s.nickname) : '<span style="color:var(--ink-3)">未命名</span>') + ' ' + realmTag + ' ' + groupTag + ' ' + providerTag + '</div>' +
         '<div class="acc-uid">' + esc(short) + '</div></div>' +
         '<div class="acc-status">' + unkTag + tag + '</div>' +
       '</div>' +
@@ -122,9 +132,9 @@ function renderAccountsUnsafe(list) {
         '<div class="acc-stat"><div class="v">' + totalTok + '</div><div class="k">Token</div></div>' +
       '</div>' +
       '<div class="acc-acts">' +
-        (s.enterprise ? '' : '<button class="xs ghost" data-a="checkin" data-u="' + esc(s.uid) + '">' + (s.checkin_done ? '已签' : '签到') + '</button>') +
-        '<button class="xs ghost" data-a="balance" data-u="' + esc(s.uid) + '">' + (s.enterprise ? '额度' : '余额') + '</button>' +
-        (s.enterprise ? '' : '<button class="xs ghost" data-a="tasks" data-u="' + esc(s.uid) + '">任务</button>') +
+        (isProvider || s.enterprise ? '' : '<button class="xs ghost" data-a="checkin" data-u="' + esc(s.uid) + '">' + (s.checkin_done ? '已签' : '签到') + '</button>') +
+        (isProvider ? '' : '<button class="xs ghost" data-a="balance" data-u="' + esc(s.uid) + '">' + (s.enterprise ? '额度' : '余额') + '</button>') +
+        (isProvider || s.enterprise ? '' : '<button class="xs ghost" data-a="tasks" data-u="' + esc(s.uid) + '">任务</button>') +
         (frozen ? '<button class="xs primary" data-a="revive" data-u="' + esc(s.uid) + '">解冻</button>'
                 : (s.paused ? '<button class="xs primary" data-a="resume" data-u="' + esc(s.uid) + '">恢复</button>'
                             : '<button class="xs ghost" data-a="pause" data-u="' + esc(s.uid) + '">暂停</button>')) +
@@ -132,6 +142,41 @@ function renderAccountsUnsafe(list) {
         '<button class="xs ghost danger" data-a="remove" data-u="' + esc(s.uid) + '">移除</button>' +
       '</div>' +
     '</div>';
+  }).join('');
+}
+
+// renderProviderStrip 顶部 provider 汇总条（F7）：注册表元数据 + 各 provider 账号数。
+// 无 providers（仅 codebuddy）→ 显示"仅 CodeBuddy"；有 providers → 每 provider 一个
+// chip（id + kind·quota + 账号数 + 启用态）。数据来自 overview.providers（未接线省略键）。
+// 容器在首次调用时动态插入 accBody 前（不在 index.html 静态占行，控 maxFrontendLines
+// 棘轮——页面骨架行数不应随组件数增长，与 gamify.css 拆出同因）。
+function renderProviderStrip(providers) {
+  let el = $('pvStrip');
+  if (!el) {
+    const grid = $('accBody');
+    if (!grid || !grid.parentNode) return;
+    el = document.createElement('div');
+    el.className = 'pv-strip';
+    el.id = 'pvStrip';
+    el.hidden = true;
+    grid.parentNode.insertBefore(el, grid);
+  }
+  if (!providers || !providers.length) {
+    el.hidden = false;
+    el.innerHTML = '<span class="pv-chip"><i class="pv-dot"></i>仅 CodeBuddy</span>';
+    return;
+  }
+  el.hidden = false;
+  el.innerHTML = providers.map(p => {
+    const off = p.enabled === false;
+    const meta = [p.kind, p.quota].filter(Boolean).join(' · ');
+    const models = (p.models && p.models.length) ? p.models.join(', ') : '';
+    return '<span class="pv-chip' + (off ? ' pv-off' : '') + '" title="' + esc(models) + '">' +
+      '<i class="pv-dot"></i><b>' + esc(p.id) + '</b>' +
+      (meta ? '<span>' + esc(meta) + '</span>' : '') +
+      '<span class="pv-n">' + (p.account_count || 0) + ' 号</span>' +
+      (off ? '<span class="tag mute">停用</span>' : '') +
+      '</span>';
   }).join('');
 }
 
@@ -276,6 +321,7 @@ async function loadOverview(quiet) {
     const up = Math.floor(d.uptime_sec);
     $('subMeta').textContent = '运行 ' + (up >= 86400 ? Math.floor(up / 86400) + ' 天 ' : '') + Math.floor(up % 86400 / 3600) + ' 时 ' + Math.floor(up % 3600 / 60) + ' 分';
     renderAccounts(d.accounts || []);
+    renderProviderStrip(d.providers);
     renderModelLocks(d.model_locks);
     // 今日用量 KPI：并行拉 24h 窗口，失败静默（旁支指标不打扰）。
     (async () => {

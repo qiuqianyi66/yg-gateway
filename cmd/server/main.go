@@ -248,6 +248,9 @@ func main() {
 	// 位于 up 装配之后：倍率表由探测下发，闭包每次调用读实时快照。
 	p.SetModelRateOf(func(realm, model string) string { return up.ModelRate(realm, model) })
 
+	// 多 provider 装配（ADR-026）：模型路由注入 pool + 出站端点表（见 provider_wiring.go）。
+	providerEndpoints := buildProviderRouting(cfg, p)
+
 	// 短 RPC 总时长上限（refresh/checkin/balance/FetchModels），语义不变。
 	up.HTTP.Timeout = time.Duration(cfg.Upstream.TimeoutSeconds) * time.Second
 	// 聊天 SSE 首字节前（响应头）上限：cfg 已 normalize（缺省回落 timeout_seconds）。
@@ -430,7 +433,8 @@ func main() {
 		SessionSnapshot: sessSnapshot,
 		Version:         appVersion,
 		Live:            live,
-		KeyRPMStats:     func() any { return keyRPMStatsFn() }, // F6：handler 创建后接线
+		KeyRPMStats:     func() any { return keyRPMStatsFn() },                              // F6：handler 创建后接线
+		ProviderSummary: func() any { return providerSummaryView(cfg.Providers, p.List()) }, // F7：provider 汇总条
 		// 模型上限探测数据（scripts/probe_max_tokens.py --panel-out 写入）：
 		// 与 state 文件同目录，缺省 data/output_probes.json。
 		ProbeFile:  stateSibling(cfg.StateFile, "output_probes.json"),
@@ -512,6 +516,8 @@ func main() {
 		Alerting: alertNotifier,
 		// 备用上游级联（P2）：enabled=false 或 base_url 空 = 不启用（零回归）。
 		Fallback: buildFallbackConfig(cfg),
+		// 多 provider 出站端点表（ADR-026）：空 map = 仅 codebuddy（零回归）。
+		Providers: providerEndpoints,
 		// 协议漂移观测（R-102）：未启用 = nil（/status 省略该键 = 外层 unknown）。
 		Drift: driftMon,
 		// 上下文护栏（REQ-context-guardrail）：阈值 0 = 关（零回归）；实例在 main 持有

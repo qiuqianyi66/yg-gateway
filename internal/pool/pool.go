@@ -156,6 +156,12 @@ type Pool struct {
 	// 特意把 pick 改成读锁以避免串行化）；sync.Map 的 LoadOrStore 是原子且不碰
 	// p.mu，命中路径只有一次原子读。
 	unknownSeen sync.Map
+
+	// providerOfModel 模型 → provider 路由（ADR-026）：请求模型命中某非 codebuddy
+	// provider 的 models[] 白名单时，返回该 provider id；nil 或 !ok = 未命中 →
+	// credits 路径（零回归）。server 装配时从 config.providers[] 注入；pool 不读
+	// config（依赖方向：pool 不依赖 cmd/server）。回调须是纯函数（pick 读锁下调用）。
+	providerOfModel func(model string) (providerID string, ok bool)
 }
 
 // defaultBreaker* 熔断器默认参数（FreeBuff2API 参考口径）。
@@ -560,6 +566,15 @@ func (p *Pool) SetClock(fn func() time.Time) {
 	p.nowFn = fn
 }
 
+// SetProviderOfModel 注入「模型 → provider」路由（ADR-026）。nil = 关闭多 provider
+// （零回归，所有模型走 credits 路径）。回调必须是纯函数：pick 在读锁下、每个请求
+// 都调用它，不得持锁 / 阻塞 / 读写共享状态。
+func (p *Pool) SetProviderOfModel(fn func(model string) (string, bool)) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.providerOfModel = fn
+}
+
 // Add 加入账号；已存在则保留原状态、更新凭证（upsert 单账号，不影响其他账号）。
 func (p *Pool) Add(a *auth.Auth) {
 	p.mu.Lock()
@@ -653,10 +668,11 @@ func (p *Pool) Remove(uid string) *auth.Auth {
 // 调用方必须已持有 p.mu；Add 与 SyncToDir 共用此 upsert 逻辑。
 func (p *Pool) upsertLocked(a *auth.Auth) {
 	if e, ok := p.byUID[a.UID]; ok {
-		e.a = a // 保留 credits/cooling 状态
+		e.a = a                     // 保留 credits/cooling 状态
+		e.provider = a.ProviderID() // provider 始终从 auth 凭证派生（真相源 = auth 文件）
 		return
 	}
-	p.byUID[a.UID] = &entry{a: a}
+	p.byUID[a.UID] = &entry{a: a, provider: a.ProviderID()}
 }
 
 // Pick 返回 healthy 中积分最高的账号；无可用返回 nil。

@@ -4,6 +4,7 @@ package server
 
 import (
 	"net/http"
+	"sort"
 
 	"yg-gateway/internal/pool"
 	"yg-gateway/internal/reqlog"
@@ -75,6 +76,12 @@ func (h *Handler) status(w http.ResponseWriter, r *http.Request) {
 		"sticky_paid_hits": h.cfg.Pool.StickyPaidHits(),
 	}
 
+	// providers 多 provider 汇总（F7）：注册表元数据 + 各 provider 账号数。
+	// 空/未装配 = 仅 codebuddy（键省略，零回归）。
+	if ps := h.providerSummary(); ps != nil {
+		body["providers"] = ps
+	}
+
 	// task_metrics F5 度量基线（REQ-f5-metric-counter）：把首调用上下文与总 token 从
 	// unknown 变成 observation。仅当观测到至少一个会话的 usage 时才加入响应——否则
 	// 整体省略该键（unknown，不输出 0、不输出 false，与本项目「字段缺失=未知」纪律一致）。
@@ -116,6 +123,42 @@ func (h *Handler) status(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, body)
+}
+
+// providerSummary 多 provider 汇总（F7 /status providers[]）：注册表元数据 + 各
+// provider 账号数（从 pool.List() 的 provider 字段统计，含 codebuddy）。未装配任何
+// provider（Providers 空）返回 nil → 键省略 = 仅 codebuddy（零回归）。输出按
+// providerID 稳定排序（map 无序，不排序会抖动）。
+func (h *Handler) providerSummary() []map[string]any {
+	if len(h.cfg.Providers) == 0 {
+		return nil
+	}
+	counts := map[string]int{}
+	for _, a := range h.cfg.Pool.List() {
+		if a.Provider != "" {
+			counts[a.Provider]++
+		} else {
+			counts["codebuddy"]++
+		}
+	}
+	ids := make([]string, 0, len(h.cfg.Providers))
+	for id := range h.cfg.Providers {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	out := make([]map[string]any, 0, len(ids))
+	for _, id := range ids {
+		ep := h.cfg.Providers[id]
+		out = append(out, map[string]any{
+			"id":            id,
+			"kind":          ep.Kind,
+			"quota":         ep.Quota,
+			"enabled":       ep.Enabled,
+			"models":        ep.Models,
+			"account_count": counts[id],
+		})
+	}
+	return out
 }
 
 // proxyStatusSnapshot 返回 upstream 代理生效状态视图（/status 的 proxy_status 键）。

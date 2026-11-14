@@ -51,7 +51,7 @@ func TestViewsComponentEmbedded(t *testing.T) {
 			name: "app_views_accounts.js",
 			src:  appViewsAccountsJS,
 			funcs: []string{"accountsSig", "unkBadge", "unkNoteText", "renderAccounts",
-				"renderAccountsUnsafe", "renderModelLocks", "renderModelLocksUnsafe", "loadOverview",
+				"renderAccountsUnsafe", "renderProviderStrip", "renderModelLocks", "renderModelLocksUnsafe", "loadOverview",
 				"mdRateValue", "mdSearchText", "mdMatch", "mdSortList", "mdRowHtml", "renderModels",
 				"resetModelFilter"},
 		},

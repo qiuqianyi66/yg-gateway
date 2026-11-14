@@ -82,6 +82,9 @@ var benchJS []byte
 //go:embed gamify.css
 var gamifyCSS []byte
 
+//go:embed provider.css
+var providerCSS []byte
+
 // ── 面板资源清单：加载顺序的唯一真相（2026-11-03）────────────────────────
 //
 // 为什么改成生成式：原先 index.html 尾部手写了 17 行 `<script src=...>`，head 里
@@ -103,6 +106,7 @@ var gamifyCSS []byte
 // TestIndexHTMLHasNoHandWrittenAssetTags（骨架里不许再手写标签）。
 var panelStyles = []string{
 	"gamify.css",
+	"provider.css",
 }
 
 var panelScripts = []string{
@@ -393,4 +397,16 @@ func (p *Panel) gamifyStyle(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	// 忽略：静态资源全量写回，写失败即客户端断连，无可恢复语义（与 appScript 同口径）。
 	_, _ = w.Write(gamifyCSS)
+}
+
+// providerStyle 输出 provider 徽标与汇总条样式表（F7，2026-11-14）。
+// 独立 CSS 文件而非内联进 index.html：index.html 受 maxFrontendLines 棘轮只许收紧，
+// 新增组件样式必须拆出（与 gamify.css 同因）。由 app_views_accounts.js 的
+// renderProviderStrip / providerTag 消费；CSP style-src 已含 'self'，无需放宽。
+func (p *Panel) providerStyle(w http.ResponseWriter, r *http.Request) {
+	setSecurityHeaders(w)
+	w.Header().Set("Content-Type", "text/css; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	// 忽略：静态资源全量写回，写失败即客户端断连，无可恢复语义（与 appScript 同口径）。
+	_, _ = w.Write(providerCSS)
 }

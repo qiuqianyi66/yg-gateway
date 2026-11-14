@@ -1,0 +1,8 @@
+/* provider 徽标与汇总条（F7）：扁平 chip，不叠渐变不发光（taste-skill app-screen 规则）。
+   .realm-tag.pv-tag 双 class 特异性高于内联 .realm-tag，故放在独立文件也能覆盖颜色。 */
+.realm-tag.pv-tag { color: #2563eb; background: rgba(59,130,246,.12); border-color: rgba(59,130,246,.22); }
+.pv-strip { display: flex; flex-wrap: wrap; gap: 8px; padding: 0 16px 12px; }
+.pv-chip { display: inline-flex; align-items: center; gap: 7px; padding: 4px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface-2); font: 500 12px/1.6 var(--sans); color: var(--ink-2); }
+.pv-chip .pv-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); flex: none; }
+.pv-chip.pv-off { opacity: .55; }
+.pv-chip .pv-n { font: 600 12px/1 var(--mono); color: var(--ink); }

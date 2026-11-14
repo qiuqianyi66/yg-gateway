@@ -754,7 +754,10 @@ func (s *Scheduler) RunBalanceRefreshNow() {
 			continue
 		}
 		a := s.cfg.Pool.AuthByUID(st.UID)
-		if a == nil {
+		// 非 codebuddy provider（APIKey 认证）没有 OAuth token，也没有 credits 余额体系：
+		// 跳过，否则每轮都打 codebuddy 积分接口拿 401、刷 error 日志，还可能被
+		// ReenableIfCredits 按「remain=0」误改启用态。判据与其余调度点同口径。
+		if a == nil || a.AccessTokenValue() == "" {
 			continue
 		}
 		wg.Add(1)

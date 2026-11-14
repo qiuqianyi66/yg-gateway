@@ -652,6 +652,7 @@ func (p *Pool) statusOf(uid string, e *entry) Status {
 		RateLimitedModels:        p.rateLimitedModelsLocked(e, now),
 		Realm:                    e.a.Realm(),
 		Group:                    e.a.Group,
+		Provider:                 e.provider,
 		ProxyURL:                 e.a.RedactedProxyURL(),
 		Enterprise:               e.a.IsEnterprise(),
 		Nickname:                 e.a.Nickname,

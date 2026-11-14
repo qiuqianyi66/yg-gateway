@@ -263,8 +263,22 @@ func (run *chatRun) rotateAndServe(w http.ResponseWriter, r *http.Request, chatM
 			continue
 		}
 
-		// 客户端 IP 按请求传递（PassthroughIP 开启时注入；消除共享字段竞态）。
+		// 出站分派（ADR-026）：非 codebuddy 账号走 OpenAI 兼容端点转发（独立路径，
+		// 不复用 serveStream/serveNonStream——其 SSE 解析/积分统计/工具标记修复/
+		// 错误帧分类是 WorkBuddy 协议专属）。失败 NoteError + 释放租约 + 换号。
 		attemptStarted := time.Now()
+		if ep, ok := h.cfg.Providers[acct.ProviderID()]; ok {
+			if run.serveProviderCompat(w, r, acct, ep, attemptStarted) {
+				return true
+			}
+			h.cfg.Pool.NoteError(acct.UID)
+			run.fail(acct.UID)
+			if !rotateBackoff(i, r.Context()) {
+				break
+			}
+			continue
+		}
+		// 客户端 IP 按请求传递（PassthroughIP 开启时注入；消除共享字段竞态）。
 		rc, status, respBody, terr := h.cfg.Upstream.ChatStreamContext(r.Context(), acct, run.body, clientIP, chatMeta)
 		// 分类信封一次成型：upstream 已在错误路径返回 *upstream.Error（Kind +
 		// Retry-After 头解析）。传输层错误（非 *Error）走抖动换号分支；防御分支

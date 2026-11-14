@@ -71,6 +71,11 @@ type Config struct {
 	// 用回调而非类型依赖：panel 不得反向依赖 server（依赖方向红线）。
 	KeyRPMStats func() any
 
+	// ProviderSummary 多 provider 汇总（F7）：返回 []map[id, kind, quota, enabled,
+	// models[], account_count]，由 main 注入（回调 any，panel 不依赖 server）。
+	// nil = 未接线（overview 省略 providers 键 = 仅 codebuddy，零回归）。
+	ProviderSummary func() any
+
 	// OpsAgent 运维 agent 实例（REQ-opsagent 阶段 2）：nil = 未启用，
 	// /panel/api/opsagent/status 返回 {"enabled":false}（前端有引导态）。
 	OpsAgent *opsagent.Agent
@@ -286,6 +291,10 @@ func (p *Panel) overview(w http.ResponseWriter, r *http.Request) {
 	// 零请求，非 unknown）。
 	if p.cfg.KeyRPMStats != nil {
 		body["key_rpm"] = p.cfg.KeyRPMStats()
+	}
+	// providers 多 provider 汇总（F7）：未接线时键省略（仅 codebuddy，零回归）。
+	if p.cfg.ProviderSummary != nil {
+		body["providers"] = p.cfg.ProviderSummary()
 	}
 	// proxy_status 代理生效观测（P0-2 三态，与 /status 同源同键）：
 	// 未接线（Upstream nil）时键省略（未观测）；接线后恒输出，{} = 未观测到任何

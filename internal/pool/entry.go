@@ -92,6 +92,9 @@ type Status struct {
 	Realm string `json:"realm,omitempty"`
 	// Group 账号池分组标签（P1-B，auth.Auth.Group 透传）。空 = 未分组。
 	Group string `json:"group,omitempty"`
+	// Provider 账号归属的 provider（auth.ProviderID() 派生；空 = codebuddy）。
+	// omitempty 让空串省略（四态：字段缺失 = 未派生/未知，前端据此不渲染徽标）。
+	Provider string `json:"provider,omitempty"`
 	// ProxyURL 账号出站代理地址（**脱敏值**，auth.Auth.RedactedProxyURL；R1/R2 红线——
 	// 原始 proxy_url 含 userinfo 凭据，本字段只允许存脱敏结果，/status 与面板直出安全）。
 	// 空 = 直连（缺省形态）；对照 /status 顶层 proxy_status 可读「配了代理但 failed」。
@@ -217,7 +220,11 @@ type modelCostEntry struct {
 	Samples   int
 }
 type entry struct {
-	a            *auth.Auth
+	a *auth.Auth
+	// provider 该账号所属 provider（auth.ProviderID() 的缓存；空 = codebuddy）。
+	// 从 auth 凭证派生、Add/SyncToDir 时同步，不持久化到 state.json（auth 文件
+	// 才是真相源，双写会漂移）。非 codebuddy 账号在 pick 里走非 credits 分支。
+	provider     string
 	credits      int64
 	creditsTotal int64 // 积分总额度（UserResource 聚合；0 = 未知）
 	// lastPick 最近一次选号理由（决策溯源，pickreason.go）。atomic.Pointer：
