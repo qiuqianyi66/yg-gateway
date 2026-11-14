@@ -138,8 +138,10 @@ func main() {
 		if configFileGenuinelyMissing(*cfgPath, err) {
 			// 首次运行：目录下没有配置 → 自动落一份推荐配置（含随机 api_key）再加载。
 			// 双击 exe / 裸跑 docker 即开，无需先手工复制样例。
-			if key, werr := WriteDefault(*cfgPath); werr == nil {
-				log.Printf("config %s 不存在，已生成推荐配置（api_key=%s，记录在该文件里，可自行修改）", *cfgPath, key)
+			if _, werr := WriteDefault(*cfgPath); werr == nil {
+				// 不回显 key：日志会被重定向/采集/贴进 issue，明文 api_key 落日志
+				// 等于凭证外泄（R1/R2）。key 已在配置文件里，提示路径即可。
+				log.Printf("%s", firstRunNotice(*cfgPath))
 				cfg, err = Load(*cfgPath)
 			}
 			if err != nil {
