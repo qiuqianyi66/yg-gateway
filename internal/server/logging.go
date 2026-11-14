@@ -555,9 +555,12 @@ func logChatRowEx(ttfb, total time.Duration, model, mode, uid, nick string, stat
 		return
 	}
 	seq := chatSeq.Add(1)
-	model = logfmt.Pad(logfmt.Truncate(model, chatModelWidth), chatModelWidth)
+	// OneLine 清洗（2026-11-14，日志完整性）：model 来自客户端请求体、昵称来自账号
+	// 配置文件，都可以携带真实换行——不清洗就能伪造出第二行日志（伪造审计记录 /
+	// 破坏巡检按行统计）。清洗在截断与补宽之前，保证列宽按压平后的可见字符计算。
+	model = logfmt.Pad(logfmt.Truncate(logfmt.OneLine(model), chatModelWidth), chatModelWidth)
 	// 账号标签只补不截：超宽时宁可让该行变宽，也不丢昵称信息（昵称是排查的主线索）。
-	acct := logfmt.Pad(logfmt.Label(uid, nick), chatAcctWidth)
+	acct := logfmt.Pad(logfmt.OneLine(logfmt.Label(uid, nick)), chatAcctWidth)
 	tokField := "-"
 	tokpsField := "-"
 	if toks >= 0 {
@@ -587,7 +590,7 @@ func logChatRowEx(ttfb, total time.Duration, model, mode, uid, nick string, stat
 		if hasCredit {
 			creditField = fmt.Sprintf("%.4f", credit)
 		}
-		extra = fmt.Sprintf(" rid=%s | out=%s | try=%d | credit=%s |", requestID, outcome, attempts, creditField)
+		extra = fmt.Sprintf(" rid=%s | out=%s | try=%d | credit=%s |", logfmt.OneLine(requestID), outcome, attempts, creditField)
 	}
 	// 调用来源：IP 用可解析的裸值（便于 grep），UA 用 ShortUA 压缩后的客户端标签
 	// 并加引号（标签内可能含空格，如 `OpenAI/Python 1.30.0` 只会取到 OpenAI/Python）。
@@ -595,10 +598,10 @@ func logChatRowEx(ttfb, total time.Duration, model, mode, uid, nick string, stat
 	src := ""
 	if clientIP != "" || userAgent != "" {
 		ua := "-"
-		if s := logfmt.ShortUA(userAgent); s != "" {
+		if s := logfmt.OneLine(logfmt.ShortUA(userAgent)); s != "" {
 			ua = `"` + s + `"`
 		}
-		src = fmt.Sprintf(" src=%s ua=%s |", dashIfEmpty(clientIP), ua)
+		src = fmt.Sprintf(" src=%s ua=%s |", dashIfEmpty(logfmt.OneLine(clientIP)), ua)
 	}
 	fmt.Fprintf(chatLogOut, "| #%03d | %s | %s | %s | %d | %s | TTFB=%s | tok=%s | %s | total=%.1fs |%s%s\n",
 		seq,

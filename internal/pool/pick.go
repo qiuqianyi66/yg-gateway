@@ -2,10 +2,13 @@
 package pool
 
 import (
+	"cmp"
 	"log"
 	"math/rand/v2"
+	"slices"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"yg-gateway/internal/auth"
@@ -152,7 +155,10 @@ func (p *Pool) pick(tried map[string]bool, reqModel, realm, group string, class 
 			return now.Sub(t) < p.breakerProbeGap
 		}
 	}
-	var cands []*entry
+	// 预分配容量 = 全池账号数：`var cands []*entry` 逐次 append 会按 1/2/4/8/… 扩容，
+	// 46 账号要 6-7 次分配（BenchmarkPick46 的 allocs/op 直接反映）。按 byUID 大小一次性
+	// 预分配把它压到 1 次；下方 `cands = cands[:0]` 复用同一 backing array。
+	cands := make([]*entry, 0, len(p.byUID))
 	for uid, e := range p.byUID {
 		if tried != nil && tried[uid] {
 			continue
@@ -315,16 +321,20 @@ func (p *Pool) pick(tried map[string]bool, reqModel, realm, group string, class 
 			shuf.Shuffle(len(ws), func(i, j int) { ws[i], ws[j] = ws[j], ws[i] })
 		}
 	}
-	sort.SliceStable(ws, func(i, j int) bool {
+	// 排序用 slices.SortFunc 而非 sort.SliceStable（2026-11-14 热路径优化）：
+	//   - sort.SliceStable 走 reflect.Swapper + 闭包，46 账号实测占 Pick 总耗时的大头；
+	//   - 比较器是**严格全序**（cost1k → w → UID，UID 唯一），不存在相等元素，
+	//     因此稳定排序与不稳定排序结果逐位相同（TestPick* 全绿即证据）。
+	slices.SortFunc(ws, func(a, b weighted) int {
 		// costTier 硬过滤后 ws 全员同层，但仍按 cost1k 升序排（tier 2 层内单价低者
 		// 在前；tier 0/1 层 cost1k 恒 0，本比较退化为权重比较）——读缓存字段不现算。
-		if ws[i].cost1k != ws[j].cost1k {
-			return ws[i].cost1k < ws[j].cost1k // 收费层：单价低的在前
+		if a.cost1k != b.cost1k {
+			return cmp.Compare(a.cost1k, b.cost1k) // 收费层：单价低的在前
 		}
-		if ws[i].w != ws[j].w {
-			return ws[i].w > ws[j].w
+		if a.w != b.w {
+			return cmp.Compare(b.w, a.w) // 权重降序
 		}
-		return ws[i].e.a.UID < ws[j].e.a.UID // 稳定兜底（洗牌后此项几乎不触发）
+		return strings.Compare(a.e.a.UID, b.e.a.UID) // 全序兜底（洗牌后此项几乎不触发）
 	})
 	cands = cands[:0]
 	for _, c := range ws {
@@ -342,7 +352,11 @@ func (p *Pool) pick(tried map[string]bool, reqModel, realm, group string, class 
 	// 的并发 pick 可能都读到旧 lastUsed 而同选一号（语义放宽见 pick 头注释，
 	// 由 Acquire 租约 + tried 轮换自愈）；对「下一个进入者」而言，下方原子写回
 	// 让 lastUsed 立即可见，时间窗口判定继续生效。
-	eligible := make([]*entry, 0, len(cands))
+	// eligible 至多 len(cands) ≤ 5 个元素（cands 已在上面截到 top5），用固定数组
+	// 免掉每请求一次堆分配；逃逸分析能把 backing array 留在栈上（见 BenchmarkPick46
+	// 的 allocs/op，改回 make(...) 会让它 +1）。
+	var eligibleArr [5]*entry
+	eligible := eligibleArr[:0]
 	for _, c := range cands {
 		if t := c.lastUsedTime(); t.IsZero() || now.Sub(t) >= minPickGap {
 			eligible = append(eligible, c)

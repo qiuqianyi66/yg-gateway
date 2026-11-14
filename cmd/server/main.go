@@ -23,6 +23,7 @@ import (
 	"yg-gateway/internal/auth"
 	"yg-gateway/internal/httpauth"
 	"yg-gateway/internal/livecfg"
+	"yg-gateway/internal/logfmt"
 	"yg-gateway/internal/metrics"
 	"yg-gateway/internal/panel"
 	"yg-gateway/internal/pool"
@@ -456,8 +457,11 @@ func main() {
 	// 成长任务队列每日自动执行（与「执行全部待办」同管线）：Sequential 族零点解锁后
 	// 无需手动扫描；hook 返回即启动（异步执行），已在跑时内部跳过。
 	sch.SetGrowthHook(pn.RunGrowthQueueOnce)
-	log.SetOutput(io.MultiWriter(os.Stderr, pn.Logs()))
-	server.SetChatLogOutput(io.MultiWriter(os.Stdout, pn.Logs()))
+	// 单行化写出口（2026-11-14，日志完整性）：log.Printf 的参数可能来自客户端
+	// （model / 请求 ID / 上游 body），含换行就能伪造出第二条日志行。包在唯一写出口
+	// 上，所有现在与将来的日志都自动压平，不依赖每个调用点记得清洗。
+	log.SetOutput(logfmt.OneLineWriter{W: io.MultiWriter(os.Stderr, pn.Logs())})
+	server.SetChatLogOutput(logfmt.OneLineWriter{W: io.MultiWriter(os.Stdout, pn.Logs())})
 
 	// 协议漂移观测（R-102，P1）：启用时从快照文件恢复基线（缺失 = unknown），
 	// /status 暴露状态；探测 goroutine 在校验循环外启动（下方）。

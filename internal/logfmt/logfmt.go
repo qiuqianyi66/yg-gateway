@@ -61,6 +61,43 @@ func Truncate(s string, n int) string {
 	return s
 }
 
+// OneLine 把字符串里的控制字符压平为空格，保证结果只占一行。
+//
+// 为什么必须压平（2026-11-14，日志完整性）：model / 账号昵称 / clientIP 等字段来自
+// 客户端请求体或账号配置文件，可以携带真实换行——直接打进日志会**伪造出第二行**
+// （攻击者可借此写入假的审计记录，或破坏巡检按行切分的统计）。JSON 落盘不受影响
+// （json.Marshal 会转义），风险只在直接写文本日志/表格行的路径。
+//
+// 语义边界（与 Truncate 分工）：
+//   - 本函数只做单行化，不做截断、不 trim；截断仍走 Truncate（它的契约是「原串
+//     TrimSpace 后的前缀」，压平控制字符会破坏该契约，两者不能合并）；
+//   - \t \r \n 及其他 C0 控制字符（<0x20）与 DEL（0x7f）→ 单空格；
+//   - UTF-8 多字节与可见字符原样保留（多字节字节均 ≥0x80，不会被误伤）；
+//   - 无控制字符时零分配（先扫一遍走快速路径）。
+func OneLine(s string) string {
+	clean := true
+	for i := 0; i < len(s); i++ {
+		if b := s[i]; b < 0x20 || b == 0x7f {
+			clean = false
+			break
+		}
+	}
+	if clean {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s))
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c < 0x20 || c == 0x7f {
+			b.WriteByte(' ')
+			continue
+		}
+		b.WriteByte(c)
+	}
+	return b.String()
+}
+
 // UID8 返回 uid 的前 8 位；空 uid 返回 "-"（与 server.uidPrefix 对齐）。
 //
 // 用于调度类与非调度类日志行，把 <task> <full-uid>: ... 改为 <task> <uid8>: ...
