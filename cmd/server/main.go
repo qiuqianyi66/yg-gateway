@@ -43,7 +43,7 @@ import (
 //   - 此后本仓库独立演进，不再与上游版本号对齐
 //
 // 注意：CI 发布时会断言 tag == 本值（剥掉后缀后比对），改这里要同步打 tag。
-const appVersion = "2.0.0"
+const appVersion = "2.1.0"
 
 // usagePathFor 由 state 文件路径推出用量文件路径：同目录、文件名 usage.json。
 // 这样 config 里改 state_file 时用量数据跟着走，不需要额外配置项。
