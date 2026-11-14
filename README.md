@@ -265,6 +265,32 @@ YG Gateway 把 CodeBuddy 账号池包装成一个 OpenAI / Anthropic 兼容端�
 
 只对白名单里的模型生效；SSE stream 原样透传。不配 = 完全关闭。
 
+### 多 provider 账号网关 `providers`
+
+在保留 CodeBuddy 养号池的同时，把**另一个 OpenAI 兼容上游**（示例是火山方舟 Ark）作为独立 provider 纳入同一池，按模型归属路由。CodeBuddy 的 credits 选号路径一行不变，未命中的模型仍走原池。
+
+```json
+"providers": [
+  {
+    "id": "ark",
+    "kind": "ark",
+    "quota": "metered",
+    "base_url": "https://ark.cn-beijing.volces.com/api/v3",
+    "api_key": "sk-xxx",
+    "models": ["doubao-pro-32k"],
+    "enabled": true
+  }
+]
+```
+
+- **模型归属**：`models[]` 是显式白名单（裸模型名，匹配前剥掉 `cn:` / `global:` 前缀）。请求模型命中某 provider 名单 → 只在该 provider 账号里选号；未命中 → 照旧走 CodeBuddy credits 池。
+- **provider 账号怎么进池**：往 `auths/` 放一个账号文件，如 `auths/ark-1.json`：`{"provider":"ark","api_key":"sk-xxx","account":{"uid":"ark-1"}}`。API Key 认证，**不需要 OAuth 登录**（无 accessToken 也可解析）。
+- **凭证优先级**：账号文件里的 `api_key` 优先；没写才回退 `config.providers[].api_key`（一个 key 供多号共享的简化形态）。
+- **不会串池**：provider 账号不进 credits 加权；CodeBuddy 账号也不会被误派到 provider 端点。
+- **面板**：账号卡显示 provider 徽标，顶部汇总条给出每个 provider 的账号数与启用状态。
+
+> `kind` 可选 `ark` / `openai_compat`（都走 OpenAI 兼容 + Bearer）；`quota` 可选 `metered` / `window`（`credits` 是 CodeBuddy 专属，配了会被拒）。
+
 ## 安全基线（部署必读）
 
 1. **凭证文件权限（Windows 特有坑）**：`auths/*.json` 存明文 token，Go 的 `0o600` 在 Windows 上不改写继承 ACL。每次加完账号跑一次

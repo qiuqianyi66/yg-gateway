@@ -35,6 +35,17 @@
     "models": [],
     "timeout_seconds": 120
   },
+  "providers": [
+    {
+      "id": "ark",
+      "kind": "ark",
+      "quota": "metered",
+      "base_url": "https://ark.cn-beijing.volces.com/api/v3",
+      "api_key": "",
+      "models": ["doubao-pro-32k", "doubao-lite-32k"],
+      "enabled": false
+    }
+  ],
   "auth_dir": "./auths",
   "state_file": "./data/state.json",
   "server": {
