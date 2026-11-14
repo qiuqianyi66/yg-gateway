@@ -40,8 +40,14 @@ func benchBody(size int) []byte {
 	return b
 }
 
-// BenchmarkBodyParseCurrent 现状：6 次独立解析（优化前的基线数字）。
-func BenchmarkBodyParseCurrent(b *testing.B) {
+// BenchmarkBodyParseLegacySixPass 优化前基线 —— **不是当前生产路径**。
+//
+// 历史上的 6 次串行全量解析（peek/modelRaw/ToolNameAllowlist/ExtractKey/
+// TurnKey/hasImagePart）已重构：生产走单次解析 + 视图复用
+// （chatflow.go 的 ToolNameAllowlistView / ExtractKeyOptView / TurnKeyView），
+// 图片判定惰性到错误路径（chatrun.hasImage）。本基准仅作「优化前」对照，
+// 勿据此推断现状性能（曾误读为现状，2026-11-14 审查踩过）。
+func BenchmarkBodyParseLegacySixPass(b *testing.B) {
 	body := benchBody(40)
 	b.SetBytes(int64(len(body)))
 	b.ReportAllocs()
