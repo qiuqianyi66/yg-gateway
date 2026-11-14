@@ -49,9 +49,14 @@ if (-not (Test-Path $internalDir)) {
     exit 2
 }
 
+$upstreamDir = Join-Path $internalDir 'upstream'
+
 Get-ChildItem -Path $internalDir -Recurse -Filter '*.go' | Where-Object {
-    # 排除 upstream/ 目录本身
-    $_.FullName -notlike '*\upstream\*' -and
+    # 排除 upstream/ 目录本身。
+    # 必须用 Join-Path 生成前缀比较，不能硬编码 '*\upstream\*'——FullName 的分隔符随
+    # 平台变化（Windows '\'，Linux/macOS '/'），硬编码反斜杠会让 CI（ubuntu）把 upstream
+    # 包内所有文件都当成违规，门禁每次假红（2026-11-14 CI 实捕获）。
+    $_.FullName -notlike ($upstreamDir + '*') -and
     # 排除测试文件
     $_.Name -notlike '*_test.go'
 } | ForEach-Object {
