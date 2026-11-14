@@ -13,7 +13,6 @@ import (
 
 	"yg-gateway/internal/auth"
 	"yg-gateway/internal/logfmt"
-	"yg-gateway/internal/router"
 )
 
 // Pick 单一选号入口（无请求级轮换、无 realm 过滤，模型感知缺省账号级）。
@@ -84,77 +83,21 @@ func (p *Pool) pick(tried map[string]bool, reqModel, realm, group string, class 
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	now := p.now()
-	// realm 过滤 + group 过滤（P1-B：账号池分组）。group 空 = 不限池（零回归）。
-	realmOK := func(e *entry) bool {
-		if realm != "" && e.a.Realm() != realm {
-			return false
-		}
-		if group != "" && e.a.Group != group {
-			return false
-		}
-		return true
-	}
-	// 故障窗（P0-2）：最近失败在窗内的账号临时退出 normal 候选，防止抖动号被
-	// 连续打。只挡 normal：全池皆窗内时走 pickEarliestExpiry 兜底（失败成本仅
-	// 一轮换）。healthy() 不加本判定——兜底/粘性路径复用 healthy()，加进去会
-	// 让全池窗内时兜底也失效（行为退化）。
-	failureWindowBlocked := func(e *entry) bool {
-		return p.failureWindow > 0 && !e.lastErr.IsZero() && now.Sub(e.lastErr) < p.failureWindow
-	}
-	// minIntervalBlocked 主动 RPM 限流（风控规避）：距离上次请求太近的账号跳过，
-	// 避免单账号短时间打太密触发上游风控（真实用户不会每秒发多次请求）。
-	// global 账号阈值更严（国际版风控更敏感）。0 = 关闭（零回归）。
-	minIntervalBlocked := func(e *entry) bool {
-		interval := p.minRequestInterval
-		if e.a.IsGlobal() && p.minRequestIntervalGlobal > 0 {
-			interval = p.minRequestIntervalGlobal
-		}
-		if interval <= 0 {
-			return false
-		}
-		last := e.lastRequestAt.Load()
-		if last == 0 {
-			return false // 从未请求过，不拦
-		}
-		return now.Sub(time.Unix(0, last)) < interval
-	}
+	// 护栏（realm/group 过滤、故障窗、RPM 限流、熔断 half-open）的唯一实现在
+	// guards.go——pick 与 pickNonCredits 共用同一份，改一处即两处生效。
+	g := p.guardsAt(now, realm, group)
+	// healthyOf 在此之上叠健康口径：reqModel 非空时换成 healthyForModel（6004 模型豁免生效）。
 	healthyOf := func(e *entry) bool {
-		return realmOK(e) && !failureWindowBlocked(e) && !minIntervalBlocked(e) && e.healthy(now)
+		return g.realmOK(e) && !g.failureWindowBlocked(e) && !g.minIntervalBlocked(e) && e.healthy(now)
 	}
 	if reqModel != "" {
 		healthyOf = func(e *entry) bool {
-			return realmOK(e) && !failureWindowBlocked(e) && !minIntervalBlocked(e) && e.healthyForModel(now, reqModel)
+			return g.realmOK(e) && !g.failureWindowBlocked(e) && !g.minIntervalBlocked(e) && e.healthyForModel(now, reqModel)
 		}
 	}
 	// floorBlocked 积分保底拦截判定（实现在 floorBlockedForRealmModel，与粘性路径共用）：
 	// 触底 + 收费（本地实测台账 或 上游目录倍率）即拦；免费/未知倍率不受限。
 	floorBlocked := func(e *entry) bool { return p.floorBlockedForRealmModel(e, reqModel, realm, now) }
-	// breakerHalfOpen（ADR-003 D-400）：熔断号**刚到期**时进入 half-open 试探窗——
-	// 每 breakerProbeGap 至多放行 1 次，避免到期瞬间全量洪峰把坏号二次打挂
-	//（二次熔断会让退避翻倍，最长 6h，代价远高于限速一轮）。
-	// 返回 true = 本账号本轮应被跳过。
-	//
-	// 判定边界（为什么这样切）：
-	//   - breakerProbeGap <= 0 → 关闭，恒 false（零回归，与旧行为逐位一致）
-	//   - breakerUntil 为空 或 尚未到期 → 不受此限（未到期本来就不可选；空则从未熔断）
-	//   - retryCount == 0 → 从未熔断过或已被成功清理，无限速必要
-	//   - 距上次试探 < gap → 跳过（把机会让给别的号）
-	breakerHalfOpen := func(e *entry) bool {
-		if p.breakerProbeGap <= 0 {
-			return false
-		}
-		if e.breakerUntil.IsZero() || now.Before(e.breakerUntil) {
-			return false // 从未熔断 / 仍在熔断期（后者由 healthy 拦下）
-		}
-		if e.retryCount == 0 {
-			return false // 已成功恢复（NoteSuccess 清 retryCount）
-		}
-		if t := e.probeAtTime(); t.IsZero() {
-			return false // 首次到期：放行一次试探
-		} else {
-			return now.Sub(t) < p.breakerProbeGap
-		}
-	}
 	// 预分配容量 = 全池账号数：`var cands []*entry` 逐次 append 会按 1/2/4/8/… 扩容，
 	// 46 账号要 6-7 次分配（BenchmarkPick46 的 allocs/op 直接反映）。按 byUID 大小一次性
 	// 预分配把它压到 1 次；下方 `cands = cands[:0]` 复用同一 backing array。
@@ -176,8 +119,8 @@ func (p *Pool) pick(tried map[string]bool, reqModel, realm, group string, class 
 		if !healthyOf(e) {
 			continue
 		}
-		if breakerHalfOpen(e) {
-			continue // half-open 限速：本轮让位（见上方注释）
+		if g.breakerHalfOpen(e) {
+			continue // half-open 限速：本轮让位（见 guards.go）
 		}
 		if floorBlocked(e) {
 			continue // 积分保底：触底号不接实测收费模型（tier 0/1 不受限）
@@ -418,51 +361,9 @@ func (p *Pool) pickNonCredits(pid string, tried map[string]bool, realm, group st
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	now := p.now()
-	realmOK := func(e *entry) bool {
-		if realm != "" && e.a.Realm() != realm {
-			return false
-		}
-		if group != "" && e.a.Group != group {
-			return false
-		}
-		return true
-	}
-	// 以下护栏闭包与 pick 内同名闭包逐字对齐（勿单改，改一处必须同步另一处）。
-	failureWindowBlocked := func(e *entry) bool {
-		return p.failureWindow > 0 && !e.lastErr.IsZero() && now.Sub(e.lastErr) < p.failureWindow
-	}
-	minIntervalBlocked := func(e *entry) bool {
-		interval := p.minRequestInterval
-		if e.a.IsGlobal() && p.minRequestIntervalGlobal > 0 {
-			interval = p.minRequestIntervalGlobal
-		}
-		if interval <= 0 {
-			return false
-		}
-		last := e.lastRequestAt.Load()
-		if last == 0 {
-			return false
-		}
-		return now.Sub(time.Unix(0, last)) < interval
-	}
-	breakerHalfOpen := func(e *entry) bool {
-		if p.breakerProbeGap <= 0 {
-			return false
-		}
-		if e.breakerUntil.IsZero() || now.Before(e.breakerUntil) {
-			return false
-		}
-		if e.retryCount == 0 {
-			return false
-		}
-		if t := e.probeAtTime(); t.IsZero() {
-			return false
-		} else {
-			return now.Sub(t) < p.breakerProbeGap
-		}
-	}
+	// 护栏与 pick 共用 guards.go 的唯一实现（不再各写一份闭包）。
+	g := p.guardsAt(now, realm, group)
 	var cands []*entry
-	var views []router.View
 	for uid, e := range p.byUID {
 		if tried != nil && tried[uid] {
 			continue
@@ -470,28 +371,26 @@ func (p *Pool) pickNonCredits(pid string, tried map[string]bool, realm, group st
 		if e.provider != pid {
 			continue
 		}
-		if !realmOK(e) || failureWindowBlocked(e) || minIntervalBlocked(e) || !e.healthy(now) {
+		if !g.realmOK(e) || g.failureWindowBlocked(e) || g.minIntervalBlocked(e) || !e.healthy(now) {
 			continue
 		}
-		if breakerHalfOpen(e) {
+		if g.breakerHalfOpen(e) {
 			continue
 		}
 		if p.inFlightFull(e) {
 			continue
 		}
 		cands = append(cands, e)
-		views = append(views, router.View{
-			Healthy:  true,
-			InFlight: int(e.inFlight.Load()),
-			LastUsed: e.lastUsedTime(),
-		})
 	}
-	// 本批默认 order 策略；P2 换 rotate/usage 只改这一行（View 已备好 InFlight/LastUsed）。
-	idx, ok := (router.Order{}).Pick(views)
-	if !ok {
+	// 顺序取第一个合格号。2026-11-14 精简：此前把候选构造成 []router.View（每个
+	// 都 Healthy:true）再交给 router.Order{}.Pick，而 Order 必返回下标 0——那是一层
+	// 恒等抽象 + 每请求一次无用 slice 分配，已连 internal/router 整包删除。演进顺序
+	// 保持与旧行为逐位一致（map 迭代随机首个）。二期若要轮转/最少使用，在本函数内
+	// 直接按 inFlight/lastUsedTime 选，不要再恢复"策略接口"式间接层。
+	if len(cands) == 0 {
 		return nil
 	}
-	e := cands[idx]
+	e := cands[0]
 	e.setLastUsed(now)
 	e.setPickReason(&pickReason{Mode: "provider", At: now})
 	seq := p.pickSeq.Add(1)
@@ -499,7 +398,7 @@ func (p *Pool) pickNonCredits(pid string, tried map[string]bool, realm, group st
 	return e.a
 }
 
-// floorBlockedForModel 积分保底拦截判定（pick 普通轮换与 PickByUIDForModel 粘性
+// floorBlockedForRealmModel 积分保底拦截判定（pick 普通轮换与 PickByUIDForModel 粘性
 // 路径的单一事实来源）：floor>0 且账号触底（credits < floor）且该模型**收费**
 // 时为真。
 //
@@ -521,13 +420,13 @@ func (p *Pool) pickNonCredits(pid string, tried map[string]bool, realm, group st
 //
 // 余额用本地插值口径（签到权威值 - 每笔 usage.credit 实扣，见 NoteModelCost）：
 // 只会偏低不会偏高（官方对账延迟方向安全），正是保底需要的安全方向。
-// 调用方必须已持有 p.mu（读 e.credits / e.modelCost / p.modelRateOf）。
-func (p *Pool) floorBlockedForModel(e *entry, model string, now time.Time) bool {
-	return p.floorBlockedForRealmModel(e, model, "", now)
-}
-
-// floorBlockedForRealmModel 同上，但带 realm 上下文（倍率按 (realm, 模型) 分桶，
-// 同名模型在 CN / global 两域倍率可不同）。realm 为空时按倍率表的空域键查。
+//
+// realm 为空时按倍率表的空域键查（倍率按 (realm, 模型) 分桶：同名模型在 CN /
+// global 两域倍率可不同）。调用方必须已持有 p.mu（读 e.credits / e.modelCost /
+// p.modelRateOf）。
+//
+// 2026-11-14 精简：删除了不带 realm 的 `floorBlockedForModel` 薄包装——它只被一条
+// 测试引用、生产零调用，留着会让人以为存在第二条判定路径。
 func (p *Pool) floorBlockedForRealmModel(e *entry, model, realm string, now time.Time) bool {
 	if p.creditFloor <= 0 || model == "" || e.credits >= p.creditFloor {
 		return false

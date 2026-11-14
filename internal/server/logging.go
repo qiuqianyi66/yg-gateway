@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -21,7 +20,6 @@ import (
 	"yg-gateway/internal/pool"
 	"yg-gateway/internal/reqlog"
 	"yg-gateway/internal/session"
-	"yg-gateway/internal/upstream"
 )
 
 // maxUserAgentLen 归档与面板展示保留的 UA 字节上限。UA 是客户端完全可控的
@@ -288,17 +286,6 @@ func rewriteModel(body []byte, bare string) []byte {
 	return out
 }
 
-// parseModelFromBody 从请求 JSON 取 model 字段，缺省标 "-"。
-func parseModelFromBody(body []byte) string {
-	var obj struct {
-		Model string `json:"model"`
-	}
-	if err := json.Unmarshal(body, &obj); err != nil || obj.Model == "" {
-		return "-"
-	}
-	return obj.Model
-}
-
 // usageDeltaFromResponse 从非流式聚合响应中提取明确存在的 token 字段。
 func usageDeltaFromResponse(resp map[string]any) pool.TokenUsageDelta {
 	delta := pool.TokenUsageDelta{}
@@ -329,13 +316,6 @@ func completionTokens(resp map[string]any) int {
 		return -1
 	}
 	return int(v)
-}
-
-// uidPrefix 只显示 uid 前 8 位；空 uid 显示 "-"。
-//
-// 实现委托 logfmt.UID8，避免 "截 8 位" 的规则在 server 与 logfmt 两处各写一份而走样。
-func uidPrefix(uid string) string {
-	return logfmt.UID8(uid)
 }
 
 type requestTraceKey struct{}
@@ -400,26 +380,6 @@ func (t *requestTrace) captureClientInfo(r *http.Request, proxy *TrustedProxyMat
 	}
 	t.clientIP = extractClientIP(proxy, r)
 	t.userAgent = logfmt.Truncate(r.UserAgent(), maxUserAgentLen)
-}
-
-// clientIPForLog 提取用于日志展示的客户端 IP（历史语义，无条件信任代理头）。
-//
-// 生产路径已改用 extractClientIP（F-002：按受信任代理判定，未配置受信任代理时
-// 不采信伪造的 X-Forwarded-For）。本函数保留为「不设受信任代理」时的旧语义，
-// 其回落 RemoteAddr 的行为由 logging_test 钉住（直连部署下 RemoteAddr 是唯一线索）。
-// 新增代码请用 extractClientIP，不要再用本函数拼 IP 采集。
-func clientIPForLog(r *http.Request) string {
-	if r == nil {
-		return ""
-	}
-	if ip := upstream.ExtractClientIP(r); ip != "" {
-		return ip
-	}
-	host, _, err := net.SplitHostPort(strings.TrimSpace(r.RemoteAddr))
-	if err != nil {
-		return strings.TrimSpace(r.RemoteAddr)
-	}
-	return host
 }
 
 // dashIfEmpty 空串统一显示 "-"（来源字段未采集时不留空白列）。

@@ -244,27 +244,6 @@ func TestRequestMetricsClientInfoDisabled(t *testing.T) {
 	}
 }
 
-// 无代理头时回落到 TCP 对端地址——直连部署下这是唯一来源线索。
-func TestClientIPForLogFallsBackToRemoteAddr(t *testing.T) {
-	req := httptest.NewRequest("POST", "/v1/chat/completions", nil)
-	req.RemoteAddr = "198.51.100.9:54321"
-	if got := clientIPForLog(req); got != "198.51.100.9" {
-		t.Errorf("got %q want 198.51.100.9", got)
-	}
-	// 代理头优先（X-Real-IP 兜底 XFF）。
-	req.Header.Set("X-Real-IP", "192.0.2.5")
-	if got := clientIPForLog(req); got != "192.0.2.5" {
-		t.Errorf("X-Real-IP got %q want 192.0.2.5", got)
-	}
-	req.Header.Set("X-Forwarded-For", "192.0.2.9, 10.1.1.1")
-	if got := clientIPForLog(req); got != "192.0.2.9" {
-		t.Errorf("XFF got %q want 192.0.2.9", got)
-	}
-	if got := clientIPForLog(nil); got != "" {
-		t.Errorf("nil request got %q want empty", got)
-	}
-}
-
 // 超长 UA 落盘前截断：UA 是客户端可控自由文本，不截断会把归档行撑爆。
 func TestCaptureClientInfoTruncatesUserAgent(t *testing.T) {
 	tr := &requestTrace{}
@@ -297,18 +276,6 @@ func TestRequestMetricsDetectsStreamErrorFrame(t *testing.T) {
 	}
 }
 
-func TestParseModelFromBody(t *testing.T) {
-	if got := parseModelFromBody([]byte(`{"model":"deepseek-v4-flash","stream":true}`)); got != "deepseek-v4-flash" {
-		t.Errorf("got %q", got)
-	}
-	if got := parseModelFromBody([]byte(`{}`)); got != "-" {
-		t.Errorf("got %q want -", got)
-	}
-	if got := parseModelFromBody([]byte(`not json`)); got != "-" {
-		t.Errorf("got %q want -", got)
-	}
-}
-
 func TestCompletionTokensExtraction(t *testing.T) {
 	got := completionTokens(map[string]any{
 		"usage": map[string]any{"prompt_tokens": 10.0, "completion_tokens": 234.0, "total_tokens": 244.0},
@@ -321,18 +288,6 @@ func TestCompletionTokensExtraction(t *testing.T) {
 	}
 	if got := completionTokens(map[string]any{"usage": map[string]any{}}); got != -1 {
 		t.Errorf("missing completion_tokens: got %d want -1", got)
-	}
-}
-
-func TestUIDPrefix(t *testing.T) {
-	if got := uidPrefix("00e26541abcdef012345"); got != "00e26541" {
-		t.Errorf("long uid -> %q", got)
-	}
-	if got := uidPrefix("abc"); got != "abc" {
-		t.Errorf("short uid -> %q", got)
-	}
-	if got := uidPrefix(""); got != "-" {
-		t.Errorf("empty uid -> %q", got)
 	}
 }
 

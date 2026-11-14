@@ -65,7 +65,7 @@ func TestSoftBandWeightAndReason(t *testing.T) {
 	p.SetCredits("low", 90, 0)
 	p.NoteModelCost("low", "m1", 2.0, 1000) // 实测收费台账（正规入口）
 	p.mu.RLock()
-	blocked := p.floorBlockedForModel(p.byUID["low"], "m1", t0)
+	blocked := p.floorBlockedForRealmModel(p.byUID["low"], "m1", "", t0)
 	p.mu.RUnlock()
 	if !blocked {
 		t.Fatal("credits ≤ floor 应被硬拦（软带不是逃逸口）")

@@ -114,15 +114,10 @@ $allow = @{
     # 各写一份」的复制（server/scheduler 的 sleepCtx 双份是实弹证据）。
     # 纪律：只放与业务语义无关的东西；带业务口径的留在各自领域包。
     'pkg'        = @()
-    # 上游提供方静态描述 + 注册表（ADR-026）：**叶子层**，只描述形状（协议族 /
-    # 额度语义 / 端点 / 模型目录），不带运行态（额度 / 健康 / 冷却仍在 pool）。
-    # P0 阶段无人接线，故零 internal 依赖；P1 接线后方向为 server -> provider。
+    # 上游提供方静态枚举（ADR-026）：**叶子层**，只描述形状（协议族 / 额度语义），
+    # 不带运行态（额度 / 健康 / 冷却仍在 pool）。注册表层已按 2026-11-14 精简删除
+    # （从未被生产接线），二期若重建需同步恢复本表条目。
     'provider'   = @()
-    # 非 credits 额度语义（ADR-026 Quota 层）：metered / window。依赖 provider 的
-    # QuotaKind 枚举（叶子 -> 叶子，方向合法）；credits 留在 pool 不搬家。
-    'quota'      = @('provider')
-    # 非 credits 选号策略（ADR-026 Router 层）：纯函数+游标，零 internal 依赖。
-    'router'     = @()
 }
 
 # 取每个包的 import 列表。
