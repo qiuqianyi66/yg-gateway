@@ -71,6 +71,7 @@ func (c *Client) sleepNightChat() {
 func (c *Client) RunNightChats(a *auth.Auth, need int) (int64, error) {
 	var ok int64
 	for i := 0; i < need; i++ {
+		// 忽略：字面量 map（string/slice 只有可序列化类型）的 Marshal 不会失败，不影响对话请求构造。
 		body, _ := json.Marshal(map[string]any{
 			"model":    "glm-5.2",
 			"messages": []map[string]any{{"role": "user", "content": "1+1等于几？直接回答。"}},

@@ -8,6 +8,13 @@ research: morluto/rea 源码深读（AGENTS.md / architecture.mermaid / tool-des
 
 # YG Gateway 架构地基 + Evidence/Unknown 语义 — 需求分析（PRD）
 
+## 必要性
+
+养号决策直接依赖「账号是否可用 / 成本是否已知 / 延迟是否可信」，而这些判断的证据质量
+参差不齐：把 2 个样本的推断当观察事实展示，会把健康号排除出选号——不报错、只误伤。
+这类漂移靠 review 记忆维持不住，需要一层机器可校验的语义纪律（evidence kind + unknown
+registry + 依赖方向守卫），并写进顶层约束。不做的代价是新增导出字段必然退回「缺失 = 否」。
+
 > 背景：豆包基于 rea 源码深读给出了一份移植清单。本轮复核后确认清单方向对，
 > 但**误读了 rea 一半**（把 MCP 当主线），且**漏了 rea 最值钱的东西**：
 > observation / derivation / inference / unknown 的四态分离，以及 Unknown 作为

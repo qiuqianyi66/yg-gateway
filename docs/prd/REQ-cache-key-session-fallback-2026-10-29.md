@@ -1,5 +1,13 @@
 # REQ-cache-key-session-fallback-2026-10-29 — 无会话标识时缓存键回退内容派生
 
+## 必要性
+
+生产实测（`requests-2026-10-29.jsonl` 267 条）已确认：deepseek-harness 不带任何会话标识，
+而生产配置 `session_sticky.derive=false` 关闭内容派生，`buildCacheKey(uid, "")` 退化成
+每账号一个定值键——同账号的多个子会话共用一个缓存键、互相覆盖，表现为同账号连续 3 条
+大请求（前缀仅差 2-4k token）全部 miss、恢复后 99%+ 命中。这是真实在跑的缓存命中率塌陷，
+直接体现为上游 token 消耗翻倍，不是理论风险。
+
 ## 背景（生产实测，2026-10-29）
 
 `D:\yg-gateway\data\request-logs\requests-2026-10-29.jsonl`（267 条）显示：

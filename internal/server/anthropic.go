@@ -261,6 +261,8 @@ func (h *Handler) anthropicStream(w http.ResponseWriter, r *http.Request) {
 
 // writeSSEEvent 写一个 Anthropic SSE 事件块（event: xxx\ndata: {...}\n\n）。
 func writeSSEEvent(w http.ResponseWriter, f http.Flusher, event string, data any) {
+	// 忽略：data 都是网关自建的事件结构（无可序列化失败的类型），Marshal 失败只会发出空 data，
+	// 不影响流继续推进与已写事件。
 	b, _ := json.Marshal(data)
 	w.Write([]byte("event: " + event + "\ndata: " + string(b) + "\n\n"))
 	if f != nil {

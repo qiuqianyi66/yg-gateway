@@ -162,6 +162,7 @@ func (h *Handler) metricsHandler(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
+	// 忽略：客户端可能已断开，写响应失败无需上报（指标文本已生成），不影响采集抓取后续请求。
 	_, _ = p.WriteTo(w)
 }
 

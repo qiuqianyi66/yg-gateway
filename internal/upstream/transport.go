@@ -82,6 +82,7 @@ func newDialer() *net.Dialer {
 //   - TCP 层：DialContext 10s 建连上限 + 15s keepalive 探测，半开连接在建立期
 //     和复用期都能被快速识别（见 dialTimeout/dialKeepAlive 注释）。
 func newTransport() *http.Transport {
+	// 忽略：空代理串不会解析失败（错误只来自非空 proxy URL），不影响默认传输创建。
 	tr, _ := newTransportWithProxy("")
 	return tr
 }
