@@ -69,7 +69,8 @@ func (c *Client) TravelClaim(a *auth.Auth, recordID int64) (int64, error) {
 		RewardCredit int64 `json:"reward_credit"`
 	}
 	if len(data) > 0 {
-		// 奖励字段缺失不视为失败：调用方按 0 记日志即可。
+		// 忽略：响应体缺 reward_credit 或类型不符时保留零值，不影响领取流程
+		// （调用方按 0 记日志，奖励到账与否以服务端为准）。
 		_ = json.Unmarshal(data, &resp)
 	}
 	return resp.RewardCredit, nil

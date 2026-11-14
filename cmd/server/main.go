@@ -778,6 +778,7 @@ func saveConfig(raw []byte, path string, live *livecfg.Holder, p *pool.Pool, up 
 		}
 		f, openErr := os.OpenFile(path, os.O_WRONLY|os.O_TRUNC, 0o600)
 		if openErr != nil {
+			// 忽略：清理临时文件失败只在 /tmp 留一份冗余副本，不影响已返回的错误。
 			_ = os.Remove(tmp)
 			return nil, fmt.Errorf("replace config (bind mount fallback): %w", openErr)
 		}
@@ -791,6 +792,7 @@ func saveConfig(raw []byte, path string, live *livecfg.Holder, p *pool.Pool, up 
 		if writeErr != nil {
 			return nil, fmt.Errorf("replace config (bind mount fallback, 完整新内容保留在 %s): %w", tmp, writeErr)
 		}
+		// 忽略：写成功后清理临时文件失败只在 /tmp 留一份冗余副本，不影响配置已生效。
 		_ = os.Remove(tmp)
 		if closeErr != nil {
 			return nil, fmt.Errorf("replace config (bind mount fallback): %w", closeErr)

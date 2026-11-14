@@ -123,6 +123,8 @@ func (h *Handler) prepareChatRequest(w http.ResponseWriter, r *http.Request) (*c
 	// json.Unmarshal 到 string 时非字符串会被静默置零，result 同样是空串）。
 	modelStr := ""
 	if modelKind == "string" {
+		// 忽略：modelKind 已确认是 JSON 字符串，残留错误只会让 modelStr 保持空串，
+		// 不影响模型路由（路由按 modelKind 与原始字节判定）。
 		_ = json.Unmarshal(peekModel, &modelStr)
 	}
 	p.modelStr = modelStr

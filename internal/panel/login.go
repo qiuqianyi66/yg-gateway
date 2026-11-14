@@ -212,6 +212,8 @@ func (p *Panel) loginPoll(w http.ResponseWriter, r *http.Request) {
 		Nickname     string `json:"nickname"`
 	}
 	if acctRaw, _, err := doJSON(http.MethodGet, epAcct+state, tok.AccessToken, nil, origin); err == nil {
+		// 忽略：解析失败时 acct.UID 保持空，紧接的 UID=="" 分支走 502 明确失败，
+		// 不影响错误反馈（该结构只用于展示名与文件名，不参与鉴权）。
 		_ = json.Unmarshal(acctRaw, &acct)
 	}
 	if acct.UID == "" {
