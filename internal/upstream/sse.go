@@ -723,55 +723,27 @@ func StreamHint(w http.ResponseWriter, r io.Reader, hintFn func(string) string, 
 	maxToolIdx := -1
 	toolFinishSent := false
 
-	// writeSSE 原样写出一帧并 flush。
-	// 心跳开启时经 writeMu 串行化（心跳 goroutine 与主循环并发写同一
-	// ResponseWriter，不加锁会交错出半帧）；未开启时 writeMu 为 nil，零开销。
-	writeSSE := func(payload string) error {
-		lock := func() {
-			if writeMu != nil {
-				writeMu.Lock()
-			}
+	// writeThrough 所有写路径的唯一实现：加锁（仅心跳开启时）→ 写 → flush → 记时。
+	// 原先 writeSSE 与 writeLine 各写一份同样的「锁 - 写 - flush - 记时」序列，靠注释
+	// 「与 writeSSE 同锁口径」约束——本仓已被证明这种注释约束会漂移（见 guards.go 同因）。
+	// 注意：心跳 goroutine 不能调本函数（它持有 writeMu，再调会自锁）；心跳自己内联写。
+	writeThrough := func(s string) error {
+		if writeMu != nil {
+			writeMu.Lock()
+			defer writeMu.Unlock()
 		}
-		unlock := func() {
-			if writeMu != nil {
-				writeMu.Unlock()
-			}
-		}
-		lock()
-		_, werr := io.WriteString(w, "data: "+payload+"\n\n")
+		_, werr := io.WriteString(w, s)
 		if werr == nil && fl != nil {
 			fl.Flush()
 		}
-		unlock()
 		if werr == nil {
 			lastBeat.Store(time.Now().UnixNano()) // 心跳判据：刚写过数据
 		}
 		return werr
 	}
 
-	// writeLine 原样写一行（注释/其他非 data 行），与 writeSSE 同锁口径。
-	writeLine := func(s string) error {
-		lock := func() {
-			if writeMu != nil {
-				writeMu.Lock()
-			}
-		}
-		unlock := func() {
-			if writeMu != nil {
-				writeMu.Unlock()
-			}
-		}
-		lock()
-		_, werr := io.WriteString(w, s)
-		if werr == nil && fl != nil {
-			fl.Flush()
-		}
-		unlock()
-		if werr == nil {
-			lastBeat.Store(time.Now().UnixNano())
-		}
-		return werr
-	}
+	// writeSSE 写出一帧 data 行（writeThrough 的语义命名包装；调用点较多故保留名字）。
+	writeSSE := func(payload string) error { return writeThrough("data: " + payload + "\n\n") }
 
 	// writeRaw 原样写出一帧（绕过 normalizeFrame）。上游 error 帧（error-passthrough）
 	// 与空流错误帧需保留 error 字段，不能被白名单剥掉，故经此写出。
@@ -945,7 +917,7 @@ readLoop:
 			}
 		case trimmed != "":
 			// 注释/其他行：原样透传
-			if werr := writeLine(line); werr != nil {
+			if werr := writeThrough(line); werr != nil {
 				return werr
 			}
 		}
@@ -992,11 +964,10 @@ readLoop:
 		_ = writeRaw(`{"error":{"message":"empty upstream stream","type":"upstream_error","code":"upstream_parse"}}`)
 	}
 	// 保证恰好写一个 [DONE]（上游漏发时兜底补上）。
-	if _, err := io.WriteString(w, "data: [DONE]\n\n"); err != nil {
-		return err
-	}
-	if fl != nil {
-		fl.Flush()
+	// 必须经 writeThrough：本段在 readLoop 之后、心跳的 defer 之前执行，心跳 goroutine
+	// 仍可能正在写 ping——直写会与它交错出半帧；此前这里是全函数唯一绕过加锁的写路径。
+	if werr := writeThrough("data: [DONE]\n\n"); werr != nil {
+		return werr
 	}
 	if validFrames == 0 {
 		return errEmptyStream

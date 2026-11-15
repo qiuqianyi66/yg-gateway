@@ -394,14 +394,11 @@ func TestAppJSSkeletonAndRetry(t *testing.T) {
 	if !strings.Contains(src, "loadErrorHTML('读取积分构成失败', e.message, '重试')") {
 		t.Error("积分构成页失败缺就地重试")
 	}
-	// 骨架屏样式必须在 index.html 里（否则 app.js 生成的 class 无样式）
-	html, err := os.ReadFile("index.html")
-	if err != nil {
-		t.Fatalf("read index.html: %v", err)
-	}
+	// 骨架屏样式必须在面板样式全集里（否则 app.js 生成的 class 无样式）
+	html := panelStyleSource(t)
 	for _, want := range []string{".skel {", ".load-error {", "@keyframes skel-shimmer", ".skel-msg .spinner"} {
-		if !strings.Contains(string(html), want) {
-			t.Errorf("index.html 缺少骨架/错误态样式 %q", want)
+		if !strings.Contains(html, want) {
+			t.Errorf("面板样式全集缺少骨架/错误态样式 %q", want)
 		}
 	}
 }
@@ -476,11 +473,8 @@ func TestAppJSKeyRPMVisualization(t *testing.T) {
 			t.Errorf("F6 实况槽缺失：未找到 %q", want)
 		}
 	}
-	html, err := os.ReadFile("index.html")
-	if err != nil {
-		t.Fatalf("read index.html: %v", err)
-	}
-	if !strings.Contains(string(html), "#view-keys .rpm-bars i") {
+	html := panelStyleSource(t)
+	if !strings.Contains(html, "#view-keys .rpm-bars i") {
 		t.Error("RPM 迷你曲线 CSS 缺失")
 	}
 }
@@ -516,16 +510,13 @@ func TestAppJSRequestPagination(t *testing.T) {
 	if !strings.Contains(src, "pagerHost.querySelectorAll('button[data-page]')") {
 		t.Error("分页器按钮未绑定点击")
 	}
-	// HTML 侧有容器
-	html, err := os.ReadFile("index.html")
-	if err != nil {
-		t.Fatalf("read index.html: %v", err)
-	}
-	if !strings.Contains(string(html), `id="reqPager"`) {
+	// HTML 侧有容器（DOM 结构只可能来自 index.html；样式走样式全集）
+	html := panelStyleSource(t)
+	if !strings.Contains(html, `id="reqPager"`) {
 		t.Error("index.html 缺 reqPager 容器")
 	}
-	if !strings.Contains(string(html), ".req-pager {") {
-		t.Error("index.html 缺分页器样式")
+	if !strings.Contains(html, ".req-pager {") {
+		t.Error("面板样式全集缺分页器样式")
 	}
 	// 筛选变化重置到第一页
 	if !strings.Contains(src, "reqFilter.q = $('reqQ').value.trim(); reqPage = 1;") {
@@ -685,11 +676,8 @@ func TestAppJSNotifReadAll(t *testing.T) {
 // TestAppJSResponsiveAccGrid 账号卡片网格在窄屏必须可收缩（min(340px, 100%)），
 // 否则 320px 视口下卡片溢出横向滚动。
 func TestAppJSResponsiveAccGrid(t *testing.T) {
-	html, err := os.ReadFile("index.html")
-	if err != nil {
-		t.Fatalf("read index.html: %v", err)
-	}
-	if !strings.Contains(string(html), `minmax(min(340px, 100%), 1fr)`) {
+	html := panelStyleSource(t)
+	if !strings.Contains(html, `minmax(min(340px, 100%), 1fr)`) {
 		t.Error(".acc-grid 未用 min(340px, 100%)：窄屏卡片会溢出")
 	}
 }
@@ -739,5 +727,69 @@ func TestAppJSPgDefaultCheapModel(t *testing.T) {
 		if !strings.Contains(src, want) {
 			t.Errorf("Playground 默认模型推荐缺失：未找到 %q", want)
 		}
+	}
+}
+
+// panelStyleSource 返回面板「样式全集」的合并文本：index.html（骨架内残留的少量
+// 内联样式）+ panelStyles 清单里的每个 CSS 文件。
+// 为什么需要（2026-11-15）：index.html 的内联 <style> 已按 panelStyles 清单拆成
+// app.css / panel.css / gamify.css / provider.css。断言「某条样式存在」若仍只读
+// index.html，会以「位置变了」为由误报红——判据本就是「样式存在于面板样式全集」，
+// 不是「写在某个特定文件」。
+//
+// 用 panelStyles 而不是手抄文件名清单：手抄副本必漂移（加一个 CSS 忘改两份）。
+// 牙齿：把 app.css 里 .skel 段删掉 → TestAppJSSkeletonAndRetry 立刻红。
+func panelStyleSource(t *testing.T) string {
+	t.Helper()
+	var b strings.Builder
+	for _, name := range append([]string{"index.html"}, panelStyles...) {
+		raw, err := os.ReadFile(name)
+		if err != nil {
+			t.Fatalf("读样式来源 %s 失败: %v", name, err)
+		}
+		b.Write(raw)
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
+// TestPanelStylesExternalized 钉住「样式外置」这个结构决定本身：
+//   - index.html 不含任何内联 <style>（否则又会长回「样式仓库」并吃 maxFrontendLines 棘轮）；
+//   - app.css / panel.css 确实被 go:embed 进二进制（非空）；
+//   - 两者都登记在 panelStyles 清单里（漏登记 → 不会被加载，页面静默掉样式）。
+//
+// 牙齿：把任意一段内联 <style> 抄回 index.html、或漏写 //go:embed 指令、
+// 或忘加进 panelStyles → 本用例立刻红。
+func TestPanelStylesExternalized(t *testing.T) {
+	raw, err := os.ReadFile("index.html")
+	if err != nil {
+		t.Fatalf("read index.html: %v", err)
+	}
+	if strings.Contains(string(raw), "<style") {
+		t.Error("index.html 仍含内联 <style>：样式只应在 panelStyles 清单里的独立 CSS 文件")
+	}
+	if len(appCSS) == 0 {
+		t.Error("app.css 嵌入为空（go:embed 未生效？）")
+	}
+	if len(panelCSS) == 0 {
+		t.Error("panel.css 嵌入为空（go:embed 未生效？）")
+	}
+	for _, want := range []string{"app.css", "panel.css"} {
+		idx := -1
+		for i, name := range panelStyles {
+			if name == want {
+				idx = i
+			}
+		}
+		if idx < 0 {
+			t.Errorf("%s 未登记进 panelStyles（不会生成 <link>，页面会掉样式）", want)
+		}
+	}
+	// 层叠顺序：app.css 必须首位（设计令牌先落地），panel.css 必须末位（原是 body 尾部覆盖层）。
+	if len(panelStyles) > 0 && panelStyles[0] != "app.css" {
+		t.Errorf("panelStyles[0] = %q，app.css 必须首位（组件样式依赖 var(--*) 先定义）", panelStyles[0])
+	}
+	if n := len(panelStyles); n > 0 && panelStyles[n-1] != "panel.css" {
+		t.Errorf("panelStyles[%d] = %q，panel.css 必须末位（保持原「最后覆盖」语义）", n-1, panelStyles[n-1])
 	}
 }

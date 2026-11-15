@@ -1,0 +1,30 @@
+/* panel.css — 命令行面板（Ctrl+K）与 API 调试台的样式层（2026-11-15 抽出）
+ *
+ * 为什么独立：与 app.css 同因（内联 <style> 吃前端体量棘轮）。
+ * 为什么排在 panelStyles **末位**：这两块原先写在 <body> 尾部、晚于 gamify/provider
+ * 加载，层叠语义是「最后覆盖」；放进清单末位保持同一顺序，避免优先级反转。
+ */
+
+
+.cmd-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.35); z-index: 500; display: flex; align-items: flex-start; justify-content: center; padding-top: 12vh; }
+.cmd-box { width: 560px; max-width: 90vw; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 16px 48px rgba(0,0,0,.2); overflow: hidden; }
+.cmd-box input { width: 100%; padding: 14px 16px; border: none; border-bottom: 1px solid var(--line-soft); font: inherit; font-size: 15px; background: transparent; color: var(--ink); outline: none; box-sizing: border-box; }
+.cmd-list { max-height: 320px; overflow-y: auto; }
+.cmd-item { padding: 10px 16px; cursor: pointer; font-size: 13.5px; display: flex; align-items: center; gap: 8px; }
+.cmd-item:hover, .cmd-item.active { background: var(--surface-2); }
+.cmd-item .cmd-cat { font-size: 11px; color: var(--ink-3); background: var(--surface-2); padding: 2px 6px; border-radius: 4px; flex: none; }
+.cmd-item.active .cmd-cat { background: var(--accent-soft); color: var(--accent); }
+
+/* API 调试台（Playground） */
+.pg-dlg { width: 780px; }
+.pg-row { display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-end; margin-bottom: 10px; }
+.pg-model { flex: 1 1 300px; margin-bottom: 0; }
+.pg-param { flex: 0 1 130px; margin-bottom: 0; }
+.pg-dlg textarea { width: 100%; font: 12.5px/1.55 var(--mono); resize: vertical; background: var(--surface-2); color: var(--ink); border: 1px solid var(--line); border-radius: 7px; padding: 8px 10px; box-sizing: border-box; }
+.pg-dlg textarea:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.pg-out-wrap { border: 1px solid var(--line); border-radius: 9px; overflow: hidden; margin-top: 12px; background: var(--surface-2); }
+.pg-out-head { display: flex; align-items: center; gap: 8px; padding: 7px 12px; border-bottom: 1px solid var(--line-soft); font-size: 12px; }
+.pg-out { max-height: 300px; overflow: auto; margin: 0; padding: 12px 14px; font: 12.5px/1.6 var(--mono); white-space: pre-wrap; word-break: break-word; color: var(--ink-2); }
+.pg-out.streaming { color: var(--ink); }
+.pg-out.err { color: var(--bad); }
+@media (max-width: 640px) { .pg-dlg { width: 96vw; } .pg-row { flex-direction: column; align-items: stretch; } .pg-param { flex: 1 1 auto; } }

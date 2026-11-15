@@ -24,7 +24,9 @@ func (p *Panel) routes() {
 	p.mux.HandleFunc("GET /panel/trends.js", p.trendsScript)
 	p.mux.HandleFunc("GET /panel/agent_profile.js", p.agentProfileScript)
 	p.mux.HandleFunc("GET /panel/bench.js", p.benchScript)
+	p.mux.HandleFunc("GET /panel/app.css", p.appStyle)
 	p.mux.HandleFunc("GET /panel/gamify.css", p.gamifyStyle)
+	p.mux.HandleFunc("GET /panel/panel.css", p.panelStyle)
 	p.mux.HandleFunc("GET /panel/provider.css", p.providerStyle)
 
 	// 面板 API：一律经 p.api 注册（内部强制 withAuth）——「API 必须鉴权」是注册期

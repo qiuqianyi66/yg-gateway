@@ -79,8 +79,14 @@ var agentProfileJS []byte
 //go:embed bench.js
 var benchJS []byte
 
+//go:embed app.css
+var appCSS []byte
+
 //go:embed gamify.css
 var gamifyCSS []byte
+
+//go:embed panel.css
+var panelCSS []byte
 
 //go:embed provider.css
 var providerCSS []byte
@@ -105,8 +111,10 @@ var providerCSS []byte
 // 改动本清单必须同时满足 TestComponentLoadOrder（顺序规则）与
 // TestIndexHTMLHasNoHandWrittenAssetTags（骨架里不许再手写标签）。
 var panelStyles = []string{
+	"app.css", // 基础样式层：设计令牌 / 布局 / 基础组件。必须最先 —— 组件样式依赖 var(--*)
 	"gamify.css",
 	"provider.css",
+	"panel.css", // 命令面板与 Playground。必须末位 —— 原先写在 body 尾部，语义是「最后覆盖」
 }
 
 var panelScripts = []string{
@@ -409,4 +417,27 @@ func (p *Panel) providerStyle(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	// 忽略：静态资源全量写回，写失败即客户端断连，无可恢复语义（与 appScript 同口径）。
 	_, _ = w.Write(providerCSS)
+}
+
+// appStyle 输出面板基础样式层（设计令牌 / 布局 / 基础组件，2026-11-15）。
+// 独立 CSS 而非内联 <style>：内联块曾占 index.html 的 44%（1827 非空行里 804 行），
+// 且 maxFrontendLines 棘轮只许收紧（与 gamify.css / provider.css 同因）。由 panelStyles
+// 清单在 <!--panel-styles--> 处生成 <link>，排第一位——组件样式取 var(--*) 依赖它先落地。
+func (p *Panel) appStyle(w http.ResponseWriter, r *http.Request) {
+	setSecurityHeaders(w)
+	w.Header().Set("Content-Type", "text/css; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	// 忽略：静态资源全量写回，写失败即客户端断连，无可恢复语义（与 appScript 同口径）。
+	_, _ = w.Write(appCSS)
+}
+
+// panelStyle 输出命令面板（Ctrl+K）与 API 调试台的样式（2026-11-15）。
+// 排在 panelStyles 末位以保住原层叠顺序：这两块原先写在 <body> 尾部，晚于 gamify /
+// provider 加载，语义是「最后覆盖」，提进 head 早期会反转优先级。
+func (p *Panel) panelStyle(w http.ResponseWriter, r *http.Request) {
+	setSecurityHeaders(w)
+	w.Header().Set("Content-Type", "text/css; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	// 忽略：静态资源全量写回，写失败即客户端断连，无可恢复语义（与 appScript 同口径）。
+	_, _ = w.Write(panelCSS)
 }
