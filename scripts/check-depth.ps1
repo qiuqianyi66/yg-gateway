@@ -93,8 +93,16 @@ $oversizeFiles = @($fileStats | Where-Object { $_.Lines -gt $FILE_LIMIT })
 # ---------------------------------------------------------------------------
 # 度量 3：超长函数（只统计**代码行**）
 #
-# 函数体按「本行 `^func ` 到下一个 `^func ` 的前一行」界定，但行数计算**排除空行
-# 与纯注释行**（`//` 开头；块注释内的行会被计入，这是接受的近似）。
+# 函数体按**花括号深度**界定（2026-11-15 修正，见下方「边界修正」），行数计算
+# **排除空行与纯注释行**（`//` 开头；块注释内的行会被计入，这是接受的近似）。
+#
+# 边界修正（口径变准，不是放宽）：旧实现用「本行 `^func ` 到下一个 `^func ` 的
+# 前一行」当函数体，于是两个函数之间若有 type / const / var 声明，会被整段算进
+# **上一个**函数。实测：`internal/pool/entry.go` 的 `CoolKind.String()` 真身 8 行，
+# 被报成 155 行（它后面紧跟着 TokenUsage / Status / ModelCostStatus 等 5 个类型）。
+# 两个方向都是错的：①`oversizeFuncs` 里多出幽灵条目；②**新增一个类型声明等于
+# 偷上一个函数的额度**——写类型的人要为别人的函数体量负责，激励方向反了。
+# 现在每个函数的边界由它自己的 `{` … `}` 决定，与相邻声明无关。
 #
 # 为什么排除注释——这是对度量准确性的修正，不是放宽阈值：
 #   - 函数体量的意义是「认知负荷 / 能否在脑中保持上下文」；注释**降低**该负荷
@@ -121,6 +129,60 @@ function Get-CodeLineCount($lines, $start, $end) {
     return $n
 }
 
+# Get-CodeOnly 剥掉一行里的注释与字符串/字符字面量，只留参与花括号计数的代码。
+#
+# 为什么需要：函数体边界改按花括号深度判定后，`"{"` / `'}'` / `// {` 都会污染计数。
+# 这里做**最小词法剥离**（不求完整 Go 解析）：`//` 行尾注释、`"..."` 串（含 \ 转义）、
+# `'...'` rune 字面量、`/* */` 块注释；反引号原生串与块注释可跨行，用 $inRaw /
+# $inBlock 跨行传递状态。
+# 已知近似：畸形转义会让计数偏保守（多算括号）→ 函数体可能被判长几行。
+# 门禁方向是「宁可误报长、不可漏报短」，故可接受。
+function Get-CodeOnly($line, [ref]$inRaw, [ref]$inBlock) {
+    $sb = New-Object System.Text.StringBuilder
+    $i = 0
+    $n = $line.Length
+    while ($i -lt $n) {
+        if ($inBlock.Value) {
+            $endBlk = $line.IndexOf('*/', $i)
+            if ($endBlk -lt 0) { return $sb.ToString() }
+            $inBlock.Value = $false
+            $i = $endBlk + 2
+            continue
+        }
+        if ($inRaw.Value) {
+            $endRaw = $line.IndexOf('`', $i)
+            if ($endRaw -lt 0) { return $sb.ToString() }
+            $inRaw.Value = $false
+            $i = $endRaw + 1
+            continue
+        }
+        $c = $line[$i]
+        if ($c -eq '/' -and ($i + 1) -lt $n) {
+            if ($line[$i + 1] -eq '/') { break }
+            if ($line[$i + 1] -eq '*') { $inBlock.Value = $true; $i += 2; continue }
+        }
+        if ($c -eq '`') { $inRaw.Value = $true; $i++; continue }
+        if ($c -eq '"' -or $c -eq "'") {
+            $quote = $c
+            $i++
+            while ($i -lt $n) {
+                $d = $line[$i]
+                if ($d -eq '\') { $i += 2; continue }
+                if ($d -eq $quote) { $i++; break }
+                $i++
+            }
+            continue
+        }
+        [void]$sb.Append($c)
+        $i++
+    }
+    return $sb.ToString()
+}
+
+# 与本文件其余度量同口径的阈值短路：一行里连花括号/引号/注释符都没有，就不可能
+# 改变深度，直接跳过（省掉对绝大多数行的词法扫描）。
+$depthRelevantChars = [char[]]@('{', '}', '"', "'", '`', '/')
+
 foreach ($f in $prodFiles) {
     $lines = Get-Content $f.FullName
     $starts = @()
@@ -129,7 +191,22 @@ foreach ($f in $prodFiles) {
     }
     for ($k = 0; $k -lt $starts.Count; $k++) {
         $s = $starts[$k]
-        $e = if ($k + 1 -lt $starts.Count) { $starts[$k + 1] - 1 } else { $lines.Count - 1 }
+        # 兜底上界：下一个顶层声明。仅在「函数没有函数体」（如 `//go:linkname`
+        # 外部函数声明）时才用得到——那时花括号深度永远回不到 0。
+        $nextStop = if ($k + 1 -lt $starts.Count) { $starts[$k + 1] - 1 } else { $lines.Count - 1 }
+        $depth = 0
+        $seenOpen = $false
+        $inRaw = $false
+        $inBlock = $false
+        $e = $nextStop
+        for ($i = $s; $i -le $nextStop; $i++) {
+            if ($lines[$i].IndexOfAny($depthRelevantChars) -lt 0) { continue }
+            $code = Get-CodeOnly $lines[$i] ([ref]$inRaw) ([ref]$inBlock)
+            $opens = ([regex]::Matches($code, '\{')).Count
+            if ($opens -gt 0) { $seenOpen = $true }
+            $depth += $opens - ([regex]::Matches($code, '\}')).Count
+            if ($seenOpen -and $depth -le 0) { $e = $i; break }
+        }
         $len = Get-CodeLineCount $lines $s $e
         if ($len -gt $FUNC_LIMIT) {
             $sig = ($lines[$s] -replace '\s*\{\s*$', '').Trim()
