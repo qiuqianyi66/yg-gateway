@@ -496,8 +496,12 @@ func (s *streamRun) finish() error {
 	}
 	// 空流（0 有效帧）：先写一帧 error（绕过 normalizeFrame 原样保留 error 字段），
 	// 再补 [DONE] 保证客户端能正常收尾，并返回非 nil error 供调用方记录。
-	// 网关本地空流兜底帧走 hintFn=nil 的直写路径：该形态未覆盖（不编造 hint），
-	// 且 writeRaw 的 hintFn 闭包在空流路径下可能携带上一帧的上下文造成误配。
+	//
+	// 注释修正（2026-11-15 独立复审）：此处原写「走 hintFn=nil 的直写路径」，与实现不符——
+	// 它经 writeRaw，而 writeRaw 一定会咨询 s.hintFn（本包没有 hintFn=nil 的写路径）。
+	// 真实行为：该兜底帧是网关自造的 payload，hintFn 对它判不出上游 ErrKind（推断，
+	// 无独立断言兜住），于是 hint 为空、帧原样写出。若将来要**保证**它绝不带
+	// gateway_hint，必须改用不经 frameGatewayHint 的写路径，而不是依赖 hintFn 返回空串。
 	if s.validFrames == 0 {
 		// 忽略：写响应路径客户端可能已断开无法补救；紧邻的 [DONE] 写入错误会被检查并返回（判据①）。
 		_ = s.writeRaw(`{"error":{"message":"empty upstream stream","type":"upstream_error","code":"upstream_parse"}}`)

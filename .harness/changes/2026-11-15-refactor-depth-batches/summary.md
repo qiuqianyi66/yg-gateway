@@ -49,15 +49,20 @@ ADR：无（不满足三条件：改动可逆、无新权衡、不改变任何�
 | 常驻上下文 | `check-context-budget.ps1` | 14767 / 14805（余 38，本改动净 −67） |
 | 总闸 | `pre-commit.ps1 -Base fc54879` | 见文末「总闸结果」 |
 
+**独立复审**：见 `review.md`（隔离上下文的子 agent 只读核对，A/B/C 均无行为漂移；提出 3 条 low
+全部整改，无 blocker/high/medium）。复审另指出 `check-depth.ps1` 的无函数体兜底不成立（幽灵吸收
+会复活，现网零触发）——已补拦截并加合成探针验证。
+
 **负向探针**（证明检查真的有牙齿，全部实跑）：
 
 1. **度量修正的对象确实是那处边界**：用旧算法（`下一个 ^func` 前一行）与花括号算法对**同一份**
-   代码各算一次 —— `pool.CoolKind.String()` 旧 = 155、新 = 8，其余 6 个超限函数数字逐位相同。
+   代码各算一次 —— `pool.CoolKind.String()` 旧 = 155、新 = **9**（entry.go:25-33，gate 口径实测），其余 6 个超限函数数字逐位相同。
    即「差异只来自边界口径」，不是别的路径顺带变了。
 2. **`Get-CodeOnly` 的剥离是承重的，不是保险**：把花括号计数改成「直接数原行」（不剥离字面量）
    重扫全仓生产代码，有且仅有 **1 个**函数体终点变化 ——
-   `internal/upstream/taskmetrics.go:208 processLine`：剥离后正确收在 228 行（8 代码行），
-   不剥离则深度永远回不到 0（该函数会吞掉文件其后全部内容）。根因是第 224 行
+   `internal/upstream/taskmetrics.go:208 processLine`：剥离后正确收在 **229 行（21 代码行）**，
+   不剥离则深度永远回不到 0（该函数会**多吞到下一个顶层函数之前**，实测多吞 1 行——
+   把第 230 行的空行也算进函数体）。根因是第 224 行
    `if len(s) > 0 && s[0] == '{' {` 里有 **rune 字面量 `'{'`**，被当成真实开括号。
    同一探针也说明：其余全仓函数不受字面量影响（差异集合大小为 1）。
    探针脚本跑了即弃，未提交。
@@ -83,6 +88,10 @@ ADR：无（不满足三条件：改动可逆、无新权衡、不改变任何�
 - [ ] `app.js` 1640 非空行拆分（唯一 >1000 前端文件）。`requires`：按既有
       `panelScripts` 模式外置内聚块 + `TestComponentLoadOrder` 覆盖。
 - [ ] `usage.go` `SnapshotWindow`(193) / `sse.go` `Aggregate`(211) 拆分。未评估，无测量证据。
+- [ ] 空流兜底帧「不带 gateway_hint」缺独立断言（独立复审标为 inference）：现在靠
+      `hintFn` 对该自造 payload 判不出 ErrKind 而返回空串，无测试兜住。`requires`：
+      补一条 `sse_test.go` 断言（`WithErrorFrameObserver` + 真 hintFn，断言空流帧无
+      `gateway_hint` 键），或改成不经 `frameGatewayHint` 的写路径（行为变更，需确认）。
 
 ## 四、怎么回滚
 

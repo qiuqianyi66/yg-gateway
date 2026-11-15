@@ -191,7 +191,7 @@ foreach ($f in $prodFiles) {
     }
     for ($k = 0; $k -lt $starts.Count; $k++) {
         $s = $starts[$k]
-        # 兜底上界：下一个顶层声明。仅在「函数没有函数体」（如 `//go:linkname`
+        # 兜底上界：下一个顶层函数。仅在「函数没有函数体」（如 `//go:linkname`
         # 外部函数声明）时才用得到——那时花括号深度永远回不到 0。
         $nextStop = if ($k + 1 -lt $starts.Count) { $starts[$k + 1] - 1 } else { $lines.Count - 1 }
         $depth = 0
@@ -200,6 +200,14 @@ foreach ($f in $prodFiles) {
         $inBlock = $false
         $e = $nextStop
         for ($i = $s; $i -le $nextStop; $i++) {
+            # 无函数体声明后紧跟的顶层声明**不能**被当成本函数体：否则那个 type/const 的
+            # `{` 会把 $seenOpen 顶真、深度随即回 0，于是 `$e` 钉在那个声明的闭合行——
+            # 幽灵吸收（把后随声明算进上一个函数）原样复活。2026-11-15 独立复审实测复现，
+            # 本轮补此拦截。签名续行以缩进 / `)` / `{` 开头，不会命中本模式。
+            if (-not $seenOpen -and $i -gt $s -and $lines[$i] -match '^(func |type |const |var )') {
+                $e = $i - 1
+                break
+            }
             if ($lines[$i].IndexOfAny($depthRelevantChars) -lt 0) { continue }
             $code = Get-CodeOnly $lines[$i] ([ref]$inRaw) ([ref]$inBlock)
             $opens = ([regex]::Matches($code, '\{')).Count
