@@ -7,7 +7,7 @@
 > **状态权威**：[`roadmap/ROADMAP-prd-v3-2026-10-25.md`](roadmap/ROADMAP-prd-v3-2026-10-25.md)
 > ＋ [`归档精化-2026-11-13.md`](归档精化-2026-11-13.md)（v2 路线图已归档清理，结论见该文 §一）；
 > 事实以代码 + `git log` 为准；本表「状态/落点」均有 commit 或在仓产物实证，未核实不写「已完成」。
-> 最近核对：2026-10-23（main `169d0a0`）。
+> 最近核对：2026-11-16（main `472fef4`）。
 
 图例：✅ 已落地（合入 main 且在仓可验） · 🟡 主体落地/frontmatter 仍标待终审 · ⛔ 明确不做或阻塞
 
@@ -63,6 +63,20 @@
 | [split-client-2026-10-22](prd/REQ-split-client-2026-10-22.md) | 拆 `upstream/client.go`（R-201） | ✅ `b85ea96` / `2738a3a` |
 | [split-handler-2026-10-22](prd/REQ-split-handler-2026-10-22.md) | 拆 `server/handler.go`（R-202） | ✅ `955790f` |
 | [split-autotask-2026-10-22](prd/REQ-split-autotask-2026-10-22.md) | 拆 `panel/autotask.go`（R-203） | ✅ `137b711` / `eb9bb05` |
+
+---
+
+## E. 2026-11 批次（2026-11-16 补登；此前索引缺 7 份）
+
+| REQ | 主题 | 状态 / 落点 |
+|---|---|---|
+| [ban-risk-reduction-2026-11-02](prd/REQ-yg-gateway-ban-risk-reduction-2026-11-02.md) | 降风控面（节流/指纹/行为收敛） | ✅ `.harness/changes/2026-11-02-ban-risk-reduction` |
+| [code-reuse-2026-11-02](prd/REQ-yg-gateway-code-reuse-2026-11-02.md) | 复用工具箱（去重复实现） | ✅ `.harness/changes/2026-11-02-code-reuse-toolkit` |
+| [gamify-p0-2026-11-03](prd/REQ-yg-gateway-gamify-p0-2026-11-03.md) | 游戏化 P0（能量/连击骨架） | ✅ `.harness/changes/gamify-p0`（视觉验收待 GUI，见待办） |
+| [gamify-p1-2026-11-03](prd/REQ-yg-gateway-gamify-p1-2026-11-03.md) | 游戏化 P1 | ✅ `.harness/changes/gamify-p1`（视觉验收待 GUI，见待办） |
+| [chatpaths-404-panic-2026-11-04](prd/REQ-yg-gateway-chatpaths-404-panic-2026-11-04.md) | 聊天路径 404/panic 收口 | ✅ `.harness/changes/2026-11-04-chatpaths-404-panic` |
+| [p1-panel-authz-dedup-2026-11-04](prd/REQ-yg-gateway-p1-panel-authz-dedup-2026-11-04.md) | 面板鉴权去重（P1） | ✅ `.harness/changes/2026-11-04-p1-panel-authz-dedup` |
+| [rpm-hardgate-2026-11-04](prd/REQ-yg-gateway-rpm-hardgate-2026-11-04.md) | RPM 硬闸（RoundTripper） | ✅ `081e200`（ADR-020） |
 
 ---
 

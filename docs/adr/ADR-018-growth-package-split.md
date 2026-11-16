@@ -1,6 +1,10 @@
 # ADR-018：upstream 拆出 growth 养号活动域（接口形态 + 拆包范围）
 
-> 状态：**草案待拍板**（M4）。决策点：拆包范围（A' 六文件 vs 全拆 vs 不拆）。
+> 状态：**已采纳并实施**（2026-11-16 状态收口；原文标「草案待拍板」）。采纳方案 A'。
+> 实施证据：`.harness/changes/2026-10-29-growth-split-stage1`（行为级测试基线，`5e98c9b`）、
+> `2026-10-29-growth-split-stage2`（六文件 A' 拆包）；`internal/growth/` 现有 school / travel /
+> tasks / streak / trial / blackcat + `transport.go`（窄接口）+ `client_test.go`。
+> 下方「决策」一节保留 2026-10-29 原文（含当时「本次不采纳」的时点判断），不改写历史。
 > 前置：M3 已补齐 growth 域行为级测试基线（2026-10-29 提交 5e98c9b）。
 > 依据 REQ-growth-package-split-2026-10-24（立项）+ 2026-10-29 实读证据（observation）。
 

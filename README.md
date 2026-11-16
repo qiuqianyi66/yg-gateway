@@ -45,7 +45,7 @@
 | 直接依赖 | 仅 1 个（`github.com/redis/go-redis`，且 Redis 完全可选；无 Redis 走纯内存） |
 | 上游协议 | 腾讯 CodeBuddy（GitHub Copilot 同源协议），可叠加任意 OpenAI 兼容备用上游 |
 | 对外协议 | OpenAI 兼容 + Anthropic 兼容，流式 SSE 与非流式都支持 |
-| 代码规模 | 33 个 Go 包（29 个有测试），约 10 万行（含测试），测试全绿 + `-race` 由 CI 跑 |
+| 代码规模 | 31 个 Go 包（26 个有测试；4 个 CLI 入口 + `internal/provider` 无测试文件），约 10 万行（含测试），测试全绿 + `-race` 由 CI 跑 |
 | 遥测 | **零**——无版本检查、无激活校验、无埋点、无回连 |
 | License | MIT |
 
@@ -102,7 +102,7 @@
     </td>
     <td align="center" width="50%">
       <b>📋 工程治理可审计</b><br/>
-      <code>.harness/</code> 下红线 + ADR + 变更追踪，每个改动可追溯。33 个 Go 包（29 个有测试）全绿，前端 node 断言回归，依赖方向与体量棘轮机器校验。
+      <code>.harness/</code> 下红线 + ADR + 变更追踪，每个改动可追溯。31 个 Go 包（26 个有测试）全绿，前端 node 断言回归，依赖方向与体量棘轮机器校验。
     </td>
   </tr>
 </table>
@@ -338,7 +338,7 @@ YG Gateway 把 CodeBuddy 账号池包装成一个 OpenAI / Anthropic 兼容端�
    `powershell -ExecutionPolicy Bypass -File .\lock-auths.ps1`。
    服务本身已内置自动收紧（F-101），脚本仅作手动兜底。
 2. **只监听本机**：`listen` 保持 `127.0.0.1:7863`。默认的 `:7863` 等同 `0.0.0.0`，会暴露到局域网。
-3. **必设 api_key**：为空 = 完全不鉴权直接放行。
+3. **必设 api_key**：为空时**只允许回环监听**，非回环 + 空密钥直接拒启（不再"完全不鉴权放行"）。
 4. **公网部署**：服务本身只提供明文 HTTP，挂公网**必须**前置 HTTPS 反代（Nginx / Caddy）并配访问限制。
 5. **构建工具链**：`go version` 确认 ≥1.27.2；定期跑 `go run golang.org/x/vuln/cmd/govulncheck@latest ./...`。
 
