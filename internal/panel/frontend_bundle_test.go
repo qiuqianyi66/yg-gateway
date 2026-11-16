@@ -85,8 +85,32 @@ func TestIndexHTMLPlaceholdersReplaced(t *testing.T) {
 	}
 }
 
-// scriptBundle 按加载顺序拼接全部前端脚本源码，供测试做文本检索与切片。
+// TestPanelStyleLinksRenderedInCascadeOrder 层叠顺序必须落到**下发页面**里，而不只
+// 留在 panelStyles 清单里。
 //
+// 为什么需要：CSS 优先级由页面中 <link> 的先后决定。清单顺序对但展开位置错（例如把
+// 占位符挪到 </body> 前，或有人把 link 直接写死进 index.html）时，样式会按错的顺序
+// 覆盖——而所有清单级断言（存在性、首位末位）依然全绿，只有对产物比下标才看得见。
+//
+// 牙齿：把 panelStyles 里 panel.css 与 gamify.css 互换 → 本用例立刻红。
+func TestPanelStyleLinksRenderedInCascadeOrder(t *testing.T) {
+	rendered := string(renderIndexHTML())
+	order := []string{"app.css", "gamify.css", "provider.css", "panel.css"}
+	prevName, prev := "", -1
+	for _, name := range order {
+		link := `<link rel="stylesheet" href="` + name + `">`
+		idx := strings.Index(rendered, link)
+		if idx < 0 {
+			t.Fatalf("下发页面缺 %s（panelStyles 有、renderIndexHTML 展开后没有）", link)
+		}
+		if idx < prev {
+			t.Errorf("层叠顺序反转：%s 出现在 %s 之前（CSS 优先级由 <link> 先后决定）", name, prevName)
+		}
+		prevName, prev = name, idx
+	}
+}
+
+// scriptBundle 按加载顺序拼接全部前端脚本源码，供测试做文本检索与切片。
 // 每段前加一行文件标记注释：拆分后若某个测试的 indexOf 切片跨了文件边界，
 // 报错信息里能直接看出是哪两个文件之间断的（否则只能看到一串空字符串）。
 func scriptBundle(t *testing.T) []byte {

@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -792,4 +793,59 @@ func TestPanelStylesExternalized(t *testing.T) {
 	if n := len(panelStyles); n > 0 && panelStyles[n-1] != "panel.css" {
 		t.Errorf("panelStyles[%d] = %q，panel.css 必须末位（保持原「最后覆盖」语义）", n-1, panelStyles[n-1])
 	}
+}
+
+// TestDarkThemeTokensComplete 暗色令牌必须覆盖亮色 :root 的每一个变量。
+//
+// 为什么需要：app.js 的「切换主题」（light / dark / auto）只把 data-theme 写到
+// <html>，视觉完全依赖 CSS 变量覆盖。此前面板只有 :root 一套、零暗色块，于是
+// 主题按钮**只改属性、不改外观**——点了没反应，且不报任何错（2026-11-16 用
+// 浏览器实机验证时发现，正是本仓最怕的「不报错的失效」）。
+// 补上暗色块后，真正的风险变成「以后新增一个 --xxx 只加亮色」：暗色下静默沿用
+// 亮色值（白底黑字），而所有既有断言依然全绿。
+//
+// 牙齿：往 :root 里加一条 --demo: #fff 而不加进暗色块 → 本用例立刻红。
+func TestDarkThemeTokensComplete(t *testing.T) {
+	raw, err := os.ReadFile("app.css")
+	if err != nil {
+		t.Fatalf("read app.css: %v", err)
+	}
+	css := string(raw)
+	light := cssVarNames(t, css, ":root {")
+	dark := cssVarNames(t, css, `:root[data-theme="dark"] {`)
+	if len(light) == 0 {
+		t.Fatal("app.css 缺 :root 令牌块")
+	}
+	if len(dark) == 0 {
+		t.Fatal(`app.css 缺 :root[data-theme="dark"] 块：主题切换会退化成死按钮`)
+	}
+	// 字体族在暗色块里刻意不重复声明（同一元素继承 :root），不算漏项。
+	skip := map[string]bool{"--mono": true, "--sans": true}
+	for name := range light {
+		if skip[name] {
+			continue
+		}
+		if !dark[name] {
+			t.Errorf("暗色块缺 %s：暗色下会沿用亮色值", name)
+		}
+	}
+}
+
+// cssVarNames 提取指定块选择器体内声明的 --var 名集合（只扫第一个 `}` 之前）。
+func cssVarNames(t *testing.T, css, selector string) map[string]bool {
+	t.Helper()
+	start := strings.Index(css, selector)
+	if start < 0 {
+		return nil
+	}
+	body := css[start+len(selector):]
+	end := strings.Index(body, "}")
+	if end < 0 {
+		t.Fatalf("%s 块未闭合", selector)
+	}
+	out := map[string]bool{}
+	for _, m := range regexp.MustCompile(`(--[a-z0-9-]+)\s*:`).FindAllStringSubmatch(body[:end], -1) {
+		out[m[1]] = true
+	}
+	return out
 }

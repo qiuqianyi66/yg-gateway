@@ -25,6 +25,31 @@
   --mono: ui-monospace, "Cascadia Mono", "SF Mono", Consolas, monospace;
   --sans: system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
 }
+
+/* ── 暗色令牌（2026-11-16 补）───────────────────────────────────────────
+   为什么之前是空的：注释一直写着「明暗两套独立色板」，但实际只定义了 :root 一套；
+   app.js 的 theme 切换（light/dark/auto，写 data-theme 到 <html>）因此**只改属性、
+   零视觉变化**——按钮是死的，且不报错（本仓最怕的失效形态）。这里把第二套补齐。
+
+   取值原则：
+   - 只翻「中性层」（底色 / 表面 / 线 / 字色 / 阴影），语义色（accent/ok/warn/bad）
+     沿用亮色值：它们在深底上对比度足够（绿 #10b981 对 #12161a 约 5.5:1，红 #ef4444
+     约 4.2:1），而按钮「绿底白字」的设计语言保持不变。
+   - 深色下阴影要更重才看得出层次，且不能再用 rgba(0,0,0,.04) 那种几乎不可见的量。
+   - 字体族不重复声明：选择器同样命中 <html>，继承 :root 的 --mono / --sans。
+   - 特异性 :root[data-theme="dark"] (0,1,1) 高于 :root (0,1,0)，无需 !important。 */
+:root[data-theme="dark"] {
+  --bg: #12161a; --surface: #171c21; --surface-2: #1c2228; --raise: #232a33;
+  --line: #2b333d; --line-soft: #232a33;
+  --ink: #e7edf1; --ink-2: #a8b5c0; --ink-3: #7d8b99;
+  --shadow: 0 1px 2px rgba(0,0,0,.35), 0 8px 24px -10px rgba(0,0,0,.55);
+  /* 语义色显式重声明（值沿用亮色）：不靠「不写即继承 :root」——那样新增变量时的
+     漏项无法被 TestDarkThemeTokensComplete 发现。soft 层在深底上略提高透明度。 */
+  --accent: #10b981; --accent-2: #059669; --accent-ink: #ffffff; --accent-soft: rgba(16,185,129,.16);
+  --ok: #10b981; --ok-soft: rgba(16,185,129,.16);
+  --warn: #f59e0b; --warn-soft: rgba(245,158,11,.16);
+  --bad: #ef4444; --bad-soft: rgba(239,68,68,.16);
+}
 * { box-sizing: border-box; margin: 0; padding: 0; }
 [hidden] { display: none !important; }
 html, body { height: 100%; }
@@ -78,7 +103,7 @@ body {
 /* ── 壳层：左侧导航 + 主区 ─────────────────────────────────────────── */
 .shell { display: grid; grid-template-columns: 208px 1fr; min-height: 100vh; }
 .nav {
-  background: #ffffff; border-right: 1px solid var(--line);
+  background: var(--surface); border-right: 1px solid var(--line);
   display: flex; flex-direction: column; position: sticky; top: 0; height: 100vh;
 }
 .brand { padding: 20px 18px 16px; border-bottom: 1px solid var(--line-soft); }
@@ -177,7 +202,7 @@ body {
 .main { min-width: 0; display: flex; flex-direction: column; }
 .topbar {
   display: flex; align-items: center; gap: 14px; padding: 14px 24px;
-  border-bottom: 1px solid var(--line); background: #ffffff; position: sticky; top: 0; z-index: 20;
+  border-bottom: 1px solid var(--line); background: var(--surface); position: sticky; top: 0; z-index: 20;
 }
 .topbar h2, .topbar h1 { font-size: 15.5px; font-weight: 620; letter-spacing: -.01em; }
 .topbar .sep { color: var(--ink-3); }
