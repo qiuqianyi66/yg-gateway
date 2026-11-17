@@ -760,5 +760,10 @@ func (c *Client) ChatStreamContext(ctx context.Context, a *auth.Auth, body []byt
 		// 取消传播由 http.Transport 在 body Close / 父 ctx 取消时处理，连接正常清理。
 		return observeUsage(monitorBody(resp.Body, c.IdleTimeout, cancel), meta.ConversationID), resp.StatusCode, nil, nil
 	}
-	panic("unreachable: chatPaths is never empty") // for range 空集时编译器仍要求兜底 return；chatPaths 恒非空（构造保证），永不触达
+	// 循环走完仍未命中任何候选路径（chatPaths 空集）。这里曾经是 panic(...)——
+	// 那段注释写着「构造保证非空，永不触达」，但这句话依赖一个不在本函数里的前提：
+	// 只要将来有人让 chatPaths 在某条 realm 分支返回空，panic 就会把一次配置问题
+	// 变成进程级崩溃（HTTP 上下文里是 500 + 栈，后台调用路径上是直接退出）。
+	// 返回错误让调用方走正常的失败降级（换号/重试/报错），代价远小于崩。
+	return nil, 0, nil, fmt.Errorf("chat_stream: no candidate path available (chatPaths 为空)")
 }
