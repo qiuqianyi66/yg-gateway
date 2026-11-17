@@ -135,16 +135,28 @@ func (p *Pool) pick(tried map[string]bool, reqModel, realm, group string, class 
 		// （熔断/冷却共用 expiry 口径，取较早截止者）。禁用的账号永不参与兜底。
 		return p.pickEarliestExpiryLocked(tried, now, realm, reqModel)
 	}
-	// top5 短名单按权重降序截断（而非 credits 单纯降序）：否则闲置补偿根本进不了
-	// 短名单决策，低 credits 但久置的账号会永远排不进 top5。
-	// maxCredits 统一用**全集口径**（tier 过滤前的全部 healthy 候选）：截断排序与
-	// 抽签权重共享同一基准，两个阶段权重可比。
-	var maxCredits int64
-	for _, e := range cands {
-		if e.credits > maxCredits {
-			maxCredits = e.credits
-		}
-	}
+	sel := p.selectFromCandidates(cands, reqModel, realm, now, class)
+	p.commitPick(sel, reqModel, realm, now, class)
+	return sel.e.a
+}
+
+// pickSelection 承载一次选号决策的溯源字段（commitPick 用它写 pickReason）。
+type pickSelection struct {
+	e        *entry
+	mode     string
+	tier     int
+	explored bool
+}
+
+// selectFromCandidates 在已过滤的候选集上执行成本分层、条件探索、权重预计算、
+// top5 截断与加权抽签，返回选中账号与决策溯源。调用方需已持有 p.mu 读锁。
+//
+// top5 短名单按权重降序截断（而非 credits 单纯降序）：否则闲置补偿根本进不了
+// 短名单决策，低 credits 但久置的账号会永远排不进 top5。
+// maxCredits 统一用**全集口径**（tier 过滤前的全部 healthy 候选）：截断排序与
+// 抽签权重共享同一基准，两个阶段权重可比。
+func (p *Pool) selectFromCandidates(cands []*entry, reqModel, realm string, now time.Time, class RequestClass) pickSelection {
+	maxCredits := maxCreditsOf(cands)
 	// 成本分层（reqModel 非空时）：按该模型的实测扣费把候选分层，只保留最优层。
 	//   0 = 已实测免费（限免期/夜间免费的号，最强偏好）
 	//   1 = 无观测（含观测过期）
@@ -320,7 +332,14 @@ func (p *Pool) pick(tried map[string]bool, reqModel, realm, group string, class 
 	} else {
 		e = p.pickWeighted(eligible, maxCredits, medianLatencyMs, medianPace, class) // eligible 保序 = top5 降序子集；maxCredits 用全集口径（与截断排序同基准）
 	}
-	if explored {
+	return pickSelection{e: e, mode: pickMode, tier: bestTier, explored: explored}
+}
+
+// commitPick 在选中号确定后执行写回与可观测日志：lastUsed / usedSeq / pickReason /
+// half-open 试探占位全部原子化（ADR-005 D-500：读锁下不写普通字段）。
+func (p *Pool) commitPick(sel pickSelection, reqModel, realm string, now time.Time, class RequestClass) {
+	e := sel.e
+	if sel.explored {
 		// 探索事件日志（可观测性）：选中号此时才确定，故在选中点打出。
 		// 毕业结果由相邻的既有日志闭环（免费号无日志、收费号走 NoteModelCost
 		// 常规路径）。
@@ -330,7 +349,7 @@ func (p *Pool) pick(tried map[string]bool, reqModel, realm, group string, class 
 	// 原子写回（ADR-005 D-500）：读锁下用 atomic 标记选中，不写普通字段。
 	e.setLastUsed(now)
 	_, inBand := p.softBandFactorOf(e, now, class)
-	e.setPickReason(&pickReason{Mode: pickMode, Tier: bestTier, Explored: explored,
+	e.setPickReason(&pickReason{Mode: sel.mode, Tier: sel.tier, Explored: sel.explored,
 		Probe:    p.breakerProbeGap > 0 && !e.breakerUntil.IsZero() && now.After(e.breakerUntil) && e.retryCount > 0,
 		Softband: inBand, At: now})
 	seq := p.pickSeq.Add(1)
@@ -341,7 +360,6 @@ func (p *Pool) pick(tried map[string]bool, reqModel, realm, group string, class 
 	if p.breakerProbeGap > 0 && !e.breakerUntil.IsZero() && now.After(e.breakerUntil) && e.retryCount > 0 {
 		e.setProbeAt(now)
 	}
-	return e.a
 }
 
 // pickNonCredits 非 credits 账号选号（metered / window，ADR-026）。
@@ -530,6 +548,18 @@ func (p *Pool) pickEarliestExpiryLocked(tried map[string]bool, now time.Time, re
 	seq := p.pickSeq.Add(1)
 	best.usedSeq.Store(seq)
 	return best.a
+}
+
+// maxCreditsOf 返回候选集的最高 credits（**全集口径**：截断排序与抽签权重共用
+// 同一基准，两阶段才可比）。候选为空时返回 0。
+func maxCreditsOf(cands []*entry) int64 {
+	var m int64
+	for _, e := range cands {
+		if e.credits > m {
+			m = e.credits
+		}
+	}
+	return m
 }
 
 // inFlightFull 报告账号是否已占满在途名额（上限按 realm 分档，见 inFlightLimit；
