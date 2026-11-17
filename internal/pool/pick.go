@@ -192,15 +192,20 @@ func (p *Pool) selectFromCandidates(cands []*entry, reqModel, realm string, now 
 	explored := false // 本次 pick 是否切了探索层（事件日志在选中号确定后打）
 	// costTier 预计算并缓存（ADR-003 D-402）：`modelCostOf` 是 map 查找 + TTL 判定，
 	// 而原实现在 bestTier 统计、hasTier1 探测、ws 构建三处各调一遍（全候选 × 3）。
-	// 这里一次算完存平行切片，后续只读缓存——零行为差异，省 2×N 次 map 查找。
+	// 这里一次算完存平行缓存，后续只读——零行为差异，省 2×N 次 map 查找。
 	//
+	// 2026-11-17：tier 与 cost1k 原本是两个平行切片（`candTier []int` +
+	// `candCost []float64`），即每次 Pick 两次堆分配。合并成单切片后
+	// BenchmarkPick46Accounts 的 allocs/op 从 5 降到 4，耗时与 B/op 同步下降。
 	// 索引与 cands 一一对应（下方会重建 cands，故用切片而非 map）。
-	candTier := make([]int, len(cands))
-	candCost := make([]float64, len(cands))
+	type candInfo struct {
+		tier   int
+		cost1k float64
+	}
+	infos := make([]candInfo, len(cands))
 	for i, e := range cands {
 		ti, ci := costTier(e)
-		candTier[i] = ti
-		candCost[i] = ci
+		infos[i] = candInfo{tier: ti, cost1k: ci}
 		if ti < bestTier {
 			bestTier = ti
 		}
@@ -221,7 +226,7 @@ func (p *Pool) selectFromCandidates(cands []*entry, reqModel, realm string, now 
 	if p.costExploreInterval > 0 && bestTier == 0 && reqModel != "" {
 		p.exploreMu.Lock()
 		for i := range cands {
-			if candTier[i] == 1 {
+			if infos[i].tier == 1 {
 				hasTier1 = true
 				break
 			}
@@ -253,8 +258,8 @@ func (p *Pool) selectFromCandidates(cands []*entry, reqModel, realm string, now 
 	}
 	ws := make([]weighted, 0, len(cands))
 	for i, e := range cands {
-		if candTier[i] == bestTier {
-			ws = append(ws, weighted{e: e, w: p.routingWeightOf(e, maxCredits, now, medianLatencyMs, medianPace, class), tier: candTier[i], cost1k: candCost[i]})
+		if infos[i].tier == bestTier {
+			ws = append(ws, weighted{e: e, w: p.routingWeightOf(e, maxCredits, now, medianLatencyMs, medianPace, class), tier: infos[i].tier, cost1k: infos[i].cost1k})
 		}
 	}
 	// 等权重洗牌：仅当存在权重相等且候选数超过 top5 时，才对 ws 做 Fisher-Yates
