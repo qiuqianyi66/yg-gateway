@@ -414,7 +414,9 @@ func ToolNameAllowlistView(v *session.RequestView) map[string]bool {
 		return nil
 	}
 	names := map[string]bool{}
-	bad := false // 任一条目畸形 → 整份名单作废（对齐旧实现的整体失败语义）
+	// 任一条目畸形 → 整份名单立即作废（对齐旧实现的整体失败语义）。
+	// 用 return 而不是置 bad 标记后 break：break 只跳出当前那一个来源的循环，
+	// 后面两个来源仍会被完整遍历一遍，而结果注定是 nil——白跑在每请求热路径上。
 	for _, raw := range v.Tools() {
 		var t struct {
 			Name     string `json:"name"`
@@ -423,8 +425,7 @@ func ToolNameAllowlistView(v *session.RequestView) map[string]bool {
 			} `json:"function"`
 		}
 		if err := json.Unmarshal(raw, &t); err != nil {
-			bad = true
-			break
+			return nil
 		}
 		if t.Function != nil && t.Function.Name != "" {
 			names[t.Function.Name] = true
@@ -439,8 +440,7 @@ func ToolNameAllowlistView(v *session.RequestView) map[string]bool {
 			Name string `json:"name"`
 		}
 		if err := json.Unmarshal(raw, &f); err != nil {
-			bad = true
-			break
+			return nil
 		}
 		if f.Name != "" {
 			names[f.Name] = true
@@ -458,8 +458,7 @@ func ToolNameAllowlistView(v *session.RequestView) map[string]bool {
 			} `json:"function_call"`
 		}
 		if err := json.Unmarshal(raw, &m); err != nil {
-			bad = true
-			break
+			return nil
 		}
 		for _, tc := range m.ToolCalls {
 			if tc.Function != nil && tc.Function.Name != "" {
@@ -470,7 +469,7 @@ func ToolNameAllowlistView(v *session.RequestView) map[string]bool {
 			names[m.FunctionCall.Name] = true
 		}
 	}
-	if bad || len(names) == 0 {
+	if len(names) == 0 {
 		return nil
 	}
 	return names
