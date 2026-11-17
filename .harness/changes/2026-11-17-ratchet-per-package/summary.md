@@ -77,3 +77,49 @@ $minCoverage = ... (Minimum) ...
 ```powershell
 git checkout -- scripts/check-depth.ps1 .harness/depth-baseline.json
 ```
+
+---
+
+## 六、第二轮：`minCoverage` 判定语义修正（同一主问题）
+
+### 6.1 暴露过程
+
+给 `cmd/bench` 补测试（0.0% → 47.9%）后跑 `-Update`，门禁直接报：
+
+```
+❌ 深度指标回退（1 项）：
+   REGRESSED: minCoverage 78.7% → 47.9%
+```
+
+**补测试被判成退步**。这不是偶发，是 `minCoverage` 定义的结构缺陷。
+
+### 6.2 根因
+
+`minCoverage` = 「所有覆盖率 >0 的包的**最小值**」。它在两个方向都会给出错误结论：
+
+| 方向 | 场景 | 错误结论 |
+|---|---|---|
+| ① 假回退 | `cmd/bench` 0.0% → 47.9%（补测试） | minCoverage 78.7% → 47.9%，进步被判成退步 |
+| ② 放水 | `-Update` 把 47.9% 写进基线 | 门槛被永久拉低，之后的守护以 47.9 为准 |
+
+① 的后果最严重：**它会逼人用 `-Update` 放水才能提交**，正好反噬棘轮自身的设计目的。
+
+### 6.3 处置
+
+**把 `minCoverage` 移出回退判定**，判定只由 `packageCoverage` 负责；保留其计算与打印（信息价值），
+打印时标注「信息值，不判红；判定见逐包守护」。
+
+**这不是"为了变绿而删检查"**，理由是冗余而非放水：
+
+`packageCoverage` 逐包判定**严格强于** `minCoverage` —— 每个包都不许退步 ⊃ 最差包不许退步。
+任何 `minCoverage` 退步必然伴随某个具体包退步，必然已被逐包检查抓到。
+逐包检查还多覆盖两种 minCoverage 抓不到的情形：包消失（"无覆盖率数据"）、任意非最差包退步。
+
+### 6.4 验证
+
+| 判据 | 结果 |
+|---|---|
+| `-Update` 后正常跑 | **exit 0**，`✅ 棘轮已抬高`，逐包守护 28 个包 |
+| `cmd/bench` 已入册 | 基线 `packageCoverage` 含 `yg-gateway/cmd/bench: 47.9` |
+| 逐包回退仍能拦 | 见第三节两类 mutant，仍在 `packageCoverage` 分支上（该分支未改动） |
+

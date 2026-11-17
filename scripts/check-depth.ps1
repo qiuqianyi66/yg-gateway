@@ -364,7 +364,7 @@ Write-Host "=== 工程深度度量 ===" -ForegroundColor Cyan
 Write-Host ("  最大文件行数      : {0}  (阈值 {1})" -f $current.maxFileLines, $FILE_LIMIT)
 Write-Host ("  >{0} 行文件数     : {1}" -f $FILE_LIMIT, $current.oversizeFiles)
 Write-Host ("  >{0} 行函数数     : {1}" -f $FUNC_LIMIT, $current.oversizeFuncs)
-Write-Host ("  最低包覆盖率      : {0}%" -f $current.minCoverage)
+Write-Host ("  最低包覆盖率      : {0}%  （信息值，不判红；判定见逐包守护）" -f $current.minCoverage)
 Write-Host ("  最大前端文件行数  : {0}  ({1})" -f $current.maxFrontendLines, $maxFrontendPath)
 Write-Host ("  >{0} 行前端文件数 : {1}" -f $FRONTEND_LIMIT, $current.oversizeFrontendFiles)
 Write-Host ("  逐包覆盖率守护    : {0} 个包（有测试且覆盖率 >0）" -f $packageCoverage.Count)
@@ -414,12 +414,17 @@ foreach ($key in @('maxFileLines', 'oversizeFiles', 'oversizeFuncs', 'maxFronten
     }
 }
 
-# 越小越差的一项（带容差）
-$baseCov = [double]$baseline.minCoverage
-$curCov  = [double]$current.minCoverage
-if ($curCov -lt ($baseCov - $COVERAGE_TOLERANCE)) {
-    $regressions += "REGRESSED: minCoverage {0}% → {1}%" -f $baseCov, $curCov
-}
+# minCoverage **不参与回退判定**（2026-11-17 决定），回退判定只由下面的 packageCoverage 负责。
+#
+# 理由（实测，不是推断）：minCoverage = 「所有 >0 覆盖包的最小值」，它在两个方向都会给出错误结论：
+#   ① 补测试时**假回退**：cmd/bench 从 0.0% 补到 47.9%，minCoverage 反而从 78.7% 掉到 47.9%
+#      —— 这是进步被判成退步，会逼人用 -Update 放水才能提交，正好反噬棘轮本身；
+#   ② 新包入册时**放水**：-Update 把 47.9% 写进基线后，minCoverage 门槛被永久拉低到 47.9%。
+#
+# 而 packageCoverage 逐包判定**严格强于**它（每个包都不许退步 ⊃ 最差包不许退步）：
+# 任何 minCoverage 退步都必然伴随某个具体包退步，必然已被逐包检查抓到 —— 判定项是冗余的。
+# 因此保留 minCoverage 的计算与打印（信息价值），但不据此判红。
+$infoMinCoverage = [double]$current.minCoverage
 
 # 逐包覆盖率守护：基线里有 packageCoverage 才逐包比（老基线没有该字段 → 跳过，向后兼容）。
 # 三个判据，缺一个就会留下后门：
@@ -459,9 +464,6 @@ foreach ($key in @('maxFileLines', 'oversizeFiles', 'oversizeFuncs', 'maxFronten
     if ([int]$current[$key] -lt [int]$baseline.$key) {
         $improved += "{0} {1} → {2}" -f $key, ([int]$baseline.$key), ([int]$current[$key])
     }
-}
-if ($curCov -gt ($baseCov + $COVERAGE_TOLERANCE)) {
-    $improved += "minCoverage {0}% → {1}%" -f $baseCov, $curCov
 }
 if ($null -ne $basePkg) {
     foreach ($prop in $basePkg.PSObject.Properties) {

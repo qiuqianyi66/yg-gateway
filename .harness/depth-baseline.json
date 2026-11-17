@@ -5,10 +5,11 @@
                     "maxFileLines":  801,
                     "oversizeFiles":  0,
                     "oversizeFuncs":  0,
-                    "minCoverage":  78.7,
+                    "minCoverage":  47.9,
                     "maxFrontendLines":  1368,
                     "oversizeFrontendFiles":  1,
                     "packageCoverage":  {
+                                            "yg-gateway/cmd/bench":  47.9,
                                             "yg-gateway/cmd/credit":  86.1,
                                             "yg-gateway/cmd/login":  99.2,
                                             "yg-gateway/cmd/server":  79.3,
