@@ -4,7 +4,9 @@
    加载顺序：panelScripts 中排在 app.js 之后。CMD_ITEMS 的动作全是箭头函数，
    运行时才求值 go/openAdd/openPlayground/$ 等符号，顶层不立即读取。
 
-   注意：app.js 里用 setTimeout(..., 0) 延迟调用 initCmdPalette()。
+   初始化由本文件末尾自己完成（initCmdPalette()），不依赖 app.js 的延迟调用：
+   setTimeout(0) 会被 <script src> 的网络往返抢先、DOMContentLoaded 在动态插入时
+   不触发——两种"外部等时机"的办法都不成立（CI e2e 抓到过 setTimeout 版本抛错）。
 
    依赖（运行时解析）：app.js 的 $ / go，其余动作函数由各自组件提供。 */
 
@@ -65,3 +67,6 @@ function updateCmdActive() {
   document.querySelectorAll('.cmd-item').forEach((el, i) => el.classList.toggle('active', i === cmdActive));
   const active = document.querySelector('.cmd-item.active'); if (active) active.scrollIntoView({ block: 'nearest' });
 }
+
+// 自初始化：本文件所有依赖（$、DOM 节点）此时都已就绪——脚本在 </body> 前加载。
+initCmdPalette();

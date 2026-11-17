@@ -1413,10 +1413,9 @@ if ($('btnExp')) $('btnExp').onclick = () => loadExpiry(true);
 // 「刷新」始终实时查（显式 force，不依赖事件对象真值）
 if ($('btnPk')) $('btnPk').onclick = () => loadPackages(true);
 
-// 通知中心与命令面板的实现已拆到 app_notifs.js / app_cmdp.js，二者均排在 app.js 之后。
-// 必须延迟到同级脚本全部求值完毕再初始化：顶层同步调用会在本文件求值时读取尚未定义的
-// 符号 → ReferenceError → 后续语句（含末尾 start()）不执行（同 btnPlayground 绑定的坑）。
-setTimeout(() => { initNotifCenter(); initCmdPalette(); }, 0);
+// 通知中心/命令面板的初始化由各自文件末尾自己完成（见 app_notifs.js、app_cmdp.js）。
+// 不能在 app.js 里延迟调用：setTimeout(0) 会被 <script src> 的网络往返抢先，DOMContentLoaded
+// 分支在"脚本动态插入"时又必然立即调用未定义符号——两者都不成立（CI e2e 抓到过前者）。
 
 if ($('btnPlayground')) $('btnPlayground').onclick = () => openPlayground();
 if ($('btnPgSend')) $('btnPgSend').onclick = () => sendPlayground();

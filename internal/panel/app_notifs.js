@@ -2,10 +2,12 @@
    从 app.js 拆出的第十二个组件（2026-11-17）。
 
    加载顺序：panelScripts 中排在 app.js 之后。所有函数只在事件处理器、
-   toast() 内部与延迟初始化里调用，app.js 顶层不读取本文件符号。
+   toast() 内部与本文件末尾的自初始化里调用，app.js 顶层不读取本文件符号。
 
-   注意：app.js 里用 setTimeout(..., 0) 延迟调用 initNotifCenter()。
-   顶层同步直接调用会 ReferenceError——本文件尚未加载（同 app_playground.js 的坑）。
+   初始化由本文件末尾自己完成（initNotifCenter()），不依赖 app.js 的延迟调用：
+   setTimeout(0) 会被 <script src> 的网络往返抢先、DOMContentLoaded 在动态插入时
+   不触发——两种"外部等时机"的办法都不成立（CI e2e 抓到过 setTimeout 版本抛
+   `initNotifCenter is not defined`）。自己初始化自己，时序上不可能失配。
 
    依赖（运行时解析）：app.js 的 $，app_core.js 的 esc（本文件未用）。 */
 
@@ -65,3 +67,6 @@ function initNotifCenter() {
     if (!e.target.closest('#notifPanel') && !e.target.closest('#btnNotif')) $('notifPanel').hidden = true;
   });
 }
+
+// 自初始化：本文件所有依赖（$、DOM 节点）此时都已就绪——脚本在 </body> 前加载。
+initNotifCenter();
