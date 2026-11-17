@@ -60,11 +60,15 @@ type anthropicMsg struct {
 }
 
 type anthropicResp struct {
-	ID      string `json:"id"`
-	Type    string `json:"type"`
-	Role    string `json:"role"`
-	Model   string `json:"model"`
-	Content []struct {
+	ID    string `json:"id"`
+	Type  string `json:"type"`
+	Role  string `json:"role"`
+	Model string `json:"model"`
+	// StopReason 是 Anthropic 规范的**必需**字段（end_turn / max_tokens / tool_use / stop_sequence）。
+	// 2026-11-17 前这里没有该字段：上游 finish_reason 被丢弃，于是「被 max_tokens 截断」
+	// 和「正常结束」在 Anthropic 客户端看来完全一样，客户端既不知道要不要续写，也不会告警。
+	StopReason string `json:"stop_reason"`
+	Content    []struct {
 		Type string `json:"type"`
 		Text string `json:"text"`
 	} `json:"content"`
@@ -82,12 +86,29 @@ type openAICompletionResp struct {
 		Message struct {
 			Content string `json:"content"`
 		} `json:"message"`
+		FinishReason string `json:"finish_reason"`
 	} `json:"choices"`
 	Usage struct {
 		PromptTokens     int64 `json:"prompt_tokens"`
 		CompletionTokens int64 `json:"completion_tokens"`
 		TotalTokens      int64 `json:"total_tokens"`
 	} `json:"usage"`
+}
+
+// anthropicStopReason 把 OpenAI finish_reason 映射成 Anthropic stop_reason。
+//
+// 未知值一律退到 end_turn：规范里 stop_reason 必填，留空会让客户端解析失败；
+// 而 end_turn 是"没有更具体的结论可用"时最保守的取值（与早前硬编码行为一致，
+// 区别只是现在 len/工具调用能被正确识别）。缺省（上游未给）同样是 end_turn。
+func anthropicStopReason(finish string) string {
+	switch finish {
+	case "length":
+		return "max_tokens"
+	case "tool_calls", "function_call":
+		return "tool_use"
+	default:
+		return "end_turn"
+	}
 }
 
 // transformAnthropicToOpenAI 把 Anthropic 请求 body 转成 OpenAI chat completions body。
@@ -121,15 +142,17 @@ func transformAnthropicToOpenAI(body []byte) ([]byte, error) {
 
 // transformOpenAIToAnthropic 把 OpenAI 响应转成 Anthropic 响应。
 func transformOpenAIToAnthropic(o openAICompletionResp) anthropicResp {
-	var text string
+	var text, finish string
 	if len(o.Choices) > 0 {
 		text = o.Choices[0].Message.Content
+		finish = o.Choices[0].FinishReason
 	}
 	return anthropicResp{
-		ID:    "msg_" + o.ID,
-		Type:  "message",
-		Role:  "assistant",
-		Model: o.Model,
+		ID:         "msg_" + o.ID,
+		Type:       "message",
+		Role:       "assistant",
+		Model:      o.Model,
+		StopReason: anthropicStopReason(finish),
 		Content: []struct {
 			Type string `json:"type"`
 			Text string `json:"text"`
@@ -187,7 +210,18 @@ func (h *Handler) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 	internalReq.Header.Set("Content-Type", "application/json")
 
 	if streamReq {
-		h.anthropicStream(w, internalReq)
+		// Anthropic 流式要求 message_start 里带 model，而该事件必须先于上游首 chunk 发出，
+		// 此时还拿不到上游 model —— 回显请求里的 model（与 Anthropic 官方语义一致：
+		// 响应 model 就是客户端请求的模型）。openAIBody 由本包 Marshal 产生，解析必成功；
+		// 仍显式处理 error，不吞（R10）。
+		var echo struct {
+			Model string `json:"model"`
+		}
+		if err := json.Unmarshal(openAIBody, &echo); err != nil {
+			writeOpenAIError(w, http.StatusInternalServerError, "internal_error", "echo model: "+err.Error())
+			return
+		}
+		h.anthropicStream(w, internalReq, echo.Model)
 		return
 	}
 
@@ -219,7 +253,8 @@ func (h *Handler) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 }
 
 // anthropicStream 流式分支：把 OpenAI SSE 输出逐 chunk 转 Anthropic SSE 事件。
-func (h *Handler) anthropicStream(w http.ResponseWriter, r *http.Request) {
+// echoModel 用于 message_start 回显（见 anthropicMessages 里的说明）。
+func (h *Handler) anthropicStream(w http.ResponseWriter, r *http.Request, echoModel string) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
@@ -232,7 +267,7 @@ func (h *Handler) anthropicStream(w http.ResponseWriter, r *http.Request) {
 			"id":      "msg_" + strconv.FormatInt(time.Now().UnixNano(), 10),
 			"type":    "message",
 			"role":    "assistant",
-			"model":   "",
+			"model":   echoModel,
 			"content": []any{},
 			"usage":   map[string]int{"input_tokens": 0, "output_tokens": 0},
 		},
@@ -246,12 +281,15 @@ func (h *Handler) anthropicStream(w http.ResponseWriter, r *http.Request) {
 	sw := &streamInterceptWriter{ResponseWriter: w, flusher: flusher}
 	h.chatCompletions(sw, r)
 
-	// 结尾事件。
+	// 结尾事件用上游真实终态：model 来自首个带 model 的 chunk，stop_reason 由
+	// finish_reason 映射（缺省时 anthropicStopReason 已退到 end_turn），output_tokens
+	// 取上游 usage（捕获不到为 0）。不能再像旧实现那样无条件硬编码。
+	stopReason := anthropicStopReason(sw.finishReason)
 	writeSSEEvent(w, flusher, "content_block_stop", map[string]any{"type": "content_block_stop", "index": 0})
 	writeSSEEvent(w, flusher, "message_delta", map[string]any{
 		"type":  "message_delta",
-		"delta": map[string]string{"stop_reason": "end_turn"},
-		"usage": map[string]int{"output_tokens": 0},
+		"delta": map[string]string{"stop_reason": stopReason},
+		"usage": map[string]int64{"output_tokens": sw.completionTokens},
 	})
 	writeSSEEvent(w, flusher, "message_stop", map[string]any{"type": "message_stop"})
 	if flusher != nil {
@@ -271,11 +309,21 @@ func writeSSEEvent(w http.ResponseWriter, f http.Flusher, event string, data any
 }
 
 // streamInterceptWriter 逐行拦截 OpenAI SSE，把 delta.content 转成 Anthropic content_block_delta。
+//
+// 同时捕获上游终态（model / usage / finish_reason）：这四项决定了 Anthropic SSE 里
+// message_start 的 model、message_delta 的 stop_reason 与 output_tokens。
+// 2026-11-17 前它们被硬编码成 ""/0/0 —— 流式客户端既看不到真实模型名，
+// 也永远看不到「被 max_tokens 截断」，成本核算与续写判断都失去了依据。
 type streamInterceptWriter struct {
 	http.ResponseWriter
 	flusher http.Flusher
 	lineBuf bytes.Buffer
 	done    bool
+	// 捕获项（最后出现的值生效：上游通常只在最后一个 chunk 给 usage/finish_reason）。
+	model            string
+	finishReason     string
+	promptTokens     int64
+	completionTokens int64
 }
 
 func (sw *streamInterceptWriter) Write(b []byte) (int, error) {
@@ -299,16 +347,32 @@ func (sw *streamInterceptWriter) Write(b []byte) (int, error) {
 			sw.done = true
 			break
 		}
-		// 解析 OpenAI delta：{"choices":[{"delta":{"content":"xxx"}}]}
+		// 解析 OpenAI chunk：delta.content 用于转换，model/finish_reason/usage 用于终态。
 		var chunk struct {
+			Model   string `json:"model"`
 			Choices []struct {
 				Delta struct {
 					Content string `json:"content"`
 				} `json:"delta"`
+				FinishReason string `json:"finish_reason"`
 			} `json:"choices"`
+			Usage *struct {
+				PromptTokens     int64 `json:"prompt_tokens"`
+				CompletionTokens int64 `json:"completion_tokens"`
+			} `json:"usage"`
 		}
 		if err := json.Unmarshal([]byte(payload), &chunk); err != nil {
 			continue
+		}
+		if chunk.Model != "" {
+			sw.model = chunk.Model
+		}
+		if len(chunk.Choices) > 0 && chunk.Choices[0].FinishReason != "" {
+			sw.finishReason = chunk.Choices[0].FinishReason
+		}
+		if chunk.Usage != nil {
+			sw.promptTokens = chunk.Usage.PromptTokens
+			sw.completionTokens = chunk.Usage.CompletionTokens
 		}
 		if len(chunk.Choices) > 0 && chunk.Choices[0].Delta.Content != "" {
 			writeSSEEvent(sw.ResponseWriter, sw.flusher, "content_block_delta", map[string]any{
