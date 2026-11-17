@@ -4,8 +4,11 @@ import (
 	"bytes"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"yg-gateway/internal/auth"
 )
 
 // TestTransformOpenAIToAnthropicStopReason 断言非流式 Anthropic 响应的 stop_reason 保真。
@@ -135,6 +138,51 @@ func TestStreamInterceptWriterSurvivesSplitLines(t *testing.T) {
 		if !strings.Contains(rec.body.String(), `"text":"跨块"`) {
 			t.Fatalf("在 %d 字节处切分后内容丢失: %q", cut, rec.body.String())
 		}
+	}
+}
+
+// TestAnthropicStreamReportsRealTerminalState 是流式路径的端到端验证。
+//
+// 前面三个用例只测了纯逻辑单元；anthropicStream 是把它们编排起来的函数，
+// 改完 model/stop_reason/usage 后如果只靠单元测试，编排层仍是 0% 覆盖 —— 等于
+// "改了这个函数但没验证过这个函数"。这里用 fake 上游跑一遍真实链路。
+//
+// 牙齿：把 message_start 的 model 改回 ""、或把 message_delta 的 stop_reason 改回
+// 硬编码 end_turn / output_tokens 改回 0 → 本测试 FAIL。
+func TestAnthropicStreamReportsRealTerminalState(t *testing.T) {
+	const upSSE = "" +
+		`data: {"id":"chatcmpl-1","object":"chat.completion.chunk","model":"glm-5.2","choices":[{"index":0,"delta":{"role":"assistant","content":"你好"}}]}` + "\n\n" +
+		// 上游明确给了 length（被 max_tokens 截断）与 usage —— 两者都必须透传，
+		// 否则客户端会把截断当正常结束、把成本算成 0。
+		`data: {"id":"chatcmpl-1","object":"chat.completion.chunk","model":"glm-5.2","choices":[{"index":0,"delta":{},"finish_reason":"length"}],"usage":{"prompt_tokens":5,"completion_tokens":9,"total_tokens":14}}` + "\n\n" +
+		`data: [DONE]` + "\n\n"
+
+	up := newFakeUpstream(t, func(string) (int, string, bool) { return 200, upSSE, true })
+	p := testPoolWith(&auth.Auth{UID: "u1", AccessToken: "at1", ExpiresAt: 9999999999})
+	h := NewHandler(Config{Pool: p, Upstream: up})
+
+	body := `{"model":"glm-5.2","max_tokens":64,"stream":true,"messages":[{"role":"user","content":"hi"}]}`
+	rec := httptest.NewRecorder()
+	h.anthropicMessages(rec, httptest.NewRequest("POST", "/v1/messages", strings.NewReader(body)))
+
+	out := rec.Body.String()
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, out)
+	}
+	for _, want := range []struct{ label, needle string }{
+		{"message_start 回显请求 model", `"model":"glm-5.2"`},
+		{"content 转成 text_delta", `"text":"你好"`},
+		{"stop_reason 由 finish_reason=length 映射", `"stop_reason":"max_tokens"`},
+		{"output_tokens 取上游 usage", `"output_tokens":9`},
+		{"message_stop 收尾", `"type":"message_stop"`},
+	} {
+		if !strings.Contains(out, want.needle) {
+			t.Errorf("%s：输出里没有 %s\n实际输出:\n%s", want.label, want.needle, out)
+		}
+	}
+	// 截断绝不能被报成正常结束。
+	if strings.Contains(out, `"stop_reason":"end_turn"`) {
+		t.Errorf("上游 finish_reason=length 时仍报 end_turn（截断被伪装成正常结束）:\n%s", out)
 	}
 }
 

@@ -49,10 +49,10 @@ internal\server\anthropic_fidelity_test.go:99:8: sw.model undefined
 
 | 判据 | 命令 | 结果 |
 |---|---|---|
-| 新增 4 用例 | `go test ./internal/server/ -run 'TestTransformOpenAIToAnthropic\|TestStreamInterceptWriter' -v` | **4 PASS** |
-| 全包回归 | `go test ./internal/server/` | **ok 8.887s** |
+| 新增 5 用例 | `go test ./internal/server/ -run 'TestTransformOpenAIToAnthropic\|TestStreamInterceptWriter\|TestAnthropicStreamReportsRealTerminalState' -v` | **5 PASS** |
+| 全包回归 | `go test ./internal/server/` | **ok 8.858s** |
 | 格式 | `gofmt -l ./cmd ./internal` | 无输出 |
-| 覆盖率 | `go test ./internal/server/ -coverprofile` | **78.5% → 79.6%** |
+| 覆盖率 | `go test ./internal/server/ -coverprofile` | **78.5% → 80.5%** |
 
 覆盖率变化明细（`go tool cover -func`）：
 
@@ -60,8 +60,17 @@ internal\server\anthropic_fidelity_test.go:99:8: sw.model undefined
 |---|---|---|
 | `transformOpenAIToAnthropic` | 0.0% | **100.0%** |
 | `anthropicStopReason`（新增） | — | **100.0%** |
+| `anthropicStream` | 0.0% | **100.0%** |
 | `streamInterceptWriter.Write` | 0.0% | **92.9%** |
-| `writeSSEEvent` | 0.0% | 75.0% |
+| `writeSSEEvent` | 0.0% | **100.0%** |
+| `anthropicMessages` | 59.1% | 68.2% |
+
+`anthropicStream` 从 0% 到 100% 靠的是第 5 个用例 `TestAnthropicStreamReportsRealTerminalState`
+—— 用 `newFakeUpstream` + `testPoolWith` 造真实 Handler，走完整
+`anthropicMessages → anthropicStream → chatCompletions → SSE 回写` 链路。
+这不是"编排层没测"的补课，而是**本轮改动的对象本身**：改了 `anthropicStream` 却不测它，
+等于没验证过这个函数。
+
 
 ### 3.3 测试都在断言什么
 
@@ -79,12 +88,27 @@ internal\server\anthropic_fidelity_test.go:99:8: sw.model undefined
 
 ## 四、能力边界（诚实声明）
 
-- `anthropicStream` 整体仍是 **0.0%** 覆盖：它要跑 `h.chatCompletions` 全链路，
-  需要完整 Handler（Config/Pool/Upstream）。本轮测的是它依赖的两个纯逻辑单元
-  （`transformOpenAIToAnthropic`、`streamInterceptWriter`），**编排层未验证**。
-- 没有真实 Anthropic 客户端（Claude Code / anthropic SDK）联调证据。
+- **无真实 Anthropic 客户端（Claude Code / anthropic SDK）联调证据。** 端到端测试用的是
+  fake 上游 + `httptest`，验证的是"上游 OpenAI 形态 → 我们的 Anthropic SSE 输出"这段；
+  Anthropic 真客户端能否接受，本轮未验。这是 `未验证`，不是 `已验证`。
 - `message_start` 的 `usage.input_tokens` 仍为 0（该值只有上游尾 chunk 才有，
   而 message_start 在它之前发出）——属已知限制，未改。
+- `transformAnthropicToOpenAI` 80.0%、`anthropicMessages` 68.2%：未覆盖的是错误分支
+  （body 非法 JSON、上游非 200、transform 失败）。这些分支有既有用例如
+  `TestAnthropicBodyLimit` 覆盖 413，其余未逐个打穿。
+
+## 四之一、本轮发现但未修的问题（棘轮盲区）
+
+`check-depth.ps1` 的 `minCoverage` 只记录**全局最低包**的覆盖率（当前 78.7 =
+`internal/alerting`）。这意味着：
+
+- `internal/server` 从 78.5% 涨到 80.5%，**这个提升不受棘轮保护** ——
+  下次有人把它降回 79% 也不会变红。
+- 棘轮保护的是"最差的那个包别更差"，不是"每个包别退步"。
+
+修法（记录，未实施，避免与本批正交）：`depth-baseline.json` 增加
+`packageCoverage` 映射，逐包记下限。属独立主问题。
+
 
 ## 五、回滚
 
