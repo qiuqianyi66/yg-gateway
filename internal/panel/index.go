@@ -64,6 +64,12 @@ var appQRJS []byte
 //go:embed app_playground.js
 var appPlaygroundJS []byte
 
+//go:embed app_notifs.js
+var appNotifsJS []byte
+
+//go:embed app_cmdp.js
+var appCmdPJS []byte
+
 //go:embed acl_notice.js
 var aclNoticeJS []byte
 
@@ -135,6 +141,8 @@ var panelScripts = []string{
 	"app.js",
 	"app_qr.js",
 	"app_playground.js",
+	"app_notifs.js",
+	"app_cmdp.js",
 	"acl_notice.js",
 	"savings_note.js",
 	"opsagent.js",
@@ -355,6 +363,27 @@ func (p *Panel) appPlaygroundScript(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	// 忽略：静态资源全量写回，写失败即客户端断连，无可恢复语义（与 appScript 同口径）。
 	_, _ = w.Write(appPlaygroundJS)
+}
+
+// appNotifsScript 输出通知中心组件（从 app.js 拆出的第十二个组件，2026-11-17）。
+// 加载顺序：panelScripts 中排在 app.js 之后；app.js 用 setTimeout(0) 延迟初始化，
+// 避免顶层同步调用读取尚未定义的符号（见 app.js 尾部注释）。
+func (p *Panel) appNotifsScript(w http.ResponseWriter, r *http.Request) {
+	setSecurityHeaders(w)
+	w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	// 忽略：静态资源全量写回，写失败即客户端断连，无可恢复语义（与 appScript 同口径）。
+	_, _ = w.Write(appNotifsJS)
+}
+
+// appCmdPScript 输出命令面板组件（从 app.js 拆出的第十三个组件，2026-11-17）。
+// 加载顺序同上：排在 app.js 之后 + 延迟初始化。
+func (p *Panel) appCmdPScript(w http.ResponseWriter, r *http.Request) {
+	setSecurityHeaders(w)
+	w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	// 忽略：静态资源全量写回，写失败即客户端断连，无可恢复语义（与 appScript 同口径）。
+	_, _ = w.Write(appCmdPJS)
 }
 
 // aclNoticeScript 输出 F-101 面板 ACL 提示脚本（同源静态资源，与 appScript 同口径）。

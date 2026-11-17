@@ -19,6 +19,8 @@ func (p *Panel) routes() {
 	p.mux.HandleFunc("GET /panel/app.js", p.appScript)
 	p.mux.HandleFunc("GET /panel/app_qr.js", p.appQRScript)
 	p.mux.HandleFunc("GET /panel/app_playground.js", p.appPlaygroundScript)
+	p.mux.HandleFunc("GET /panel/app_notifs.js", p.appNotifsScript)
+	p.mux.HandleFunc("GET /panel/app_cmdp.js", p.appCmdPScript)
 	p.mux.HandleFunc("GET /panel/acl_notice.js", p.aclNoticeScript)
 	p.mux.HandleFunc("GET /panel/savings_note.js", p.savingsNoteScript)
 	p.mux.HandleFunc("GET /panel/opsagent.js", p.opsAgentScript)

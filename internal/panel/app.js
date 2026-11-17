@@ -124,62 +124,6 @@ function toast(msg, cls) {
   if (cls === 'err' || cls === 'ok') pushNotif(msg, '', cls === 'err' ? 'error' : 'success');
 }
 
-/* ── 通知中心：localStorage 持久化，跨刷新保留 ──────────────────────── */
-const NOTIF_KEY = 'yg_notifs_v1';
-function getNotifs() { try { return JSON.parse(localStorage.getItem(NOTIF_KEY)) || []; } catch { return []; } }
-function setNotifs(n) { try { localStorage.setItem(NOTIF_KEY, JSON.stringify(n.slice(-80))); } catch {} }
-function pushNotif(title, body, type = 'info') {
-  const n = getNotifs();
-  n.unshift({ id: Date.now() + Math.random(), title, body, type, ts: Date.now(), read: false });
-  setNotifs(n);
-  renderNotifBadge();
-}
-function renderNotifBadge() {
-  const n = getNotifs();
-  const unread = n.filter(x => !x.read).length;
-  const b = $('notifBadge');
-  if (unread > 0) { b.hidden = false; b.textContent = unread > 9 ? '9+' : String(unread); }
-  else b.hidden = true;
-}
-function renderNotifList() {
-  const n = getNotifs();
-  $('notifList').innerHTML = n.length ? n.map(x => {
-    const color = x.type === 'error' ? 'var(--bad)' : x.type === 'success' ? 'var(--ok)' : 'var(--accent)';
-    return `<div class="notif-item ${x.read ? '' : 'unread'}" data-id="${x.id}">
-      <div style="display:flex;align-items:center;gap:6px"><i style="width:6px;height:6px;border-radius:50%;background:${color};flex:none"></i><span>${x.title}</span></div>
-      ${x.body ? `<div style="color:var(--ink-3);font-size:12px;margin-top:3px">${x.body}</div>` : ''}
-      <div class="notif-time">${new Date(x.ts).toLocaleString()}</div>
-    </div>`;
-  }).join('') : '<div style="padding:28px;text-align:center;color:var(--ink-3);font-size:13px">暂无通知</div>';
-}
-function initNotifCenter() {
-  renderNotifBadge();
-  $('btnNotif').onclick = () => {
-    const p = $('notifPanel');
-    p.hidden = !p.hidden;
-    if (!p.hidden) {
-      renderNotifList();
-      const n = getNotifs();
-      n.forEach(x => x.read = true);
-      setNotifs(n);
-      renderNotifBadge();
-    }
-  };
-  $('btnNotifClear').onclick = (e) => { e.stopPropagation(); setNotifs([]); renderNotifList(); renderNotifBadge(); };
-  // 全部已读：与打开面板的自动清读同一操作，给用户一个不依赖打开面板的显式入口。
-  $('btnNotifReadAll').onclick = (e) => {
-    e.stopPropagation();
-    const n = getNotifs();
-    n.forEach(x => x.read = true);
-    setNotifs(n);
-    renderNotifList();
-    renderNotifBadge();
-  };
-  // 点外部关闭面板。
-  document.addEventListener('click', (e) => {
-    if (!e.target.closest('#notifPanel') && !e.target.closest('#btnNotif')) $('notifPanel').hidden = true;
-  });
-}
 /* ── CSV / JSON 导出 ─────────────────────────────────────────────────
    运维面板的常见诉求：把这张表导出去对账（进 Excel 做透视、按 Key 拆账、
    留档）。此前面板完全没有导出能力（无 Blob、无 download）。
@@ -1469,67 +1413,10 @@ if ($('btnExp')) $('btnExp').onclick = () => loadExpiry(true);
 // 「刷新」始终实时查（显式 force，不依赖事件对象真值）
 if ($('btnPk')) $('btnPk').onclick = () => loadPackages(true);
 
-// 初始化通知中心
-initNotifCenter();
-
-/* ── 命令面板（Ctrl+K） ─────────────────────────────────────────── */
-// 跳转命令统一走 cmdGo（与侧栏导航同路径，带 cfgDirty 守卫 + hash 同步）。
-function cmdGo(v) {
-  if (go(v)) history.pushState(null, '', '#' + v);
-}
-const CMD_ITEMS = [
-  { cat: '跳转', label: '账号池', action: () => cmdGo('accounts') },
-  { cat: '跳转', label: '用量', action: () => cmdGo('usage') },
-  { cat: '跳转', label: '任务中心', action: () => cmdGo('taskscenter') },
-  { cat: '跳转', label: '模型与档位', action: () => cmdGo('models') },
-  { cat: '跳转', label: 'API Key 管理', action: () => cmdGo('keys') },
-  { cat: '跳转', label: '运行日志', action: () => cmdGo('logs') },
-  { cat: '跳转', label: '配置', action: () => cmdGo('config') },
-  { cat: '跳转', label: '积分构成', action: () => cmdGo('packages') },
-  { cat: '操作', label: '打开 API 调试台', action: () => openPlayground() },
-  { cat: '操作', label: '添加账号', action: () => openAdd() },
-  { cat: '操作', label: '扫描全部账号待办', action: () => $('btnScanAll') && $('btnScanAll').click() },
-  { cat: '操作', label: '查询开学季券码', action: () => $('btnSchoolVouchers') && $('btnSchoolVouchers').click() },
-  { cat: '操作', label: '刷新当前页', action: () => $('btnRefresh') && $('btnRefresh').click() },
-  { cat: '操作', label: '导出请求 CSV', action: () => $('btnReqExport') && $('btnReqExport').click() },
-  { cat: '操作', label: '导出用量 CSV', action: () => $('btnUsExport') && $('btnUsExport').click() },
-  { cat: '操作', label: '导出积分 CSV', action: () => $('btnCreditExport') && $('btnCreditExport').click() },
-  { cat: '操作', label: '清空通知', action: () => { setNotifs([]); renderNotifList(); renderNotifBadge(); } },
-  { cat: '操作', label: '切换明暗主题', action: () => $('btnTheme') && $('btnTheme').click() },
-];
-let cmdFiltered = [], cmdActive = 0;
-function openCmd() { $('cmdOverlay').hidden = false; $('cmdInput').value = ''; renderCmdList(''); setTimeout(() => $('cmdInput').focus(), 10); }
-function closeCmd() { $('cmdOverlay').hidden = true; }
-function renderCmdList(q) {
-  q = (q || '').toLowerCase().trim();
-  cmdFiltered = q ? CMD_ITEMS.filter(x => x.label.toLowerCase().includes(q) || x.cat.toLowerCase().includes(q)) : CMD_ITEMS.slice();
-  cmdActive = 0;
-  $('cmdList').innerHTML = cmdFiltered.length ? cmdFiltered.map((x, i) =>
-    `<div class="cmd-item ${i === 0 ? 'active' : ''}" data-i="${i}"><span class="cmd-cat">${x.cat}</span><span>${x.label}</span></div>`
-  ).join('') : '<div style="padding:20px;text-align:center;color:var(--ink-3);font-size:13px">无匹配命令</div>';
-}
-function initCmdPalette() {
-  document.addEventListener('keydown', (e) => {
-    if ((e.ctrlKey || e.metaKey) && e.key === 'k') { e.preventDefault(); $('cmdOverlay').hidden ? openCmd() : closeCmd(); }
-    if (e.key === 'Escape' && !$('cmdOverlay').hidden) closeCmd();
-    if ($('cmdOverlay').hidden) return;
-    if (e.key === 'ArrowDown') { e.preventDefault(); cmdActive = Math.min(cmdActive + 1, cmdFiltered.length - 1); updateCmdActive(); }
-    if (e.key === 'ArrowUp') { e.preventDefault(); cmdActive = Math.max(cmdActive - 1, 0); updateCmdActive(); }
-    if (e.key === 'Enter' && cmdFiltered[cmdActive]) { e.preventDefault(); const item = cmdFiltered[cmdActive]; closeCmd(); item.action(); }
-  });
-  $('cmdInput').addEventListener('input', () => renderCmdList($('cmdInput').value));
-  $('cmdList').addEventListener('click', (e) => {
-    const el = e.target.closest('.cmd-item'); if (!el) return;
-    const i = Number(el.dataset.i); const item = cmdFiltered[i]; if (!item) return;
-    closeCmd(); item.action();
-  });
-  $('cmdOverlay').addEventListener('click', (e) => { if (e.target === $('cmdOverlay')) closeCmd(); });
-}
-function updateCmdActive() {
-  document.querySelectorAll('.cmd-item').forEach((el, i) => el.classList.toggle('active', i === cmdActive));
-  const active = document.querySelector('.cmd-item.active'); if (active) active.scrollIntoView({ block: 'nearest' });
-}
-initCmdPalette();
+// 通知中心与命令面板的实现已拆到 app_notifs.js / app_cmdp.js，二者均排在 app.js 之后。
+// 必须延迟到同级脚本全部求值完毕再初始化：顶层同步调用会在本文件求值时读取尚未定义的
+// 符号 → ReferenceError → 后续语句（含末尾 start()）不执行（同 btnPlayground 绑定的坑）。
+setTimeout(() => { initNotifCenter(); initCmdPalette(); }, 0);
 
 if ($('btnPlayground')) $('btnPlayground').onclick = () => openPlayground();
 if ($('btnPgSend')) $('btnPgSend').onclick = () => sendPlayground();

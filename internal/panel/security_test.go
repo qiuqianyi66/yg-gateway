@@ -33,6 +33,8 @@ func TestSecurityHeadersOnAllPanelResponses(t *testing.T) {
 		{"GET", "/panel/app_views_achievements.js"}, // 成就带组件（P1，2026-11-03）
 		{"GET", "/panel/app_qr.js"},
 		{"GET", "/panel/app_playground.js"}, // Playground 组件（2026-11-17 从 app.js 拆出）
+		{"GET", "/panel/app_notifs.js"},     // 通知中心组件（同上）
+		{"GET", "/panel/app_cmdp.js"},       // 命令面板组件（同上）
 		{"GET", "/panel/gamify.css"},        // 游戏化动效层独立样式（P0，2026-11-03）
 		{"GET", "/panel/app.css"},           // 面板基础样式层（2026-11-15 从 index.html 抽出）
 		{"GET", "/panel/panel.css"},         // 命令面板 / Playground 样式（2026-11-15 抽出）
