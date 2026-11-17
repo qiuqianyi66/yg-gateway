@@ -291,10 +291,19 @@ if ($CoverageStdout -ne '') {
 }
 
 $coverages = @()
+# 逐包覆盖率（2026-11-17 新增）：minCoverage 只盯"最差的那个包"，任何非最差包退步都不会红。
+# 后果实测：internal/server 从 78.5% 涨到 80.5%，这个提升**不受棘轮保护**——下次被降回 79%
+# 也不会变红。棘轮保护的是"最差的别更差"，不是"每个包别退步"。这里补上后者。
+$packageCoverage = [ordered]@{}
 foreach ($line in $coverOut) {
     if ($line -match 'coverage:\s+([\d.]+)%\s+of statements') {
         $pct = [double]$Matches[1]
         if ($pct -gt 0) { $coverages += $pct }
+        # go test 的输出形如 `ok  <pkg>  0.5s  coverage: 78.7% of statements`；
+        # 只取行首 ok 后的包路径。`?  <pkg>  [no test files]` 不含 coverage，天然被排除。
+        if ($line -match '^ok\s+(\S+)') {
+            $packageCoverage[$Matches[1]] = [Math]::Round($pct, 1)
+        }
     }
 }
 
@@ -348,6 +357,7 @@ $current = [ordered]@{
     minCoverage           = [double]$minCoverage
     maxFrontendLines      = [int]$maxFrontendLines
     oversizeFrontendFiles = [int]$oversizeFrontend.Count
+    packageCoverage       = $packageCoverage
 }
 
 Write-Host "=== 工程深度度量 ===" -ForegroundColor Cyan
@@ -357,6 +367,7 @@ Write-Host ("  >{0} 行函数数     : {1}" -f $FUNC_LIMIT, $current.oversizeFun
 Write-Host ("  最低包覆盖率      : {0}%" -f $current.minCoverage)
 Write-Host ("  最大前端文件行数  : {0}  ({1})" -f $current.maxFrontendLines, $maxFrontendPath)
 Write-Host ("  >{0} 行前端文件数 : {1}" -f $FRONTEND_LIMIT, $current.oversizeFrontendFiles)
+Write-Host ("  逐包覆盖率守护    : {0} 个包（有测试且覆盖率 >0）" -f $packageCoverage.Count)
 Write-Host ("  覆盖率来源        : {0}" -f $coverageSource) -ForegroundColor DarkGray
 
 if ($Detail) {
@@ -410,6 +421,28 @@ if ($curCov -lt ($baseCov - $COVERAGE_TOLERANCE)) {
     $regressions += "REGRESSED: minCoverage {0}% → {1}%" -f $baseCov, $curCov
 }
 
+# 逐包覆盖率守护：基线里有 packageCoverage 才逐包比（老基线没有该字段 → 跳过，向后兼容）。
+# 三个判据，缺一个就会留下后门：
+#   ① 包还在且覆盖率 >= 基线 - 容差；
+#   ② 基线记过的包**不允许消失**（包被删/测试被删时 `no test files` 会让它从当前值里消失，
+#      只看"当前有的包退步"会把这个洞放过去）；
+#   ③ 当前新增的包不在这里判（新包纳入基线属 -Update 的事，不是回退）。
+$basePkg = $baseline.packageCoverage
+if ($null -ne $basePkg) {
+    foreach ($prop in $basePkg.PSObject.Properties) {
+        $pkg  = $prop.Name
+        $want = [double]$prop.Value
+        if (-not $packageCoverage.Contains($pkg)) {
+            $regressions += "REGRESSED: 包覆盖率 {0} {1}% → 无覆盖率数据（包消失或测试被删）" -f $pkg, $want
+            continue
+        }
+        $got = [double]$packageCoverage[$pkg]
+        if ($got -lt ($want - $COVERAGE_TOLERANCE)) {
+            $regressions += "REGRESSED: 包覆盖率 {0} {1}% → {2}%" -f $pkg, $want, $got
+        }
+    }
+}
+
 if ($regressions.Count -gt 0) {
     Write-Host ""
     Write-Host "❌ 深度指标回退（$($regressions.Count) 项）：" -ForegroundColor Red
@@ -429,6 +462,18 @@ foreach ($key in @('maxFileLines', 'oversizeFiles', 'oversizeFuncs', 'maxFronten
 }
 if ($curCov -gt ($baseCov + $COVERAGE_TOLERANCE)) {
     $improved += "minCoverage {0}% → {1}%" -f $baseCov, $curCov
+}
+if ($null -ne $basePkg) {
+    foreach ($prop in $basePkg.PSObject.Properties) {
+        $pkg = $prop.Name
+        if ($packageCoverage.Contains($pkg)) {
+            $want = [double]$prop.Value
+            $got  = [double]$packageCoverage[$pkg]
+            if ($got -gt ($want + $COVERAGE_TOLERANCE)) {
+                $improved += "包覆盖率 {0} {1}% → {2}%" -f $pkg, $want, $got
+            }
+        }
+    }
 }
 
 if ($Update) {

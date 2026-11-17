@@ -7,6 +7,35 @@
                     "oversizeFuncs":  0,
                     "minCoverage":  78.7,
                     "maxFrontendLines":  1368,
-                    "oversizeFrontendFiles":  1
+                    "oversizeFrontendFiles":  1,
+                    "packageCoverage":  {
+                                            "yg-gateway/cmd/credit":  86.1,
+                                            "yg-gateway/cmd/login":  99.2,
+                                            "yg-gateway/cmd/server":  79.3,
+                                            "yg-gateway/internal/alerting":  78.7,
+                                            "yg-gateway/internal/auth":  91.3,
+                                            "yg-gateway/internal/bench":  96.3,
+                                            "yg-gateway/internal/evidence":  94.4,
+                                            "yg-gateway/internal/growth":  93.4,
+                                            "yg-gateway/internal/httpauth":  98.6,
+                                            "yg-gateway/internal/livecfg":  92.3,
+                                            "yg-gateway/internal/logfmt":  100,
+                                            "yg-gateway/internal/metrics":  84.2,
+                                            "yg-gateway/internal/opsagent":  95.6,
+                                            "yg-gateway/internal/panel":  94.8,
+                                            "yg-gateway/internal/pkg/gosafe":  100,
+                                            "yg-gateway/internal/pkg/jsonsafe":  100,
+                                            "yg-gateway/internal/pkg/timex":  100,
+                                            "yg-gateway/internal/pool":  84.1,
+                                            "yg-gateway/internal/prompt":  93.7,
+                                            "yg-gateway/internal/redisstore":  99,
+                                            "yg-gateway/internal/reqlog":  83.3,
+                                            "yg-gateway/internal/scheduler":  94.3,
+                                            "yg-gateway/internal/server":  80.5,
+                                            "yg-gateway/internal/session":  98.1,
+                                            "yg-gateway/internal/unknown":  95.5,
+                                            "yg-gateway/internal/upstream":  89.1,
+                                            "yg-gateway/internal/usage":  83
+                                        }
                 }
 }
