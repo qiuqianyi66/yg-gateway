@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="docs/assets/banner.png" alt="YG Gateway — 多个 CodeBuddy 账号汇聚成一个 OpenAI / Anthropic 兼容端点" width="100%">
+
 # YG Gateway
 
 **Self-hosted LLM gateway for Tencent CodeBuddy — OpenAI-compatible & Anthropic-compatible reverse proxy with account pool, model routing, usage tracking, and a single ~11 MB Go binary.**
