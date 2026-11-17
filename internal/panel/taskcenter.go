@@ -20,6 +20,7 @@ import (
 
 	"yg-gateway/internal/auth"
 	"yg-gateway/internal/logfmt"
+	"yg-gateway/internal/pkg/gosafe"
 	"yg-gateway/internal/upstream"
 )
 
@@ -99,6 +100,7 @@ func (p *Panel) tasksScanAll(w http.ResponseWriter, r *http.Request) {
 		wg.Add(1)
 		go func(i int, uid string) {
 			defer wg.Done()
+			defer gosafe.Recover("panel/scan-all")
 			a := p.cfg.Pool.AuthByUID(uid)
 			if a == nil {
 				return
@@ -256,6 +258,7 @@ func (p *Panel) startGrowthQueue(concurrency int, growth bool) (started bool, to
 		wg.Add(1)
 		go func(a *auth.Auth) {
 			defer wg.Done()
+			defer gosafe.Recover("panel/taskcenter/prepare")
 			one := queueAccount{a: a}
 			// D4 门控：global 账号无 CN 成长任务体系，不发起任何上游调用。
 			if a.IsGlobal() {
@@ -356,6 +359,7 @@ func (p *Panel) runQueueItems(accts []queueAccount, items []queueItem, concurren
 		wg.Add(1)
 		go func(one queueAccount) {
 			defer wg.Done()
+			defer gosafe.Recover("panel/taskcenter/run")
 			sem <- struct{}{}
 			defer func() { <-sem }()
 			// per-account 互斥：与单任务/一键完成共用一把锁。
@@ -560,6 +564,7 @@ func (p *Panel) schoolVouchers(w http.ResponseWriter, r *http.Request) {
 		wg.Add(1)
 		go func(i int, a *auth.Auth) {
 			defer wg.Done()
+			defer gosafe.Recover("panel/school-vouchers")
 			sem <- struct{}{}
 			defer func() { <-sem }()
 			it := row{UID: a.UID, Nickname: a.Nickname}

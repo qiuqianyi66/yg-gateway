@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"yg-gateway/internal/auth"
+	"yg-gateway/internal/pkg/gosafe"
 )
 
 // GlobalModelNames 国际版（global realm）历史静态名单（PLAN §7.2 附录 21 名）。
@@ -193,6 +194,10 @@ func (c *Client) probeGlobalModels(a *auth.Auth) (names []string, infos []ModelI
 	probeV3 := func(ua string) chan probeResult {
 		ch := make(chan probeResult, 1)
 		go func() {
+			// 探测 panic 必须补发结果：ch 无人写入会让 <-ch 永久阻塞。
+			defer gosafe.RecoverWith("upstream/global-models/v3", func(p any) {
+				ch <- probeResult{err: fmt.Errorf("v3 probe panicked: %v", p)}
+			})
 			// chatBase 已按 realm 切 global base。
 			byID, perr := c.fetchV3ConfigModelMap(a, ua)
 			if perr != nil {
@@ -220,6 +225,9 @@ func (c *Client) probeGlobalModels(a *auth.Auth) (names []string, infos []ModelI
 	v3CLICh := probeV3(codeBuddyCLIUA)
 	enterpriseCh := make(chan probeResult, 1)
 	go func() {
+		defer gosafe.RecoverWith("upstream/global-models/enterprise", func(p any) {
+			enterpriseCh <- probeResult{err: fmt.Errorf("enterprise probe panicked: %v", p)}
+		})
 		// 企业端点家族：/v2 首选 → /console 兜底（既有探活序，零回归）。
 		var lastErr error
 		for _, path := range globalModelsProbePaths {

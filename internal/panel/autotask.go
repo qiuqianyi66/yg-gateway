@@ -38,6 +38,7 @@ import (
 
 	"yg-gateway/internal/auth"
 	"yg-gateway/internal/logfmt"
+	"yg-gateway/internal/pkg/gosafe"
 	"yg-gateway/internal/upstream"
 )
 
@@ -493,6 +494,9 @@ func (p *Panel) accountTaskAutoAll(w http.ResponseWriter, r *http.Request) {
 	done := make(chan []map[string]any, 1)
 	go func() {
 		defer p.unlockAccount(uid) // 流水线真正结束（而非 HTTP 超时返回）才放锁
+		// 流水线跑着上百个上游调用与事件上报，一处 panic 不应带走常驻进程。
+		// 锁的 defer 在上面，所以 panic 后账号锁照样释放，不会把号永久锁死。
+		defer gosafe.Recover("panel/auto-all")
 		done <- p.runAutoAll(a)
 	}()
 	select {

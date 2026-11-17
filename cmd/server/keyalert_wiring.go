@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"yg-gateway/internal/alerting"
+	"yg-gateway/internal/pkg/gosafe"
 	"yg-gateway/internal/usage"
 )
 
@@ -69,6 +70,7 @@ func startKeyUsageAlerts(keys []APIKeyConfig, rec *usage.Recorder, n *alerting.N
 	t := time.NewTicker(keyAlertInterval)
 	go func() {
 		defer t.Stop()
+		defer gosafe.Recover("server/keyalert")
 		for {
 			select {
 			case <-ctx.Done():

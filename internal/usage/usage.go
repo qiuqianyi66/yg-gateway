@@ -25,6 +25,7 @@ import (
 	"sync"
 	"time"
 
+	"yg-gateway/internal/pkg/gosafe"
 	"yg-gateway/internal/pkg/timex"
 )
 
@@ -207,6 +208,7 @@ func (r *Recorder) LoadErr() error { return r.loadErr }
 func (r *Recorder) Start() {
 	go func() {
 		defer close(r.done)
+		defer gosafe.Recover("usage/flusher")
 		t := time.NewTicker(flushInterval)
 		defer t.Stop()
 		for {

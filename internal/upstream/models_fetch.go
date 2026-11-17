@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"yg-gateway/internal/auth"
+	"yg-gateway/internal/pkg/gosafe"
 )
 
 // ModelInfo 动态模型信息（含 maxInputTokens/maxOutputTokens + 上游模型对象全字段）。
@@ -204,10 +205,17 @@ func (c *Client) FetchModels(a *auth.Auth) ([]ModelInfo, error) {
 	enterpriseCh := make(chan probeResult, 1)
 	v3Ch := make(chan probeResult, 1)
 	go func() {
+		// 探测 panic 时必须补发错误结果：enterpriseCh 无人写入的话接收端会永久阻塞。
+		defer gosafe.RecoverWith("upstream/models-enterprise", func(p any) {
+			enterpriseCh <- probeResult{err: fmt.Errorf("enterprise probe panicked: %v", p)}
+		})
 		infos, err := c.fetchEnterpriseModels(a)
 		enterpriseCh <- probeResult{infos, err}
 	}()
 	go func() {
+		defer gosafe.RecoverWith("upstream/models-v3", func(p any) {
+			v3Ch <- probeResult{err: fmt.Errorf("v3 probe panicked: %v", p)}
+		})
 		infos, err := c.fetchV3Models(a)
 		v3Ch <- probeResult{infos, err}
 	}()

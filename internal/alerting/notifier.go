@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"yg-gateway/internal/logfmt"
+	"yg-gateway/internal/pkg/gosafe"
 )
 
 // Config Notifier 配置。零值 = 全部关闭（WebhookURL 空 = 不发）。
@@ -134,6 +135,12 @@ func (n *Notifier) send(ev Event) {
 	// 忽略 err：Event 仅含 string/int64 字段，json.Marshal 必然成功，不影响后续 POST（判据④）。
 	body, _ := json.Marshal(bodyEv)
 	go func() {
+		// panic 后必须把 last[key] 抹掉：否则该告警被永久限流，后续同类事件静默不发。
+		defer gosafe.RecoverWith("alerting/webhook", func(any) {
+			n.mu.Lock()
+			delete(n.last, key)
+			n.mu.Unlock()
+		})
 		resp, err := n.cli.Post(n.cfg.WebhookURL, "application/json", bytes.NewReader(body))
 		if err != nil {
 			log.Printf("WARN: [alerting] webhook post failed: %v", err)

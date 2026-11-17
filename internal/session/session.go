@@ -19,6 +19,7 @@ import (
 	"sync"
 	"time"
 
+	"yg-gateway/internal/pkg/gosafe"
 	"yg-gateway/internal/redisstore"
 )
 
@@ -97,6 +98,7 @@ func (r *Router) StartGC() {
 	r.mu.Unlock()
 
 	go func() {
+		defer gosafe.Recover("session/gc-ticker")
 		t := time.NewTicker(r.cfg.GCInterval)
 		defer t.Stop()
 		for {

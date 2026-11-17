@@ -15,6 +15,7 @@ import (
 
 	"yg-gateway/internal/auth"
 	"yg-gateway/internal/logfmt"
+	"yg-gateway/internal/pkg/gosafe"
 	"yg-gateway/internal/pkg/timex"
 	"yg-gateway/internal/pool"
 	"yg-gateway/internal/upstream"
@@ -281,6 +282,29 @@ const (
 	taskSnapshot
 )
 
+// String 让 panic 记录能读出「哪类任务崩了」。没有它日志里只剩一个数字，
+// 排查时还得回源码数 iota，属无信息量输出。
+func (k taskKind) String() string {
+	switch k {
+	case taskCheckin:
+		return "checkin"
+	case taskTravel:
+		return "travel"
+	case taskActivity:
+		return "activity"
+	case taskKeepalive:
+		return "keepalive"
+	case taskBlackcat:
+		return "blackcat"
+	case taskGrowth:
+		return "growth"
+	case taskSnapshot:
+		return "snapshot"
+	default:
+		return fmt.Sprintf("taskKind(%d)", int(k))
+	}
+}
+
 // nextWake 返回 now 之后最近的唤醒时刻，以及该时刻需要执行的全部任务。
 // 多类任务若配到同一小时（如签到与旅行都含 9），该时刻多类任务需一并执行。
 // 已显式禁用的任务不进候选（nextFire 对其零值返回零时间，nextWake 再跳过零时点）。
@@ -494,6 +518,9 @@ func (s *Scheduler) runBatch(ctx context.Context, kinds []taskKind) {
 		wg.Add(1)
 		go func(k taskKind) {
 			defer wg.Done()
+			// panic 隔离：任务体里有 JSON 解析与网络回调，一次 nil 解引用会带走整个常驻进程。
+			// 注册顺序要紧——Recover 后注册所以先执行，wg.Done 仍会跑，Wait 不会卡死。
+			defer gosafe.Recover("scheduler/runBatch/" + k.String())
 			switch k {
 			case taskCheckin:
 				s.RunCheckinNow()
@@ -763,6 +790,7 @@ func (s *Scheduler) RunBalanceRefreshNow() {
 		wg.Add(1)
 		go func(a *auth.Auth, uid string) {
 			defer wg.Done()
+			defer gosafe.Recover("scheduler/balance-refresh")
 			remain, total, expiring, earliestAt, earliestRemaining, err := s.cfg.Upstream.UserResourceDetailedWithExpiry(a, expiringSoon)
 			if err != nil {
 				log.Printf("balance %s: %v", logfmt.Label(uid, a.Nickname), err)
@@ -785,6 +813,7 @@ func (s *Scheduler) StartBalanceRefresh(ctx context.Context, interval time.Durat
 	}
 	s.balanceInterval.Store(int64(interval))
 	go func() {
+		defer gosafe.Recover("scheduler/balance-ticker")
 		var logged time.Duration
 		for {
 			cur := time.Duration(s.balanceInterval.Load())

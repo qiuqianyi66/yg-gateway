@@ -6,6 +6,8 @@ import (
 	"io"
 	"sync"
 	"time"
+
+	"yg-gateway/internal/pkg/gosafe"
 )
 
 // idleMonitoringBody 包在聊天 SSE body 外层：
@@ -57,6 +59,7 @@ func monitorBody(rc io.ReadCloser, idle time.Duration, cancel context.CancelFunc
 		cancel:   cancel,
 	}
 	go func() {
+		defer gosafe.Recover("upstream/idle-watch")
 		t := time.NewTicker(idleTick(idle))
 		defer t.Stop()
 		for {

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"yg-gateway/internal/auth"
+	"yg-gateway/internal/pkg/gosafe"
 )
 
 var flushInterval = 5 * time.Second
@@ -91,6 +92,7 @@ func (p *Pool) startFlusher() {
 	p.stopCh = stopCh
 	interval := flushInterval
 	go func() {
+		defer gosafe.Recover("pool/flusher")
 		t := time.NewTicker(interval)
 		defer t.Stop()
 		for {
@@ -100,17 +102,26 @@ func (p *Pool) startFlusher() {
 				// 兜底清理，ADR-005 D-500——即使无脏数据也周期性清理过期模型级台账，
 				// 之前由 pick 热路径承担，移出后不能漏掉），序列化与磁盘 IO 在锁外由
 				// saveMu 串行化。别图省事在这里持锁 saveLocked。
-				p.mu.Lock()
-				job, save := p.snapshotForSaveLocked()
-				p.mu.Unlock()
-				if save {
-					p.saveUnlocked(job)
-				}
+				p.flushOnce()
 			case <-stopCh:
 				return
 			}
 		}
 	}()
+}
+
+// flushOnce 跑一轮落盘。把「持锁收集」收进独立闭包并用 defer 释放锁：
+// 若 snapshotForSaveLocked 内部 panic，锁不会留在持有态——否则下一轮 ticker
+// 会自锁死，选号全线阻塞，比进程崩掉更难发现。
+func (p *Pool) flushOnce() {
+	job, save := func() (saveJob, bool) {
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		return p.snapshotForSaveLocked()
+	}()
+	if save {
+		p.saveUnlocked(job)
+	}
 }
 
 // pruneAllLocked 全池清理过期模型级台账（modelCost/modelCooldowns）。

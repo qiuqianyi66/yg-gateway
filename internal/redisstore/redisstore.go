@@ -16,6 +16,8 @@ import (
 	"time"
 
 	"github.com/redis/go-redis/v9"
+
+	"yg-gateway/internal/pkg/gosafe"
 )
 
 // keyTTL 粘性会话镜像 + 状态快照的默认 TTL（redis 侧兜底，防脏数据长期滞留）。
@@ -146,6 +148,7 @@ func (u *Upstash) goWrite(fn func()) {
 	u.submitMu.Unlock()
 	go func() {
 		defer u.wg.Done()
+		defer gosafe.Recover("redisstore/async-write")
 		// 只阻塞抢写槽，不检查 done：此处若select done，已阻塞排队的写会在
 		// close(done) 唤醒时全部走丢弃分支（selrand5 实测 100%），「Close 前
 		// 提交的写（含排队中）必然执行」的契约被内部检查破坏——close_test.go:138

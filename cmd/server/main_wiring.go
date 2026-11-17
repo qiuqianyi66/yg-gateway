@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"yg-gateway/internal/auth"
+	"yg-gateway/internal/pkg/gosafe"
 	"yg-gateway/internal/pool"
 	"yg-gateway/internal/server"
 	"yg-gateway/internal/upstream"
@@ -160,6 +161,7 @@ func serveHTTP(ctx context.Context, cfg *Config, h *server.Handler, p *pool.Pool
 		IdleTimeout: 120 * time.Second,
 	}
 	go func() {
+		defer gosafe.Recover("server/shutdown")
 		<-ctx.Done()
 		p.Flush() // 信号触发：先落盘再做优雅停机
 		// 排水窗口：给在途 SSE 请求时间完成。原 5s 太短——流式生成合法时长可达数

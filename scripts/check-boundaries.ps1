@@ -76,12 +76,14 @@ $allow = @{
     # + pkg：夜猫子窗口的本地日期（timex.Date）
     'growth'   = @('auth','pkg')
     # 会话键派生：依赖 redisstore（粘性绑定持久化）（实测）
-    'session'  = @('redisstore')
+    # + pkg：gosafe（后台 GC ticker 的崩溃隔离，2026-11-17；纯叶子原语）
+    'session'  = @('pkg','redisstore')
     # 面板：只读运维视图，可依赖领域包但不可反向被依赖（实测）
     # + opsagent：运维 agent 审计/unknown 全量的只读展示（REQ-opsagent 阶段 2）
     # + unknown：unknown 条目的只读列表（registry 全量，同上）
     # + bench：面板 benchmark 摘要端点只读调用评测层（REQ-benchmark G4，bench→reqlog 已收录）
-    'panel'    = @('auth','bench','httpauth','livecfg','logfmt','opsagent','pool','reqlog',
+    # + pkg：gosafe（任务中心/自动任务/余额并发拉取的 goroutine 崩溃隔离，2026-11-17）
+    'panel'    = @('auth','bench','httpauth','livecfg','logfmt','opsagent','pkg','pool','reqlog',
                    'scheduler','session','unknown','upstream','usage')
     # 调度：依赖凭证、日志、池、上游（实测）
     # + pkg：限速等待（timex.SleepCtx）与每日快照/连登/旅行日期（timex.Date）
@@ -102,10 +104,13 @@ $allow = @{
     'bench'      = @('pkg','reqlog')
     # 告警外发：webhook body 需按 R2 口径截断完整 UID → 依赖 logfmt（纯脱敏 helper 叶子包）。
     # 2026-10-22 体检 C-2 引入，-Fix 实测生成；无反向依赖风险。
-    'alerting'   = @('logfmt')
+    # + pkg：gosafe（webhook goroutine 的崩溃隔离，2026-11-17）。它和 timex 一样是
+    #   纯叶子原语（零 internal 依赖），方向指向叶子 = 向内，不构成上行依赖。
+    'alerting'   = @('logfmt','pkg')
     'httpauth'   = @()
     'prompt'     = @()
-    'redisstore' = @()
+    # + pkg：gosafe（异步写的崩溃隔离，2026-11-17；纯叶子原语，无反向依赖风险）
+    'redisstore' = @('pkg')
     # domain 层（事实四态标记 / unknown 消解）：零 internal 依赖，可被任何层引用
     'evidence'   = @()
     'unknown'    = @()
