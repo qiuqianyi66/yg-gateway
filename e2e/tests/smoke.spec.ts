@@ -82,12 +82,15 @@ test('八个视图全部可切换，标题/可见性/hash 正确，全程无 JS 
   expect(errs).toEqual([]);
 });
 
-test('opsagent 卡片存在且可加载（空池空态）', async ({ page }) => {
+test('opsagent 视图存在且可加载（空池空态）', async ({ page }) => {
   const errs = watchErrors(page);
   await page.goto('/panel/');
   await login(page);
-  // 32. opsagent 卡片在账号池视图可见
-  await expect(page.locator('#opsagentBox')).toBeVisible();
+  // 32. opsagent 是**独立视图**（第 8 个 nav tab / #view-opsagent），不是账号池底部的卡片。
+  //     原断言写的 #opsagentBox 在 index.html 里根本不存在——旧版设计遗留，e2e 在 CI
+  //     里长期跑不起来所以从未暴露（2026-11-17 修好 runner 后立刻红）。
+  await page.click('.nav a[data-view="opsagent"]');
+  await expect(page.locator('#view-opsagent')).toBeVisible();
   // 33. 点击「加载 / 刷新」→ 初始提示被替换（至少进入"加载中…"或空态）
   await page.click('#opsagentReload');
   await expect(page.locator('#opsagentBody')).not.toHaveText(

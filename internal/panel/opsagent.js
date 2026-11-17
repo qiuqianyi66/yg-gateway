@@ -2,8 +2,11 @@
  *
  * 自包含：不依赖 app.js（该文件冻结在 maxFrontendLines 棘轮上限 4378 行，
  * 本文件走 acl_notice.js/savings_note.js 的独立嵌入模式）。
- * 挂载点：账号池视图底部 #opsagentBox；点击「加载/刷新」按需拉取
- * /panel/api/opsagent/status（未知台账 + 最近审计轮），不做自动轮询。
+ * 挂载点：**独立视图** `#view-opsagent`（index.html 第 8 个 nav tab）里的
+ * `#opsagentBody`；点击 `#opsagentReload` 按需拉取 /panel/api/opsagent/status
+ * （未知台账 + 最近审计轮），不做自动轮询。
+ * 注：早期版本曾计划挂在账号池视图底部的 #opsagentBox，该元素从未落地——
+ * e2e 的 smoke.spec.ts 一度按旧设计断言它，2026-11-17 已改为断言独立视图。
  * 安全：所有动态文本经 esc()（工程结构 §三：渲染前必须转义）；无内联事件
  * （CSP script-src 'self'）；fetch 仅同源（connect-src 'self'）。
  */
