@@ -163,8 +163,17 @@ jobs:
 
   # 多架构镜像（amd64/arm64）构建；非 PR 时推送 ghcr.io。
   # 门禁不过就不构建、不推送镜像（与 build 依赖 gate 同语义）。
+  #
+  # continue-on-error（2026-11-17）：镜像推送自 v2.1.0 起因 GHCR 权限持续失败
+  # （denied: permission_denied: write_package），已确认用户级包没有可用的 REST
+  # 授权端点（/users/{owner}/packages/container/{name}/access 返回 404），只能由
+  # 仓库所有者在网页 Package settings → Manage Actions access 里给本仓库加 Write。
+  # 二进制才是本项目的主产物（单二进制零依赖是核心定位），镜像属于可选分发路径；
+  # 让它把整个 release 结论拖红，等于让 release 这条信号线失效——真回归会藏在红里。
+  # 失败仍会以 job warning 呈现，不会静默；权限修好后本行可直接删掉。
   build-image:
     needs: gate
+    continue-on-error: true
     runs-on: ubuntu-latest
     permissions:
       contents: read
