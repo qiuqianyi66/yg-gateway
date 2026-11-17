@@ -131,7 +131,13 @@ func scriptBundle(t *testing.T) []byte {
 // scriptBundlePath 把拼接结果写入临时文件并返回路径（node harness 用 argv[2] 读）。
 //
 // 用拼接文件而不是逐个跑 node：这些 harness 依赖"全局作用域共享"（经典脚本、无模块），
-// 逐个执行会丢跨文件符号。顺序与浏览器一致，语义等价。
+// 逐个执行会丢跨文件符号。
+//
+// 注意（2026-11-17 实测修正）：这里【只有顺序】与浏览器一致，【语义不等价】——
+// bundle 一次性求值抹掉了「逐文件执行的时间窗口」，因此抓不到「app.js 顶层立即引用
+// 排在它之后的组件符号」这类缺陷（浏览器里那一步 ReferenceError 且后续语句全不执行）。
+// 该时间窗口由 TestScriptsEvalInBrowserOrder 单独覆盖（它按下发顺序逐个 runInContext，
+// 且 sandbox 不用 has:()=>true 的 Proxy，否则 ReferenceError 会被吞成 undefined）。
 func scriptBundlePath(t *testing.T) string {
 	t.Helper()
 	p := filepath.Join(t.TempDir(), "bundle.js")
