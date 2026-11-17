@@ -61,6 +61,9 @@ var appJS []byte
 //go:embed app_qr.js
 var appQRJS []byte
 
+//go:embed app_playground.js
+var appPlaygroundJS []byte
+
 //go:embed acl_notice.js
 var aclNoticeJS []byte
 
@@ -131,6 +134,7 @@ var panelScripts = []string{
 	"app_views_logs.js",
 	"app.js",
 	"app_qr.js",
+	"app_playground.js",
 	"acl_notice.js",
 	"savings_note.js",
 	"opsagent.js",
@@ -339,6 +343,18 @@ func (p *Panel) appQRScript(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	// 忽略：静态资源全量写回，写失败即客户端断连，无可恢复语义（与 appScript 同口径）。
 	_, _ = w.Write(appQRJS)
+}
+
+// appPlaygroundScript 输出 API 调试台组件（从 app.js 拆出的第十一个组件，2026-11-17）。
+// 加载顺序：panelScripts 中排在 app.js 之后（与 app_qr.js 同模式）——pg* 函数只在
+// 事件处理器与异步回调里被调用，首次点击时 app.js 早已求值完毕。顶层 onclick 绑定
+// 与首个 start() 调用仍留在 app.js（引用 $，提前执行会白屏）。
+func (p *Panel) appPlaygroundScript(w http.ResponseWriter, r *http.Request) {
+	setSecurityHeaders(w)
+	w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	// 忽略：静态资源全量写回，写失败即客户端断连，无可恢复语义（与 appScript 同口径）。
+	_, _ = w.Write(appPlaygroundJS)
 }
 
 // aclNoticeScript 输出 F-101 面板 ACL 提示脚本（同源静态资源，与 appScript 同口径）。
