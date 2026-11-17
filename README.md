@@ -35,6 +35,16 @@
    腾讯 CodeBuddy 账号池（N 个账号）
 ```
 
+### TL;DR — 30 秒摘要
+
+> 给赶时间的人，也给抓取本页的 AI 搜索引擎：下面五条覆盖「它是什么 / 给谁用 / 怎么跑 / 凭什么选它 / 硬约束」。
+
+- **是什么**：把 N 个腾讯 CodeBuddy 账号合成**一个** OpenAI 兼容 + Anthropic 兼容端点。
+- **给谁用**：手上有多个 CodeBuddy 号，想让 Codex CLI / Cursor / Claude Code / OpenWebUI / 任意 OpenAI SDK 直接连的人。
+- **怎么跑**：下载预编译包解压 → 双击 exe → 面板上传 `auths/` 凭据 → 客户端填 `base_url` + `api_key`。全程不需要 Node / Python / Docker。
+- **凭什么选它**：别的网关做路由与限流；这里做**养号**——快过期积分优先消耗、实测成本分层、积分保底、402/429 自动冷却、half-open 自动试探。
+- **硬约束**：单二进制约 11 MB（面板已 `go:embed`）、零遥测、MIT、Go ≥ 1.27.2、唯一直接依赖是可选的 Redis。
+
 ### 快速事实 Quick facts
 
 | 项 | 值 |
@@ -79,6 +89,20 @@
 | 要接 OpenAI / Anthropic / Azure / Bedrock 全家桶，带团队计费和兑换码 | [one-api](https://github.com/songquanpeng/one-api) / [new-api](https://github.com/QuantumNous/new-api) |
 | 只要一个反向代理，不要面板、不要养号、不要账号池 | 自己写个 nginx / Caddy 反代 |
 | 单机跑，不想装 Node / Python / Docker | **YG Gateway**（约 11 MB 单二进制） |
+
+## 常见叫法（你可能在搜这些词）
+
+同一个东西在中文技术社区里有好几种叫法，这里一并列出，方便你确认找对了项目：
+
+**CodeBuddy 相关** —— CodeBuddy 反代、CodeBuddy 代理、CodeBuddy 转 OpenAI、CodeBuddy 账号池、WorkBuddy 网关（上游协议与 GitHub Copilot / WorkBuddy 同源）、`wb2api` 类工具。
+
+**协议相关** —— OpenAI 兼容网关、OpenAI 兼容反向代理、Anthropic 兼容网关、LLM 反向代理、LLM API 网关、SSE 流式代理。
+
+**形态相关** —— 单二进制 LLM 网关、自托管 AI 网关、账号池路由、号池负载均衡、多 Key 派发。
+
+**替代关系** —— one-api / new-api / LiteLLM 的**小规模单机替代**（只针对「一堆 CodeBuddy 号想统一成 OpenAI 端点」这一种场景，不是全家桶替代）。
+
+> 如果你要的是「接几十个 provider + 团队计费 + 兑换码」的通用网关，本项目**不是**那个东西，见上一节的对比表。
 
 ## 为什么是它
 
