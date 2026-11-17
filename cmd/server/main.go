@@ -8,7 +8,6 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"io"
 	"io/fs"
 	"log"
 	"net"
@@ -22,16 +21,11 @@ import (
 	"yg-gateway/internal/auth"
 	"yg-gateway/internal/httpauth"
 	"yg-gateway/internal/livecfg"
-	"yg-gateway/internal/logfmt"
-	"yg-gateway/internal/metrics"
-	"yg-gateway/internal/panel"
 	"yg-gateway/internal/pool"
 	"yg-gateway/internal/redisstore"
 	"yg-gateway/internal/reqlog"
 	"yg-gateway/internal/scheduler"
 	"yg-gateway/internal/server"
-	"yg-gateway/internal/session"
-	"yg-gateway/internal/unknown"
 	"yg-gateway/internal/upstream"
 	"yg-gateway/internal/usage"
 )
@@ -130,34 +124,8 @@ func main() {
 	cfgPath := flag.String("config", "config.json", "配置文件路径（默认当前目录 config.json；不存在时自动生成推荐配置）")
 	flag.Parse()
 
-	cfg, err := Load(*cfgPath)
+	cfg, err := prepareConfig(*cfgPath)
 	if err != nil {
-		// errors.Is 才能看穿 Load 里 fmt.Errorf("%w") 的包装；os.IsNotExist 不行。
-		// 注意：必须验证 config 文件本身缺失，不能只看错误类型——prompt.file 等
-		// 附属文件缺失同样报 ErrNotExist，误判会丢弃正常配置（2026-10-23 实弹）。
-		if configFileGenuinelyMissing(*cfgPath, err) {
-			// 首次运行：目录下没有配置 → 自动落一份推荐配置（含随机 api_key）再加载。
-			// 双击 exe / 裸跑 docker 即开，无需先手工复制样例。
-			if _, werr := WriteDefault(*cfgPath); werr == nil {
-				// 不回显 key：日志会被重定向/采集/贴进 issue，明文 api_key 落日志
-				// 等于凭证外泄（R1/R2）。key 已在配置文件里，提示路径即可。
-				log.Printf("%s", firstRunNotice(*cfgPath))
-				cfg, err = Load(*cfgPath)
-			}
-			if err != nil {
-				// 生成失败（目录只读等）：退回纯默认 + env（旧行为兜底），不阻塞启动。
-				log.Printf("config %s not found (auto-generate failed), using defaults+env: %v", *cfgPath, err)
-				cfg, err = Load("")
-			}
-		}
-		if err != nil {
-			log.Fatalf("load config: %v", err)
-		}
-	}
-
-	// 启动期安全闸：没有生效密钥 + 监听非回环 = 网关与面板裸暴露给同网段，拒绝启动。
-	// 判据见 config_exposure.go（单测 config_exposure_test.go），不再靠注释提醒。
-	if err := CheckUnauthenticatedExposure(cfg); err != nil {
 		log.Fatalf("%v", err)
 	}
 
@@ -193,37 +161,10 @@ func main() {
 	// pool 的全部可调参数（熔断/在途/降权/保底/限流…）集中注入，见 main_wiring.go。
 	applyPoolConfig(p, cfg)
 
-	// 会话粘性路由（可配关闭）。
-	var sessRouter *session.Router
-	redisMode := "noop"
-	if _, ok := store.(redisstore.Noop); !ok {
-		redisMode = "upstash"
-	}
-	if cfg.SessionSticky.Enabled {
-		sessRouter = session.New(session.Config{
-			TTL:        cfg.SessionTTL,
-			GCInterval: cfg.SessionGCInterval,
-			Store:      store,
-			Available:  p.AvailableUIDs,
-			// realm 感知闭包：带前缀模型名按 realm 过滤可用账号（跨 realm 不泄漏）；
-			// 裸名走 cn（现状零回归）。闭包内部 resolveModel 剥前缀，再按 realm 过滤。
-			AvailableForModel: realmAwareAvailableForModel(p),
-		})
-		sessRouter.LoadFromStore() // 启动时从 Redis 恢复粘性（读操作仅此处）
-		sessRouter.StartGC()
+	// 会话粘性路由（可配关闭）与面板/状态页需要的两个只读闭包，见 main_session.go。
+	sessRouter, sessCount, sessSnapshot, redisMode := buildSessionRouter(cfg, p, store)
+	if sessRouter != nil {
 		defer sessRouter.StopGC()
-	}
-	sessCount := func() int {
-		if sessRouter != nil {
-			return sessRouter.Count()
-		}
-		return 0
-	}
-	sessSnapshot := func() []session.SessionBinding {
-		if sessRouter != nil {
-			return sessRouter.Snapshot()
-		}
-		return nil
 	}
 
 	up := upstream.New()
@@ -241,32 +182,9 @@ func main() {
 	// 路径，集中注入见 main_wiring.go。
 	applyUpstreamConfig(up, cfg)
 
-	sch := scheduler.New(scheduler.Config{
-		Pool:           p,
-		Upstream:       up,
-		CheckinHours:   cfg.Schedule.CheckinHours,
-		TravelHours:    cfg.Schedule.TravelHours,
-		ActivityHours:  cfg.Schedule.ActivityHours,
-		KeepaliveHours: cfg.Schedule.KeepaliveHours,
-		BlackcatHours:  cfg.Schedule.BlackcatHours,
-		GrowthHours:    cfg.Schedule.GrowthHours,
-		// 快过期积分优先消耗：签到/余额刷新按此窗口分桶（issue:积分过期）。
-		ExpiringSoonWindow: cfg.ExpiringSoonDur,
-		CheckinDisabled:    !cfg.Schedule.CheckinEnabled,
-		TravelDisabled:     !cfg.Schedule.TravelEnabled,
-		ActivityDisabled:   !cfg.Schedule.ActivityEnabled,
-		KeepaliveDisabled:  !cfg.Schedule.KeepaliveEnabled,
-		BlackcatDisabled:   !cfg.Schedule.BlackcatEnabled,
-		GrowthDisabled:     !cfg.Schedule.GrowthEnabled,
-		// 保号类四任务是否覆盖禁用账号（缺省 false = 禁用即跳过，保持既有行为）。
-		IncludeDisabledInTasks: cfg.Schedule.IncludeDisabledInTasks,
-		// 账号现态每日快照（03:00 落盘，历史存活曲线数据地基；目录=state 同目录 snapshots/）。
-		SnapshotDir: stateSibling(cfg.StateFile, "snapshots"),
-	})
-	logScheduleBanner(cfg)
+	// 定时任务（签到/旅行/活动/保号/黑猫/成长）与任务横幅，见 main_scheduler.go。
+	sch := buildScheduler(cfg, p, up)
 
-	// 管理面板日志镜像：标准 log（stderr）与 chat 表格日志（stdout）双路复制进
-	// 面板环形缓冲，供 /panel/api/logs 读取；控制台输出行为完全不变。
 	// live 承载可热改字段（api_key/多 key/soft_rate/脱敏开关），面板保存配置时在线替换。
 	live := livecfg.New(buildAuthSnapshot(cfg))
 	// 用量记录器：与 state 文件同目录，随 state_file 配置一起搬移。
@@ -283,31 +201,14 @@ func main() {
 	defer rec.Stop()
 	log.Printf("[usage] 逐请求用量记录已启用: %s (%s)", usagePath, rec.Describe())
 
-	// 延迟分位数观测（ADR-003 D-403）：自实现固定分桶，零新依赖。
-	// 进程级单例（无需落盘，重启归零——分位数是近期健康度而非历史账本）。
-	latencyReg := metrics.NewRegistry()
-	// 首 token （TTFB）分位数与上游错误分类计数：同源自实现，同样进程级单例。
-	// TTFB 与端到端延迟分开记——两者回答的问题不同（"总共等多久" vs "上游多快
-	// 开始吐"）；错误分类则把既有 Classify 的 13 种 ErrKind 导出成时序指标。
-	ttfbReg := metrics.NewRegistry()
-	errKinds := metrics.NewKindCounters()
-	// 重试放大率直方图与慢请求计数器（F-305）：同源自实现，进程级单例。
-	// 放大率回答「每个用户请求触发了几次上游调用」；慢请求是端到端超阈值的
-	// 显式告警信号——两者都是纯观测，不改写请求路径。
-	attemptsStats := metrics.NewAttemptsStats()
-	slowReqs := metrics.NewCounter()
-
-	// 未知条目注册表（AGENTS.md「Unknown 消解纪律」）：把「某号某模型成本未知」
-	// 这类可消解的事实变成一等公民实体——登记时写明还需要什么，实测 credit 时
-	// 自动消解。进程级单例（重启归零：未知本来就是"当前还不知道"的语义）。
-	unknownReg := unknown.NewRegistry()
-	p.SetUnknownRegistry(unknownReg)
+	// 进程级观测单例（延迟/TTFB/错误分类/放大率/慢请求/未知注册表），见 main_observability.go。
+	obs := buildObservability(p)
 
 	// 外发告警 + 运维 agent（REQ-opsagent / ADR-017）：二者共用 notifier（去重窗口
 	// 一致）；agent 实例传给面板（nil = 未启用，面板有引导态）。enabled=false 时
 	// buildOpsAgent 返回 nil、startOpsAgent no-op（零回归）。
 	alertNotifier := newAlertNotifier(cfg)
-	opsAg := buildOpsAgent(cfg.OpsAgent, p, unknownReg, alertNotifier)
+	opsAg := buildOpsAgent(cfg.OpsAgent, p, obs.unknown, alertNotifier)
 
 	// 请求指标始终启用；JSONL 归档只写脱敏元数据，写盘失败不影响聊天请求。
 	requestLog := reqlog.New(reqlog.Config{
@@ -325,121 +226,14 @@ func main() {
 		log.Printf("[reqlog] 请求指标已启用；JSONL 归档已关闭")
 	}
 
-	// keyRPMStatsFn 是 panel 消费 per-key RPM 观测的晚绑定闭包：server.NewHandler
-	// 在 panel.New 之后才创建（main.go:440），用闭包变量先占位后接线（F6）。
-	keyRPMStatsFn := func() any { return nil }
-	pn := panel.New(panel.Config{
-		Pool:            p,
-		Usage:           rec,
-		CreditCNYRate:   cfg.Usage.CreditCNYRate,
-		Pricing:         buildUSDPriceMap(cfg.Usage.Pricing),
-		RequestLog:      requestLog,
-		Upstream:        up,
-		Scheduler:       sch,
-		OpsAgent:        opsAg,
-		AuthDir:         cfg.AuthDir,
-		APIKey:          cfg.APIKey,
-		RedisMode:       redisMode,
-		StickyCount:     sessCount,
-		SessionSnapshot: sessSnapshot,
-		Version:         appVersion,
-		Live:            live,
-		KeyRPMStats:     func() any { return keyRPMStatsFn() },                              // F6：handler 创建后接线
-		ProviderSummary: func() any { return providerSummaryView(cfg.Providers, p.List()) }, // F7：provider 汇总条
-		// 模型上限探测数据（scripts/probe_max_tokens.py --panel-out 写入）：
-		// 与 state 文件同目录，缺省 data/output_probes.json。
-		ProbeFile:  stateSibling(cfg.StateFile, "output_probes.json"),
-		ConfigPath: *cfgPath,
-		LoadConfig: func() (any, error) {
-			return loadConfigMasked(*cfgPath)
-		},
-		SaveConfig: func(raw []byte) ([]string, error) {
-			return saveConfig(raw, *cfgPath, live, p, up, sch)
-		},
-		// Key 重置（面板 Key 卡片「接入配置 → 重置密钥」）：前端不持有明文，
-		// 走服务端直接改目标条目（见 resetAPIKey），其他 Key 原样保留。
-		ResetKey: func(id, newKey string) error {
-			return resetAPIKey(*cfgPath, id, newKey, live, p, up, sch)
-		},
+	// 管理面板 + HTTP handler + 协议漂移观测器，见 main_http_runtime.go。
+	h, driftMon := buildHTTPRuntime(httpRuntimeDeps{
+		cfg: cfg, cfgPath: *cfgPath,
+		p: p, up: up, sch: sch, rec: rec, live: live,
+		requestLog: requestLog, opsAg: opsAg, alert: alertNotifier, obs: obs,
+		redisMode: redisMode, sessRouter: sessRouter,
+		sessCount: sessCount, sessSnap: sessSnapshot, providers: providerEndpoints,
 	})
-	// 成长任务队列每日自动执行（与「执行全部待办」同管线）：Sequential 族零点解锁后
-	// 无需手动扫描；hook 返回即启动（异步执行），已在跑时内部跳过。
-	sch.SetGrowthHook(pn.RunGrowthQueueOnce)
-	// 单行化写出口（2026-11-14，日志完整性）：log.Printf 的参数可能来自客户端
-	// （model / 请求 ID / 上游 body），含换行就能伪造出第二条日志行。包在唯一写出口
-	// 上，所有现在与将来的日志都自动压平，不依赖每个调用点记得清洗。
-	log.SetOutput(logfmt.OneLineWriter{W: io.MultiWriter(os.Stderr, pn.Logs())})
-	server.SetChatLogOutput(logfmt.OneLineWriter{W: io.MultiWriter(os.Stdout, pn.Logs())})
-
-	// 协议漂移观测（R-102，P1）：启用时从快照文件恢复基线（缺失 = unknown），
-	// /status 暴露状态；探测 goroutine 在校验循环外启动（下方）。
-	driftMon := buildDriftMonitor(cfg)
-
-	// 上下文护栏（REQ-context-guardrail-2026-10-31 / ADR-019）：阈值来自 config
-	// guardrails 块，0 = 关（零回归）。负值 fail fast（校验在 config_guardrail.go，
-	// 同 opsagent 先例由装配侧调用）；Set* 热生效（当前启动生效；main 持有引用，
-	// 后续接配置 reload 即可在线调档，无需改装配）。
-	if err := cfg.Guardrails.validate(); err != nil {
-		log.Fatalf("guardrails config: %v", err)
-	}
-	guardrail := server.NewGuardrail()
-	guardrail.SetContextWarnTokens(cfg.Guardrails.ContextWarnTokens)
-	guardrail.SetContextMaxTokens(cfg.Guardrails.ContextMaxTokens)
-	guardrail.SetSessionRPM(cfg.Guardrails.SessionRPM)
-
-	h := server.NewHandler(server.Config{
-		Pool:     p,
-		Upstream: up,
-		APIKey:   cfg.APIKey,
-		Session:  sessRouter,
-		// 内容派生会话键开关（ADR-004）：关闭后只有显式会话标识才粘性。
-		DisableSessionDerive: !cfg.SessionStickyDerive,
-		StickyCount:          sessCount,
-		RedisMode:            redisMode,
-		SoftCooldown:         cfg.SoftRateDur,
-		Panel:                pn,
-		Live:                 live,
-		Usage:                rec,
-		Latency:              latencyReg,
-		TTFB:                 ttfbReg,
-		ErrKinds:             errKinds,
-		Attempts:             attemptsStats,
-		SlowRequests:         slowReqs,
-		SlowRequestThreshold: time.Duration(cfg.Observability.SlowRequestThresholdSeconds) * time.Second,
-		RequestLog:           requestLog,
-		PromptMode:           cfg.Prompt.Mode,
-		PromptText:           cfg.PromptText,
-		// 来源记录开关经 livecfg 热生效；此处同时填静态字段，供 Live 为 nil 的
-		// 裸用/测试路径拿到同一缺省值。
-		RecordClientInfo: cfg.Logging.RequestClientInfo,
-		// handler 侧第三道闸（global realm）：false（显式逃生门）时不列 global: 模型名。
-		GlobalEnabled: cfg.Global.Enabled,
-		// 入站边界加固（F-001/F-002/F-003）：装配期固定，改动需重启。
-		MaxBodyBytes: cfg.MaxBodyBytesEffective,
-		TrustedProxy: server.NewTrustedProxyMatcher(cfg.Security.TrustedProxy),
-		ReadOnlyRateLimit: func() *server.ReadOnlyRateLimit {
-			if cfg.Security.ReadOnlyRateLimit.Limit <= 0 || cfg.ReadOnlyRateLimitWindow <= 0 {
-				return nil
-			}
-			return &server.ReadOnlyRateLimit{
-				Limit:  cfg.Security.ReadOnlyRateLimit.Limit,
-				Window: cfg.ReadOnlyRateLimitWindow,
-			}
-		}(),
-		// 异常外发告警（P0-4）：webhook URL 空 = 不告警（零回归）。
-		Alerting: alertNotifier,
-		// 备用上游级联（P2）：enabled=false 或 base_url 空 = 不启用（零回归）。
-		Fallback: buildFallbackConfig(cfg),
-		// 多 provider 出站端点表（ADR-026）：空 map = 仅 codebuddy（零回归）。
-		Providers: providerEndpoints,
-		// 协议漂移观测（R-102）：未启用 = nil（/status 省略该键 = 外层 unknown）。
-		Drift: driftMon,
-		// 上下文护栏（REQ-context-guardrail）：阈值 0 = 关（零回归）；实例在 main 持有
-		// 引用（guardrail 变量），Set* 已暴露供热调档。
-		Guardrail: guardrail,
-	})
-	// F6：handler 创建后把 per-key RPM 快照接线给 panel（晚绑定闭包）。
-	keyRPMStatsFn = func() any { return h.KeyRPMStats() }
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

@@ -2,10 +2,10 @@
     "_comment":  "工程深度基线（scripts/check-depth.ps1 维护）。指标只许变好；-Update 抬高棘轮。maxFrontendLines / oversizeFrontendFiles 自 2026-10-17 起纳入（此前前端体量完全不在门禁内，index.html 1755 行曾无人管）。",
     "updatedAt":  "2026-11-17",
     "metrics":  {
-                    "maxFileLines":  942,
+                    "maxFileLines":  931,
                     "oversizeFiles":  0,
-                    "oversizeFuncs":  1,
-                    "minCoverage":  75.5,
+                    "oversizeFuncs":  0,
+                    "minCoverage":  78.4,
                     "maxFrontendLines":  1640,
                     "oversizeFrontendFiles":  1
                 }
