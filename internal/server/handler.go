@@ -348,6 +348,16 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
+	// API 侧统一安全头（面板侧 setSecurityHeaders 的等价项；此前 /v1/*、/status、
+	// /metrics 一条都没有）：
+	//   - nosniff：阻断老浏览器按内容猜类型，避免 JSON 被当 HTML 解析；
+	//   - no-store：/status、/metrics、/v1/models 含账号积分、成本与错误分布，
+	//     不能让中间代理或浏览器缓存后绕过鉴权读取。流式响应已自带 no-cache，
+	//     这里只补 GET；POST 的 chat 响应不缓存。
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	if r.Method == http.MethodGet {
+		w.Header().Set("Cache-Control", "no-store")
+	}
 	if h.cfg.RequestLog != nil && r.Method == http.MethodPost && r.URL.Path == "/v1/chat/completions" {
 		trace := &requestTrace{id: reqlog.NewRequestID(), start: time.Now()}
 		if h.loadLive().RecordClientInfo {

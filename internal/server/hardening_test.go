@@ -147,3 +147,36 @@ func TestHealthzNotRateLimited(t *testing.T) {
 		}
 	}
 }
+
+// TestAPISecurityHeaders API 侧安全头（2026-11-17）：/v1/*、/status、/metrics 此前
+// 一条安全响应头都没有——/status 与 /metrics 含账号积分、成本与错误分布，缺 no-store
+// 时可被中间代理缓存后绕过鉴权读取。
+//
+// 牙齿：把 ServeHTTP 里的 nosniff / no-store 两行删掉，本用例立即 FAIL。
+func TestAPISecurityHeaders(t *testing.T) {
+	p := testPoolWith(&auth.Auth{UID: "u1", AccessToken: "at1", ExpiresAt: 9999999999})
+	h := NewHandler(Config{Pool: p})
+
+	cases := []struct {
+		method, path string
+		wantNoStore  bool
+	}{
+		{"GET", "/status", true},      // 含积分/成本，必须禁缓存
+		{"GET", "/metrics", true},     // 含错误分布与延迟分位，必须禁缓存
+		{"GET", "/healthz", true},     // 探活也走同一中间件（GET 一律 no-store）
+		{"POST", "/v1/models", false}, // 405 分支同样经过中间件，但 POST 不设 no-store
+	}
+	for _, c := range cases {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(c.method, c.path, nil)
+		h.ServeHTTP(rec, req)
+		if got := rec.Header().Get("X-Content-Type-Options"); got != "nosniff" {
+			t.Errorf("%s %s: X-Content-Type-Options=%q want nosniff", c.method, c.path, got)
+		}
+		if c.wantNoStore {
+			if got := rec.Header().Get("Cache-Control"); got != "no-store" {
+				t.Errorf("%s %s: Cache-Control=%q want no-store", c.method, c.path, got)
+			}
+		}
+	}
+}
