@@ -195,6 +195,90 @@ try {
 	}
 }
 
+// TestScriptsEvalInBrowserOrder 按面板实际下发的顺序【逐个】脚本求值，
+// 模拟浏览器 <script src> 的逐文件执行语义。
+//
+// 为什么需要（2026-11-17 拆 Playground 时真实踩到）：TestAppJSTopLevelSmoke 把全部
+// 脚本拼成一个 bundle 一次性求值——所有符号一开始就在作用域里，因此【抓不到】
+// 「app.js 顶层立即引用了排在它之后的组件符号」这类缺陷。而浏览器里那一步抛
+// `Uncaught ReferenceError`，且 app.js 后续语句（含末尾 start()）【全部不执行】：
+// 面板静态骨架照常渲染、动态数据全空白，用户只看到「数据没加载」。这个后果比
+// 「某个弹窗打不开」严重得多，却不会报错到用户可见的层面。
+//
+// 判据：逐个 runInContext → 任一脚本求值抛错即红；随后等一轮 macrotask，
+// 捕获延迟初始化（setTimeout(0) 里调组件函数）抛的异步错误。
+//
+// 牙齿：把 app.js 里 `onclick = () => openPlayground()` 改回 `onclick = openPlayground`
+// → 本用例立刻红，而现有的 TestAppJSTopLevelSmoke 仍是绿（它跑完整 bundle）。
+func TestScriptsEvalInBrowserOrder(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node not installed; eval-order check skipped")
+	}
+	harness := `const fs = require('fs');
+const vm = require('vm');
+const inert = new Proxy(function () {}, {
+  get(t, k) { if (k === Symbol.toPrimitive) return () => ''; return inert; },
+  set() { return true; },
+  apply() { return inert; },
+  construct() { return inert; },
+  has() { return true; },
+});
+const sandbox = {
+  location: { hash: '#accounts' },
+  history: { replaceState() {}, pushState() {} },
+  localStorage: { getItem: () => null, setItem() {}, removeItem() {} },
+  navigator: { clipboard: { writeText: () => Promise.resolve() } },
+  document: { querySelectorAll: () => [], querySelector: () => inert, getElementById: () => inert, addEventListener() {}, removeEventListener() {}, documentElement: inert, head: inert, body: inert, createElement: () => inert, cookie: '' },
+  fetch: () => new Promise(() => {}),
+  addEventListener() {}, removeEventListener() {},
+  matchMedia: () => ({ matches: false, addEventListener() {} }),
+  MutationObserver: class { constructor() {} observe() {} disconnect() {} takeRecords() { return []; } },
+  ResizeObserver: class { constructor() {} observe() {} unobserve() {} disconnect() {} },
+  IntersectionObserver: class { constructor() {} observe() {} unobserve() {} disconnect() {} },
+  setInterval, clearInterval, setTimeout, clearTimeout,
+  AbortController, AbortSignal,
+  console, JSON, Math, Date, Number, String, Boolean, Object, Array, Promise, Map, Set, RegExp, Error, TypeError, isNaN, parseInt, parseFloat, encodeURIComponent, decodeURIComponent, URL, Symbol, Proxy, Reflect,
+};
+sandbox.window = sandbox; sandbox.globalThis = sandbox;
+vm.createContext(sandbox);
+const files = process.argv.slice(2);
+for (const f of files) {
+  try {
+    vm.runInContext(fs.readFileSync(f, 'utf8'), sandbox, { filename: f });
+  } catch (e) {
+    console.log('SYNC FAIL at ' + f + '\n' + (e && e.stack ? e.stack : e).toString().split('\n').slice(0, 4).join('\n'));
+    process.exit(1);
+  }
+}
+process.on('uncaughtException', (e) => {
+  console.log('ASYNC FAIL\n' + (e && e.stack ? e.stack : e).toString().split('\n').slice(0, 4).join('\n'));
+  process.exit(1);
+});
+setTimeout(() => { console.log('EVAL ORDER OK'); process.exit(0); }, 120);
+`
+	hf, err := os.CreateTemp(t.TempDir(), "evalorder-*.cjs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := hf.WriteString(harness); err != nil {
+		t.Fatal(err)
+	}
+	hf.Close()
+
+	files := scriptFiles(t)
+	args := append([]string{hf.Name()}, files...)
+	cmd := exec.Command(node, args...)
+	cmd.Dir = "." // 测试工作目录 = internal/panel
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("按浏览器顺序逐脚本求值崩溃（脚本文件清单 = 下发顺序）:\n%s", nodeDiag(err, out))
+	}
+	if !bytes.Contains(out, []byte("EVAL ORDER OK")) {
+		t.Fatalf("逐脚本求值未抵达收尾（要么某一步同步抛错、要么延迟初始化异步抛错，见下）:\n%s", out)
+	}
+}
+
 // 积分扣除维度的格式必须稳定，且缺样本/缺匹配 Token 时不能伪造比例。
 func TestAppJSCreditDimensionFormatting(t *testing.T) {
 	node, err := exec.LookPath("node")
