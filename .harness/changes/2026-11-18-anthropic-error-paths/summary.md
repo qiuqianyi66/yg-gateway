@@ -1,7 +1,7 @@
 # Anthropic 错误路径：缺 model 静默降级 + 4 条参数校验收紧
 
 日期：2026-11-18
-提交：`7ec77ca`（本批）
+提交：`1d7a895`（本批）
 上一提交：`1e45c8e`
 
 ## 一、为什么开这一批
@@ -111,7 +111,7 @@ ok     yg-gateway/internal/server  0.072s
 ## 八、回滚
 
 ```powershell
-git revert --no-edit 7ec77ca
+git revert --no-edit 1d7a895
 ```
 
 回滚后 `internal/server` 覆盖率回落到 80.5%，棘轮基线需一并回到 80.5
