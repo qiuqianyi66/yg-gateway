@@ -292,6 +292,21 @@ func (h *Handler) anthropicStream(w http.ResponseWriter, r *http.Request, echoMo
 	sw := &streamInterceptWriter{ResponseWriter: w, flusher: flusher}
 	h.chatCompletions(sw, r)
 
+	// 上游失败必须发 error 事件（2026-11-18 修）。
+	//
+	// 改前：status 与错误体都被吞，客户端收到 message_start → 空 content_block →
+	// message_delta(end_turn) → message_stop，把一次上游故障读成「模型回答了个空」。
+	// 它不报错，所以是最难发现的一类失败。这里已无法回头改 HTTP 状态码（200 随
+	// message_start 已发出），改用 Anthropic 规范的流内 error 事件，
+	// 并直接返回 —— 不再补 message_stop 伪装正常收尾。
+	if sw.status >= http.StatusBadRequest || len(sw.errBody) > 0 {
+		writeSSEEvent(w, flusher, "error", map[string]any{
+			"type":  "error",
+			"error": map[string]any{"type": "upstream_error", "message": upstreamErrorMessage(sw.status, sw.errBody)},
+		})
+		return
+	}
+
 	// 结尾事件用上游真实终态：model 来自首个带 model 的 chunk，stop_reason 由
 	// finish_reason 映射（缺省时 anthropicStopReason 已退到 end_turn），output_tokens
 	// 取上游 usage（捕获不到为 0）。不能再像旧实现那样无条件硬编码。
@@ -306,6 +321,30 @@ func (h *Handler) anthropicStream(w http.ResponseWriter, r *http.Request, echoMo
 	if flusher != nil {
 		flusher.Flush()
 	}
+}
+
+// upstreamErrorMessage 把上游/网关错误体压成一句可直接展示的文本。
+//
+// chatCompletions 写出的错误体是 `{"error":{"message":"...","code":"..."}}`，
+// 直接塞进 SSE 的 message 字段会变成转义后的嵌套 JSON（客户端还得二次解析）。
+// 这里优先取 error.message，取不到就退回原文或状态码描述 —— 不丢排障信息。
+func upstreamErrorMessage(status int, body []byte) string {
+	var env struct {
+		Error struct {
+			Message string `json:"message"`
+			Code    string `json:"code"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(body, &env); err == nil && env.Error.Message != "" {
+		if env.Error.Code != "" {
+			return env.Error.Code + ": " + env.Error.Message
+		}
+		return env.Error.Message
+	}
+	if s := strings.TrimSpace(string(body)); s != "" {
+		return s
+	}
+	return fmt.Sprintf("upstream returned status %d", status)
 }
 
 // writeSSEEvent 写一个 Anthropic SSE 事件块（event: xxx\ndata: {...}\n\n）。
@@ -335,9 +374,19 @@ type streamInterceptWriter struct {
 	finishReason     string
 	promptTokens     int64
 	completionTokens int64
+	// status / errBody：上游失败留痕。HTTP 200 已随 message_start 隐式发出、改不了状态码，
+	// 但失败不能就此沉默 —— 否则客户端会收到一个「正常结束的空回答」（2026-11-18 修）。
+	status  int
+	errBody []byte
 }
 
 func (sw *streamInterceptWriter) Write(b []byte) (int, error) {
+	// 上游失败：chatCompletions 写的是 JSON 错误体（没有 `data: ` 前缀），
+	// SSE 解析会把它当垃圾行丢弃。原样留存，供 anthropicStream 发 error 事件。
+	if sw.status >= http.StatusBadRequest {
+		sw.errBody = append(sw.errBody, b...)
+		return len(b), nil
+	}
 	if sw.done {
 		return len(b), nil
 	}
@@ -401,7 +450,9 @@ func (sw *streamInterceptWriter) Header() http.Header {
 }
 
 func (sw *streamInterceptWriter) WriteHeader(code int) {
-	// 流式 200 已隐式发出；不覆盖。
+	// 状态码不穿透（HTTP 200 已随 message_start 隐式发出，改不了），
+	// 但必须记下来：改前这里是空实现，上游 5xx 被彻底吞成一个「正常空流」。
+	sw.status = code
 }
 
 // interceptWriter 拦截 ResponseWriter：记录状态码 + body 到内存，供转换后再写。
