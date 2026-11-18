@@ -123,6 +123,17 @@ func transformAnthropicToOpenAI(body []byte) ([]byte, error) {
 		return nil, err
 	}
 
+	// model 是 Anthropic Messages API 的必需字段（2026-11-18 补）。
+	//
+	// 改前不校验：缺 model 的请求会被原样转成 `{"model":"",...}`，而下游也不校验空 model，
+	// 于是网关照常选号、照常打上游、照常返回 200 —— 实测客户端拿到的是**某个真实回答**，
+	// 但它指定的模型从未被使用。这是静默降级：客户端以为用上了自己的模型，
+	// 账单与效果却都不对，而且没有任何信号。
+	if strings.TrimSpace(areq.Model) == "" {
+		return nil, errors.New("model 必填：Anthropic Messages API 要求 model 字段，" +
+			"空 model 会让网关在不告知的情况下选用上游默认模型")
+	}
+
 	msgs := make([]map[string]string, 0, len(areq.Messages)+1)
 	if areq.System != "" {
 		msgs = append(msgs, map[string]string{"role": "system", "content": areq.System})

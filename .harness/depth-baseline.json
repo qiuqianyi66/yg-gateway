@@ -1,6 +1,6 @@
 {
     "_comment":  "工程深度基线（scripts/check-depth.ps1 维护）。指标只许变好；-Update 抬高棘轮。maxFrontendLines / oversizeFrontendFiles 自 2026-10-17 起纳入（此前前端体量完全不在门禁内，index.html 1755 行曾无人管）。",
-    "updatedAt":  "2026-11-17",
+    "updatedAt":  "2026-11-18",
     "metrics":  {
                     "maxFileLines":  801,
                     "oversizeFiles":  0,
@@ -21,7 +21,7 @@
                                             "yg-gateway/internal/httpauth":  98.6,
                                             "yg-gateway/internal/livecfg":  92.3,
                                             "yg-gateway/internal/logfmt":  100,
-                                            "yg-gateway/internal/metrics":  84.2,
+                                            "yg-gateway/internal/metrics":  84.6,
                                             "yg-gateway/internal/opsagent":  95.6,
                                             "yg-gateway/internal/panel":  94.8,
                                             "yg-gateway/internal/pkg/gosafe":  100,
@@ -32,7 +32,7 @@
                                             "yg-gateway/internal/redisstore":  99,
                                             "yg-gateway/internal/reqlog":  83.3,
                                             "yg-gateway/internal/scheduler":  94.3,
-                                            "yg-gateway/internal/server":  80.5,
+                                            "yg-gateway/internal/server":  81,
                                             "yg-gateway/internal/session":  98.1,
                                             "yg-gateway/internal/unknown":  95.5,
                                             "yg-gateway/internal/upstream":  89.1,
