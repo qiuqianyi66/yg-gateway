@@ -123,3 +123,44 @@ git checkout -- scripts/check-depth.ps1 .harness/depth-baseline.json
 | `cmd/bench` 已入册 | 基线 `packageCoverage` 含 `yg-gateway/cmd/bench: 47.9` |
 | 逐包回退仍能拦 | 见第三节两类 mutant，仍在 `packageCoverage` 分支上（该分支未改动） |
 
+---
+
+## 七、第三轮：CI 红了，容差按跨平台实测调整
+
+### 7.1 失败事实（CI 日志原文）
+
+提交 `94faa43` 的 `gate / gate` job 报：
+
+```
+REGRESSED: 包覆盖率 yg-gateway/internal/auth 91.3% → 90.7%
+[FAIL] check-depth.ps1 失败（深度指标回退 / 覆盖率不可用）
+```
+
+**同一个提交、同一套测试**，本地 Windows 91.3%，CI Linux 90.7%，差 **0.6pp**。
+
+### 7.2 根因
+
+`internal/auth` 里有**平台分支**（Windows 凭证 ACL 加固那段在 Linux 下不执行），
+那些语句在 CI 上无法被覆盖。所以这不是"某个环境测少了"，而是跨平台固有差异。
+
+`COVERAGE_TOLERANCE = 0.5` 装不下 0.6pp → 首次逐包守护就把固有差异判成退步。
+更糟的是它的后果：**它会逼人用 `-Update` 放水或改代码来"修"一个不存在的退步**。
+
+### 7.3 处置
+
+`COVERAGE_TOLERANCE` 0.5 → **1.0**，并在脚本里写明证据来源（不是"为了变绿"）。
+
+判据边界：1.0pp 是**测量噪声 + 平台差异**的量级；1pp 以上的变化只能是代码或测试真变了。
+
+### 7.4 验证（两个方向都实测）
+
+用 `-CoverageStdout` 造 mutant：
+
+| 场景 | 构造 | 期望 | 实测 |
+|---|---|---|---|
+| CI 真实值 | auth 改成 90.7%（差 0.6，在容差内） | exit 0 | **exit 0**，`✅ 深度指标未回退` |
+| 真退步 | auth 改成 89.5%（差 1.8，超容差） | exit 1 | **exit 1**，`REGRESSED: … 91.3% → 89.5%` |
+
+即：新容差吸收得了平台差异，仍抓得住真退步。
+
+
