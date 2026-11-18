@@ -1,7 +1,7 @@
 # 请求解析边界形态（resolveModel / stripRateSuffix / hasImagePart）
 
 日期：2026-11-18
-提交：`<待填>`
+提交：`987cbbc`
 上一提交：`fa9e304`
 
 ## 一、先纠正一处我自己的误判
