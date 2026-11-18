@@ -1,7 +1,7 @@
 # Anthropic 流式错误静默：上游 5xx 被包装成「正常空回答」
 
 日期：2026-11-18
-提交：`<本批>`
+提交：`addde41`
 上一提交：`1d7a895`
 
 ## 一、怎么发现的
@@ -105,7 +105,7 @@ data: {"error":{"message":"no_healthy_account: all accounts are temporarily unav
 ## 七、回滚
 
 ```powershell
-git revert --no-edit <本批 sha>
+git revert --no-edit addde41
 ```
 
 回滚后 `streamInterceptWriter.WriteHeader` 回到空实现、覆盖率回落到 81.0%，
