@@ -409,7 +409,13 @@ func (sw *streamInterceptWriter) Write(b []byte) (int, error) {
 		}
 		// 解析 OpenAI chunk：delta.content 用于转换，model/finish_reason/usage 用于终态。
 		var chunk struct {
-			Model   string `json:"model"`
+			Model string `json:"model"`
+			// 上游可能在流中途直接发错误帧（合法 JSON、但没有 choices）。
+			// 改前这种帧被当成"空 chunk"跳过，错误就此消失（2026-11-18 修）。
+			Error *struct {
+				Message string `json:"message"`
+				Type    string `json:"type"`
+			} `json:"error"`
 			Choices []struct {
 				Delta struct {
 					Content string `json:"content"`
@@ -423,6 +429,13 @@ func (sw *streamInterceptWriter) Write(b []byte) (int, error) {
 		}
 		if err := json.Unmarshal([]byte(payload), &chunk); err != nil {
 			continue
+		}
+		if chunk.Error != nil && chunk.Error.Message != "" {
+			// 流内错误：记下来交给 anthropicStream 发 error 事件，并停止继续解析 ——
+			// 上游报错后到达的内容不可信，也不该被当成正常 delta 转发。
+			sw.errBody = append(sw.errBody, []byte(chunk.Error.Message)...)
+			sw.done = true
+			break
 		}
 		if chunk.Model != "" {
 			sw.model = chunk.Model

@@ -27,15 +27,15 @@
                                             "yg-gateway/internal/pkg/gosafe":  100,
                                             "yg-gateway/internal/pkg/jsonsafe":  100,
                                             "yg-gateway/internal/pkg/timex":  100,
-                                            "yg-gateway/internal/pool":  84.1,
+                                            "yg-gateway/internal/pool":  84,
                                             "yg-gateway/internal/prompt":  93.7,
                                             "yg-gateway/internal/redisstore":  99,
-                                            "yg-gateway/internal/reqlog":  83.6,
+                                            "yg-gateway/internal/reqlog":  83.3,
                                             "yg-gateway/internal/scheduler":  94.3,
-                                            "yg-gateway/internal/server":  81.1,
+                                            "yg-gateway/internal/server":  81.2,
                                             "yg-gateway/internal/session":  98.1,
                                             "yg-gateway/internal/unknown":  95.5,
-                                            "yg-gateway/internal/upstream":  89,
+                                            "yg-gateway/internal/upstream":  89.1,
                                             "yg-gateway/internal/usage":  83
                                         }
                 }

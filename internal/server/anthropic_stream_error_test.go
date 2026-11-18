@@ -59,6 +59,42 @@ func TestAnthropicStreamSurfacesUpstreamFailure(t *testing.T) {
 	}
 }
 
+// TestAnthropicStreamSurfacesMidStreamError 守护「流已经开始、上游中途报错」这条路径。
+//
+// 改前：`Write` 只认 `data: ` 前缀再 Unmarshal 成 OpenAI chunk；错误帧
+// `data: {"error":{...}}` 能成功 Unmarshal（都是合法 JSON），但解析出的 chunk
+// 没有 choices，于是被当成空 chunk 直接跳过 —— **错误帧被静默丢弃**。
+// 上游随后断开、不发 [DONE]，`done` 保持 false、`finishReason` 为空，
+// 收尾走 anthropicStopReason("") → end_turn，客户端读成「模型正常答完」。
+//
+// 这条比整段失败更隐蔽：客户端已经收到部分内容了，更容易相信结果完整。
+func TestAnthropicStreamSurfacesMidStreamError(t *testing.T) {
+	midStream := `data: {"model":"glm-5.2","choices":[{"delta":{"content":"你好"},"finish_reason":""}]}` + "\n\n" +
+		`data: {"error":{"message":"upstream reset by peer","type":"stream_error"}}` + "\n\n"
+	up := newFakeUpstream(t, func(string) (int, string, bool) { return 200, midStream, true })
+	h := NewHandler(Config{
+		Pool:     testPoolWith(&auth.Auth{UID: "u1", AccessToken: "at1", ExpiresAt: 9999999999}),
+		Upstream: up,
+	})
+
+	body := `{"model":"glm-5.2","max_tokens":64,"stream":true,"messages":[{"role":"user","content":"hi"}]}`
+	rec := httptest.NewRecorder()
+	h.anthropicMessages(rec, httptest.NewRequest("POST", "/v1/messages", strings.NewReader(body)))
+
+	out := rec.Body.String()
+
+	if !strings.Contains(out, "event: error") {
+		t.Errorf("流中途上游报错必须发 error 事件，实际输出:\n%s", out)
+	}
+	if !strings.Contains(out, "upstream reset by peer") {
+		t.Errorf("错误帧里的 message 应传给客户端（否则丢了唯一的排障线索）:\n%s", out)
+	}
+	// 已收到的正文不能因为报错被丢掉 —— 部分内容对客户端仍有价值。
+	if !strings.Contains(out, "你好") {
+		t.Errorf("已产出的 content 不应因后续报错而丢失:\n%s", out)
+	}
+}
+
 // TestUpstreamErrorMessage 覆盖错误体压缩的三条分支：信封可解析、信封不可解析但有原文、
 // 空 body 只剩状态码。三条都要求「不丢排障信息」——这条路径的作用就是让客户端
 // 从一行 message 里看懂上游到底怎么了。
