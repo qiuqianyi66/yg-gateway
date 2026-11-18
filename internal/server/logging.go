@@ -121,9 +121,8 @@ type chatStatsReader struct {
 	hasCompletionTokens bool
 	hasTotalTokens      bool
 	// credit 上游末帧 usage.credit（本次真实扣费积分），供成本台账（NoteModelCost）。
-	hasCredit  bool
-	credit     float64
-	errorFrame bool
+	hasCredit bool
+	credit    float64
 	// cacheHit/cacheMiss 上游末帧 usage.prompt_cache_hit_tokens / miss_tokens，
 	// 供用量桶的命中率维度与 reqlog 逐次记录（issue #92）。
 	hasCacheHit  bool
@@ -177,7 +176,6 @@ func (s *chatStatsReader) parseSSELine(line string) {
 		s.ttfb = time.Since(s.start)
 	}
 	var chunk struct {
-		Error json.RawMessage `json:"error"`
 		Usage *struct {
 			PromptTokens         *int     `json:"prompt_tokens"`
 			CompletionTokens     *int     `json:"completion_tokens"`
@@ -188,13 +186,7 @@ func (s *chatStatsReader) parseSSELine(line string) {
 		} `json:"usage"`
 	}
 	if json.Unmarshal([]byte(payload), &chunk) != nil || chunk.Usage == nil {
-		if json.Unmarshal([]byte(payload), &chunk) == nil && len(chunk.Error) > 0 {
-			s.errorFrame = true
-		}
 		return
-	}
-	if len(chunk.Error) > 0 {
-		s.errorFrame = true
 	}
 	if chunk.Usage.PromptTokens != nil {
 		s.hasPromptTokens = true
@@ -243,9 +235,6 @@ func (s *chatStatsReader) CacheTokens() (hit, miss int64, missKnown, ok bool) {
 	}
 	return hit, int64(s.promptTokens - s.cacheHit), true, true
 }
-
-// SawErrorFrame 报告流中是否透传过 SSE error 帧。
-func (s *chatStatsReader) SawErrorFrame() bool { return s.errorFrame }
 
 // Read 返回原始数据，同时解析统计 TTFB/token。
 func (s *chatStatsReader) Read(p []byte) (int, error) {
