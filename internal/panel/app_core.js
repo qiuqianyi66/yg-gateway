@@ -1,6 +1,6 @@
 /* app_core.js — 面板通用原语（从 app.js 拆出的第二个组件，2026-11-02 组件库拆分第 3 步）
    ────────────────────────────────────────────────────────────────────────────────
-   内容：纯格式化/转义工具（esc / ago / dur / 时间解析 / token 与延迟格式化 / CSV 单元格转义）。
+   内容：纯格式化/转义工具（esc / ago / dur / 时间解析 / token 与延迟格式化 / CSV 单元格转义 / 账号显示名）。
    纪律：**只放纯函数**——只依赖 Date/Math/String/Number，不碰 DOM、不碰面板状态、不发请求。
         这样它才能安全地排在 app.js 之前加载（app.js 的顶层 start()/go() 会调用这些函数）。
 
@@ -24,6 +24,15 @@ function esc(s) {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
+}
+/* 账号显示名：上游昵称可能只是一个 "." 或单个 emoji（本机 4 个号里 2 个是这种），
+   直接渲染在表格/图例里读不出是谁，只剩一个孤零零的色点或标点。
+   去掉标点/符号/空白后为空 → 回落 uid 前 8 位。纯函数，不碰 DOM。 */
+function acctLabel(a) {
+  const n = String((a && a.nickname) || '').trim();
+  if (n && n.replace(/[\p{P}\p{S}\s]/gu, '') !== '') return n;
+  const uid = String((a && a.uid) || '');
+  return uid ? uid.slice(0, 8) : '未命名账号';
 }
 function ago(iso) {
   if (!iso || iso.startsWith('0001-')) return '—';

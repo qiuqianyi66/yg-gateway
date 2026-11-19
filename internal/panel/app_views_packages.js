@@ -7,7 +7,7 @@
    仍留在 app.js：它们是面板状态，必须在 app.js 里初始化；本文件的函数只在
    异步加载/事件处理器里调用，那时状态已就绪（`let` 的 TDZ 不会触发）。
 
-   依赖（运行时解析）：app_core.js 的 esc/trimFixed/fmtTok；app.js 的 $/api/状态变量。 */
+   依赖（运行时解析）：app_core.js 的 esc/trimFixed/fmtTok/acctLabel；app.js 的 $/api/状态变量。 */
 function pkDetailGroups(packs, limit) {
   const active = [], used = [];
   let usedSize = 0, restSize = 0, restRemain = 0;
@@ -73,7 +73,7 @@ function pkAccountSegments(a, now) {
       days: expiresAt == null ? null : Math.max(0, Math.ceil((expiresAt - now) / PK_DAY_MS)),
       source: p.name || '积分',
       uid: String(a.uid || ''),
-      accountName: a.nickname || String(a.uid || '').slice(0, 8) || '未命名账号',
+      accountName: acctLabel(a),
     });
     balance -= amount;
   }
@@ -139,7 +139,7 @@ function renderExpiryDistribution(list, now) {
     a && !a.error && a.uid && pkAccountSegments(a, now).some(s => s.days != null)
   ).map(a => '<span><i style="background:' + (colors.get(String(a.uid)) || 'var(--accent)') +
     /* 未命名账号（暂停/未拉余额）nickname 为空、uid 也可能缺，直接渲染就成了一个光秃秃的色点。 */
-    '"></i>' + esc(a.nickname || (a.uid ? String(a.uid).slice(0, 8) : '未命名账号')) + '</span>').join('');
+    '"></i>' + esc(acctLabel(a)) + '</span>').join('');
   const hdr = '<div class="pk-expiry-hdr"><span>剩余天数</span><span style="text-align:center">各账号该批剩余</span><b>剩余积分</b></div>';
   $('pkExpiry').innerHTML = (rows
     ? hdr + '<div class="pk-expiry-chart">' + rows + '</div>'
@@ -179,7 +179,7 @@ function renderPackages(d, detailLimit) {
   $('pkSummary').innerHTML = list.map(a => {
     if (a.error) {
       return '<div class="pk-card"><div class="who"><span class="nm">' +
-        esc((a.nickname || a.uid.slice(0, 8))) + '</span>' +
+        esc(acctLabel(a)) + '</span>' +
         '<span class="realm">' + esc(a.realm || '') + '</span></div>' +
         '<div class="err">查询失败：' + esc(a.error) + '</div></div>';
     }
@@ -207,7 +207,7 @@ function renderPackages(d, detailLimit) {
           ' 1 0" title="' + esc(title) + '"></i>';
       }).join('') + '</div>' : '';
     return '<div class="pk-card">' +
-      '<div class="who"><span class="nm">' + esc(a.nickname || a.uid.slice(0, 8)) + '</span>' +
+      '<div class="who"><span class="nm">' + esc(acctLabel(a)) + '</span>' +
       '<span class="realm">' + esc(a.realm || '') + '</span></div>' +
       '<div class="big">' + fmtTok(a.remain) + '</div>' +
       '<div class="sub">共 ' + fmtTok(a.size) + ' · ' + (a.packages || []).length +
@@ -258,7 +258,7 @@ function renderPackages(d, detailLimit) {
         groups.used.map(p => rowOf(p, 'used')).join('')
       : '';
     return '<div class="box"><header><h3>' +
-      esc(a.nickname || a.uid.slice(0, 8)) + ' · ' + esc(a.realm || '') +
+      esc(acctLabel(a)) + ' · ' + esc(a.realm || '') +
       '</h3><span class="grow"></span><span class="note">余额 ' + fmtTok(a.remain) +
       ' / 总额 ' + fmtTok(a.size) + ' · 可用 ' + (groups.visible.length + groups.rest.length) + ' 个包' +
       (groups.used.length ? ' / 已用完 ' + groups.used.length + ' 个' : '') +
@@ -353,13 +353,13 @@ function renderExpiry(d) {
     if (a.error) {
       // 查询失败：整行占满（错误文案可能较长，栅格会挤），左侧中性色条。
       return '<div class="exp-row lv-none">' +
-        '<span class="exp-nm">' + esc(a.nickname || a.uid.slice(0, 8)) + '</span>' +
+        '<span class="exp-nm">' + esc(acctLabel(a)) + '</span>' +
         '<span class="exp-main err">查询失败：' + esc(a.error) + '</span></div>';
     }
     const bs = expBatches(a.packages).filter(b => expDaysLeft(b.date, today) >= 0);
     if (!bs.length) {
       return '<div class="exp-row lv-none">' +
-        '<span class="exp-nm">' + esc(a.nickname || a.uid.slice(0, 8)) + '</span>' +
+        '<span class="exp-nm">' + esc(acctLabel(a)) + '</span>' +
         '<span class="exp-main">7 天内无到期积分</span></div>';
     }
     const first = bs[0];
@@ -375,7 +375,7 @@ function renderExpiry(d) {
     const rest = bs.slice(1, 4).map(b =>
       '随后 ' + esc(b.date.slice(5)) + ' · ' + fmtTok(b.remain)).join('　') + more;
     return '<div class="exp-row ' + lv + '" title="' + esc(a.uid || '') + '">' +
-      '<span class="exp-nm">' + esc(a.nickname || a.uid.slice(0, 8)) + '</span>' +
+      '<span class="exp-nm">' + esc(acctLabel(a)) + '</span>' +
       '<span class="exp-when">' + esc(first.date) +
         (rest ? '<div class="note">' + rest + '</div>' : '') + '</span>' +
       '<span class="exp-days ' + lv + '">' + esc(dayWord) + '</span>' +

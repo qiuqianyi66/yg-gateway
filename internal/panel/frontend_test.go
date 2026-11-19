@@ -1183,6 +1183,7 @@ const sink = { innerHTML: '', textContent: '', hidden: true };
 const ctx = {
   esc: s => String(s == null ? '' : s),
   fmtTok: v => String(v == null ? 0 : v),
+  acctLabel: a => String((a && a.nickname) || ((a && String(a.uid || '').slice(0, 8)) || '未命名账号')),
   $: () => sink,
   Date, Math, Number, String, Map, Array, Object, isNaN,
   lastPackages: null, lastPackagesAt: 0,
@@ -1260,6 +1261,7 @@ const ctx = {
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;').replace(/'/g, '&#39;'),
   fmtTok: v => String(Math.round(Number(v) || 0)),
+  acctLabel: a => String((a && a.nickname) || ((a && String(a.uid || '').slice(0, 8)) || '未命名账号')),
   $: id => (sinks[id] || mk(id)),
   Date, Math, Number, String, Map, Array, Object, isNaN, isFinite,
   lastPackages: null, lastPackagesAt: 0,
@@ -1363,6 +1365,7 @@ const mk = id => (sinks[id] = { innerHTML: '', textContent: '', hidden: true });
 const ctx = {
   esc: s => String(s == null ? '' : s),
   fmtTok: v => String(v == null ? 0 : v),
+  acctLabel: a => String((a && a.nickname) || ((a && String(a.uid || '').slice(0, 8)) || '未命名账号')),
   $: id => (sinks[id] || mk(id)),
   Date, Math, Number, String, Map, Array, Object, isNaN,
 };
@@ -1465,6 +1468,7 @@ const mk = id => (sinks[id] = { innerHTML: '', textContent: '' });
 const ctx = {
   esc: s => String(s == null ? '' : s),
   fmtTok: v => String(v == null ? 0 : v),
+  acctLabel: a => String((a && a.nickname) || ((a && String(a.uid || '').slice(0, 8)) || '未命名账号')),
   $: id => (sinks[id] || mk(id)),
   Date, Math, Number, String, Map, Array, Object, isNaN, Infinity, isFinite, Set,
 };

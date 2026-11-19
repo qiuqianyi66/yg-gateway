@@ -120,7 +120,7 @@ function renderAccountsUnsafe(list) {
     return '<div class="acc-card ' + cls + '" title="uid: ' + esc(s.uid) + '">' +
       '<div class="acc-card-head">' +
         '<div class="acc-avatar">' + esc(avatar) + '</div>' +
-        '<div><div class="acc-name">' + (s.nickname ? esc(s.nickname) : '<span style="color:var(--ink-3)">未命名</span>') + ' ' + realmTag + ' ' + groupTag + ' ' + providerTag + '</div>' +
+        '<div><div class="acc-name">' + esc(acctLabel(s)) + ' ' + realmTag + ' ' + groupTag + ' ' + providerTag + '</div>' +
         '<div class="acc-uid">' + esc(short) + '</div></div>' +
         '<div class="acc-status">' + unkTag + tag + '</div>' +
       '</div>' +
@@ -274,7 +274,7 @@ async function loadOverview(quiet) {
         (d.accounts || []).forEach(a => { accMap[a.uid || a.UID] = a; });
         stickyList.innerHTML = sl.map(b => {
           const a = accMap[b.uid] || {};
-          const nick = a.nickname || a.Nickname || b.uid;
+          const nick = acctLabel({ nickname: a.nickname || a.Nickname, uid: b.uid });
           // cost_tier: 0=免费(绿), 1=未知(灰), 2=收费(红)。accounts 里可能没有 cost_tier 字段，默认灰。
           const tier = a.cost_tier != null ? a.cost_tier : 1;
           const tierColor = tier === 0 ? 'var(--ok)' : tier === 2 ? 'var(--bad)' : 'var(--ink-3)';

@@ -155,14 +155,16 @@
     for (let i = 1; i < pts.length; i++) minGap = Math.min(minGap, +pts[i].t - +pts[i - 1].t);
     if (!isFinite(minGap) || minGap <= 0) minGap = span;
     const slot = iw * (minGap / span);
-    const bw = Math.max(2, Math.min(30, slot * 0.7));
+    /* 柱宽上限 30px 时 6 个点在 1000px 宽里就是 6 根细棍，整张图显得空；
+       放到 44px 后柱体有重量，也不至于和相邻柱糊在一起。 */
+    const bw = Math.max(2, Math.min(44, slot * 0.7));
     for (const p of pts) {
       const x = xOf(p.t);
       const h = ih * (p.req / yMax);
       const y = PT + ih - h;
       /* 柱体接近不透明：0.78 时底下的网格线会从柱里透出来，看起来像柱内被划了几道白线。 */
       out += '<rect x="' + (x - bw / 2).toFixed(1) + '" y="' + y.toFixed(1) + '" width="' + bw.toFixed(1) +
-             '" height="' + h.toFixed(1) + '" rx="2" fill="var(--accent)" opacity=".95"/>';
+             '" height="' + h.toFixed(1) + '" rx="4" fill="var(--accent)" opacity=".95"/>';
       const ya = yReq(p.acct);
       /* 活跃账号用 --blue：原先取 --ok，和请求量柱同色系的绿，图例里两个绿点分不清
          哪个是柱、哪个是线（色弱尤甚）。 */
