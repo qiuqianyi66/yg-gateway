@@ -17,6 +17,15 @@
   --line: #e5eae8; --line-soft: #eef2f0;
   --ink: #1a2332; --ink-2: #5a6a7a; --ink-3: #9aa8b5;
   --accent: #10b981; --accent-2: #059669; --accent-ink: #ffffff; --accent-soft: rgba(16,185,129,.1);
+  /* 2026-11-19 视觉第三批：补数据色（蓝/紫）与玻璃层。
+     为什么改：此前全站只有一支绿 accent，九张统计卡与整页背景同色系，观感单调
+     （用户原话「颜色太单调」）。这里只加「数据色」，不动机器语义（ok/warn/bad 仍独占
+     状态含义）；渐变只用于大面积底面与主指标卡，不做渐变文字、不做霓虹发光。 */
+  --violet: #6d5efc; --violet-soft: rgba(109,94,252,.10);
+  --blue: #3b82f6; --blue-soft: rgba(59,130,246,.10);
+  --hair: rgba(255,255,255,.55); --glass: rgba(255,255,255,.76);
+  --mesh-a: rgba(16,185,129,.15); --mesh-b: rgba(59,130,246,.13); --mesh-c: rgba(109,94,252,.11);
+  --dot: rgba(26,35,50,.05);
   /* --accent-gradient 已删：仪表盘不叠渐变（app-screen 规则），阴影 rgba 取 accent 同族防漂移 */
   --ok: #10b981; --ok-soft: rgba(16,185,129,.12);
   --warn: #f59e0b; --warn-soft: rgba(245,158,11,.12);
@@ -46,6 +55,13 @@
   /* 语义色显式重声明（值沿用亮色）：不靠「不写即继承 :root」——那样新增变量时的
      漏项无法被 TestDarkThemeTokensComplete 发现。soft 层在深底上略提高透明度。 */
   --accent: #10b981; --accent-2: #059669; --accent-ink: #ffffff; --accent-soft: rgba(16,185,129,.16);
+  /* 视觉第三批的新增令牌同样必须在这里给值：暗色不声明就会沿用亮色（白玻璃、白网格线），
+     TestDarkThemeTokensComplete 会直接红。深底上数据色提亮一档、玻璃降透明度。 */
+  --violet: #8b7dff; --violet-soft: rgba(139,125,255,.16);
+  --blue: #60a5fa; --blue-soft: rgba(96,165,250,.16);
+  --hair: rgba(255,255,255,.06); --glass: rgba(23,28,33,.74);
+  --mesh-a: rgba(16,185,129,.14); --mesh-b: rgba(96,165,250,.12); --mesh-c: rgba(139,125,255,.12);
+  --dot: rgba(255,255,255,.045);
   --ok: #10b981; --ok-soft: rgba(16,185,129,.16);
   --warn: #f59e0b; --warn-soft: rgba(245,158,11,.16);
   --bad: #ef4444; --bad-soft: rgba(239,68,68,.16);
@@ -900,3 +916,86 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
     .exp-row, .exp-head { grid-template-columns: 1fr 68px minmax(72px, .9fr); }
     .exp-when, .exp-head span:nth-child(2), .exp-rate, .exp-head span:nth-child(5) { display: none; }
   }
+
+/* ═══ 视觉第三批：深度 / 渐进入场 / 跟随光斑（2026-11-19）══════════════════
+   参考来源（GitHub）：leonxlnx/taste-skill-classics 的 anti-slop 实现（内描边高光、
+   spotlight 悬停、shimmer 微动效）与 Flux Dashboard 的渐变语言（渐变主色 + 分层
+   彩影 + 磨砂顶栏 + 点阵背景）。
+   为什么敢改掉旧的「app-screen 不叠渐变」：那条禁令针对的是落地页式渐变堆砌
+   （渐变文字、霓虹发光、通体彩带）。运维面板需要的是「有深度的平面」：底面极淡
+   网格 + 顶栏磨砂 + 主指标卡双色渐变 + 悬停光斑，语义色仍独占状态含义。
+   动效一律走 transform/opacity，且被全局 prefers-reduced-motion 关闭。 */
+body {
+  background-image:
+    radial-gradient(900px 520px at 8% -8%, var(--mesh-a), transparent 60%),
+    radial-gradient(760px 460px at 96% 2%, var(--mesh-b), transparent 58%),
+    radial-gradient(820px 620px at 72% 108%, var(--mesh-c), transparent 62%),
+    radial-gradient(var(--dot) 1px, transparent 1px);
+  background-size: auto, auto, auto, 26px 26px;
+  background-attachment: fixed, fixed, fixed, fixed;
+}
+.topbar {
+  background: var(--glass);
+  -webkit-backdrop-filter: blur(14px) saturate(1.5);
+  backdrop-filter: blur(14px) saturate(1.5);
+  box-shadow: 0 1px 0 var(--hair), 0 10px 24px -18px rgba(16,74,64,.35);
+}
+.nav { background: linear-gradient(180deg, var(--surface) 0%, var(--surface-2) 100%); }
+.nav a.on {
+  background: linear-gradient(135deg, var(--accent-soft), var(--blue-soft));
+  box-shadow: inset 0 1px 0 var(--hair), 0 1px 2px rgba(16,74,64,.08);
+}
+.stats { box-shadow: inset 0 1px 0 var(--hair), var(--shadow); }
+.stat.hero {
+  background:
+    radial-gradient(120% 130% at 100% 0%, var(--blue-soft), transparent 62%),
+    linear-gradient(135deg, var(--accent-soft), transparent 58%);
+}
+.stat.hero.hero-ring {
+  background:
+    radial-gradient(120% 130% at 0% 100%, var(--blue-soft), transparent 60%),
+    linear-gradient(135deg, var(--violet-soft), transparent 62%);
+}
+/* 悬停高光：::before 铺一层极淡的径向光斑，悬停时淡入。
+   位置固定在右上角而不是跟随指针：跟随需要 pointermove + rAF + 每帧
+   getBoundingClientRect，而这些代码只能落在 app.js（会被 maxFrontendLines 棘轮顶红）
+   或新起一个 js 文件（要同时动 embed 变量/路由/清单/顺序测试四处 Go 代码）。
+   收益是一点光斑位移，成本是体量与门禁风险，不划算——静态高光已足够给出层次。 */
+.acc-card, .stat.hero { position: relative; overflow: hidden; }
+.acc-card::before, .stat.hero::before {
+  content: ''; position: absolute; inset: 0; pointer-events: none; opacity: 0;
+  background: radial-gradient(240px circle at 82% -10%, var(--accent-soft), transparent 70%);
+  transition: opacity .25s ease;
+}
+.acc-card:hover::before, .stat.hero:hover::before { opacity: 1; }
+.acc-card { box-shadow: inset 0 1px 0 var(--hair); }
+.acc-card:hover { transform: translateY(-2px); box-shadow: inset 0 1px 0 var(--hair), 0 10px 26px -12px rgba(16,74,64,.28); }
+.acc-avatar { background: linear-gradient(135deg, var(--accent), var(--blue)); box-shadow: inset 0 1px 0 var(--hair); }
+.box { box-shadow: inset 0 1px 0 var(--hair), var(--shadow); }
+/* 视图切换渐进入场：只在 hidden 解除时跑一次。
+   注意：账号卡片**不加**入场动画——列表每 5s 轮询重渲染一次，
+   逐卡 animation 会在数据变化时反复触发，变成整片闪烁（实测口径：
+   renderAccounts 签名含 credits/in_flight，这些值每轮都可能变）。 */
+.view:not([hidden]) { animation: view-in .26s cubic-bezier(.2,.8,.2,1) both; }
+@keyframes view-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) {
+  .view:not([hidden]) { animation: none; }
+  .acc-card:hover { transform: none; }
+}
+/* 底色再抬一档的口径说明：0.10 的 mesh 在 1440px 白底上几乎看不出，整页仍是
+   「白压白」；真实取值已写在上面两个令牌块的 --mesh-*/--dot 里（0.15/0.13/0.11/0.05），
+   这里不再重复声明，避免同一个 token 两处取值、改一处忘另一处。 */
+/* 分区头给一点纵向层次：白卡顶部不是一条硬线，而是一层极淡的表面色过渡 */
+.box > header {
+  background: linear-gradient(180deg, var(--surface-2), color-mix(in srgb, var(--surface-2) 40%, var(--surface)));
+}
+/* KPI 卡：把左侧色条的颜色渗进卡面（8–10% 淡染），卡片不再是清一色纯白；
+   语义仍由 --kpi-c 单点决定（c-accent/c-ok/c-warn/c-bad 各染各的），不新增含义。 */
+.kpi {
+  background: linear-gradient(180deg, color-mix(in srgb, var(--kpi-c, var(--line-soft)) 10%, var(--surface)) 0%, var(--surface) 62%);
+  box-shadow: inset 0 1px 0 var(--hair), var(--shadow);
+  transition: transform .18s ease, box-shadow .18s ease;
+}
+.kpi:hover { transform: translateY(-1px); box-shadow: inset 0 1px 0 var(--hair), 0 10px 24px -14px rgba(16,74,64,.28); }
+.kpi .k, .kpi .s { color: var(--ink-2); }
+@media (prefers-reduced-motion: reduce) { .kpi:hover { transform: none; } }

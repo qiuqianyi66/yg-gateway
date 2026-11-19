@@ -481,7 +481,7 @@ for (const [id, key] of [['mdRealm', 'realm'], ['mdCap', 'cap'], ['mdEffort', 'e
   el.onchange = () => { mdFilter[key] = el.value; renderModels(); };
 }
 
-let accRenderSig = '';
+let accRenderSig = null; /* null=未渲染过；accountsSig([]) 返回空串，用 '' 会挡住首屏骨架替换（空池永久骨架） */
 let mlRenderSig = '';
 $('accBody').addEventListener('click', async ev => {
   const b = ev.target.closest('button[data-a]');
