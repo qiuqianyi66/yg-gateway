@@ -147,11 +147,8 @@
     <!-- 运维 Agent（独立视图） -->
     <section class="view" id="view-opsagent" hidden>
       <div class="box">
-        <header>
-          <h2>运维 Agent（观察-建议）</h2>
-          <button id="opsagentReload" type="button">加载 / 刷新</button>
-        </header>
-        <div id="opsagentBody" style="margin-top:12px;font-size:13px">点击「加载 / 刷新」查看未知台账与最近审计轮。</div>
+        <header><h3>运维 Agent（观察-建议）</h3><span class="grow"></span><button class="xs" id="opsagentReload" type="button">加载 / 刷新</button></header>
+        <div class="pad"><div id="opsagentBody" class="ops-body">正在读取…</div></div>
       </div>
     </section>
 

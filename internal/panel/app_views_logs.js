@@ -176,8 +176,8 @@ function renderRequestTable() {
       '<td class="chk"><input type="checkbox" class="req-chk" data-rid="' + esc(rid) + '"' + chk + ' aria-label="选择行"></td>' +
       '<td class="num">' + esc(when) + '</td>' +
       '<td>' + reqOutcomeTag(e) + '</td>' +
-      '<td>' + esc(e && e.model || '—') + '</td>' +
-      '<td>' + esc(e && e.account || '—') + '</td>' +
+      '<td><span class="clip model" title="' + esc(e && e.model || '') + '">' + esc(e && e.model || '—') + '</span></td>' +
+      '<td><span class="clip acct" title="' + esc(e && e.account || '') + '">' + esc(e && e.account || '—') + '</span></td>' +
       '<td>' + (ip ? '<span class="clip ip" title="' + esc(ip) + '">' + esc(ip) + '</span>' : '<span class="muted">—</span>') + '</td>' +
       '<td>' + (ua ? '<span class="clip" title="' + esc(ua) + '">' + esc(ua) + '</span>' : '<span class="muted">—</span>') + '</td>' +
       '<td class="num">' + fmtMs(e && e.duration_ms) + '</td>' +

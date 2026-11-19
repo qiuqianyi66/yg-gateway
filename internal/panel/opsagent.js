@@ -26,23 +26,22 @@
 
   function renderUnknowns(items) {
     if (!items || !items.length) {
-      return '<p style="margin:4px 0;color:var(--muted,#888)">无未消解 unknown。</p>';
+      return '<div class="us-empty">无未消解 unknown。</div>';
     }
     var rows = items.map(function (it) {
-      return '<tr><td><code>' + esc(String(it.id).slice(0, 12)) + '</code></td>' +
+      return '<tr><td class="mono">' + esc(String(it.id).slice(0, 12)) + '</td>' +
         '<td>' + esc(it.question) + '</td>' +
         '<td>' + esc(it.requires) + '</td>' +
-        '<td>' + esc(it.revision) + '</td></tr>';
+        '<td class="num">' + esc(it.revision) + '</td></tr>';
     }).join('');
-    return '<table style="width:100%;border-collapse:collapse;font-size:12px">' +
-      '<thead><tr><th style="text-align:left">ID</th><th style="text-align:left">未知</th>' +
-      '<th style="text-align:left">消解需要</th><th>rev</th></tr></thead><tbody>' +
-      rows + '</tbody></table>';
+    /* 复用账号池的 .acc 表格样式（此前是内联样式，跟全站表格不一个字体/行高）。 */
+    return '<div class="tbl-wrap"><table class="acc"><thead><tr><th>ID</th><th>未知</th>' +
+      '<th>消解需要</th><th>rev</th></tr></thead><tbody>' + rows + '</tbody></table></div>';
   }
 
   function renderRounds(rounds) {
     if (!rounds || !rounds.length) {
-      return '<p style="margin:4px 0;color:var(--muted,#888)">暂无审计轮（agent 尚未跑满一轮，或刚启用）。</p>';
+      return '<div class="us-empty">暂无审计轮（agent 尚未跑满一轮，或刚启用）。</div>';
     }
     return rounds.slice().reverse().map(function (rd) {
       var sug = (rd.Suggestions || []).map(function (s) {
@@ -50,12 +49,12 @@
           (s.UID ? '（' + esc(String(s.UID).slice(0, 8)) + '）' : '') + '</li>';
       }).join('');
       var rej = (rd.Rejected || []).length
-        ? '<p style="margin:4px 0;color:#b58900">被白名单拒绝 ' + esc(rd.Rejected.length) + ' 项（已审计）</p>'
+        ? '<div class="note c-warn">被白名单拒绝 ' + esc(rd.Rejected.length) + ' 项（已审计）</div>'
         : '';
-      return '<div style="margin:8px 0;padding:6px 8px;border:1px solid var(--border,#444);border-radius:6px">' +
-        '<div style="font-size:12px;color:var(--muted,#888)">' + esc(fmtTime(rd.At)) +
+      return '<div class="ops-round">' +
+        '<div class="note">' + esc(fmtTime(rd.At)) +
         ' · 建议 ' + esc((rd.Suggestions || []).length) + ' · unknown ' + esc((rd.Unknowns || []).length) + '</div>' +
-        (sug ? '<ul style="margin:4px 0;padding-left:18px">' + sug + '</ul>' : '') + rej +
+        (sug ? '<ul class="ops-list">' + sug + '</ul>' : '') + rej +
         '</div>';
     }).join('');
   }
@@ -74,14 +73,14 @@
       return r.json();
     }).then(function (d) {
       if (!d.enabled) {
-        body.innerHTML = '<p style="margin:4px 0;color:var(--muted,#888)">未启用：config.json 加 ' +
-          '<code>"opsagent": {"enabled": true}</code> 后重启生效。</p>';
+        body.innerHTML = '<div class="us-empty">未启用：config.json 加 ' +
+          '<code>"opsagent": {"enabled": true}</code> 后重启生效。</div>';
         return;
       }
       body.innerHTML =
-        '<p style="margin:4px 0"><b>未消解 unknown（全量，含成本口径与 agent 登记）：</b></p>' +
+        '<h4 class="ops-h">未消解 unknown（全量，含成本口径与 agent 登记）</h4>' +
         renderUnknowns(d.unknowns_open) +
-        '<p style="margin:10px 0 4px"><b>最近审计轮（新→旧，观察-建议模式：不自动执行动作）：</b></p>' +
+        '<h4 class="ops-h">最近审计轮（新→旧，观察-建议模式：不自动执行动作）</h4>' +
         renderRounds(d.rounds);
     }).catch(function (e) {
       body.textContent = '加载失败：' + esc(e && e.message ? e.message : e);
@@ -91,5 +90,18 @@
   document.addEventListener('DOMContentLoaded', function () {
     var btn = document.getElementById('opsagentReload');
     if (btn) btn.addEventListener('click', load);
+    /* 进视图即加载：本卡原来必须手点「加载 / 刷新」，切过来看到的是一片空白 + 一句提示。
+       与 trends/agent_profile/bench 同样的坑——app.js 导航走 pushState 不触发 hashchange，
+       所以这里同时挂 hashchange（前进后退）与导航点击（捕获阶段）。 */
+    function maybeLoad() {
+      var h = (location.hash || '#accounts').slice(1);
+      if (h === 'opsagent' && document.getElementById('opsagentBody')) load();
+    }
+    addEventListener('hashchange', maybeLoad);
+    document.addEventListener('click', function (e) {
+      var a = e.target && e.target.closest ? e.target.closest('a[data-view]') : null;
+      if (a && a.dataset.view === 'opsagent') setTimeout(maybeLoad, 0);
+    }, true);
+    maybeLoad();
   });
 })();
