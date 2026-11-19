@@ -107,9 +107,12 @@
     }
     if (!pts.length) return;
 
-    const W = 1200, H = 200, PL = 58, PR = 46, PT = 18, PB = 30;
+    const W = 1200, H = 200, PL = 78, PR = 46, PT = 18, PB = 30;
     const iw = W - PL - PR, ih = H - PT - PB;
-    const t0 = pts[0].t, t1 = pts[pts.length - 1].t;
+    /* 时间轴一律用毫秒数：t 是 Date，`t0 + span * k` 会走字符串拼接（Date + number
+       → "Thu Nov 13 ... " + 数字），随后 `pts[i].t - target` 得 NaN，最近点全落回 0，
+       整条 X 轴只剩最左一个日期标签（2026-11-19 生产实测）。 */
+    const t0 = +pts[0].t, t1 = +pts[pts.length - 1].t;
     const span = Math.max(1, t1 - t0);
     const maxReq = Math.max(1, ...pts.map(p => p.req));
     const maxAcct = Math.max(1, ...pts.map(p => p.acct));
@@ -145,7 +148,7 @@
     }
 
     let minGap = Infinity;
-    for (let i = 1; i < pts.length; i++) minGap = Math.min(minGap, pts[i].t - pts[i - 1].t);
+    for (let i = 1; i < pts.length; i++) minGap = Math.min(minGap, +pts[i].t - +pts[i - 1].t);
     if (!isFinite(minGap) || minGap <= 0) minGap = span;
     const slot = iw * (minGap / span);
     const bw = Math.max(2, Math.min(30, slot * 0.7));
@@ -191,7 +194,7 @@
       const target = t0 + span * (TICKS === 1 ? 0.5 : k / (TICKS - 1));
       let bi = 0, best = Infinity;
       for (let i = 0; i < pts.length; i++) {
-        const dd = Math.abs(pts[i].t - target);
+        const dd = Math.abs(+pts[i].t - target);
         if (dd < best) { best = dd; bi = i; }
       }
       if (used.has(bi)) continue;

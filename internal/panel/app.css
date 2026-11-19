@@ -712,8 +712,10 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
   .uschart-hd .legend .sep { width: 1px; height: 11px; background: var(--line); margin: 0 3px; }
   .uschart-hd .sw { width: 9px; height: 9px; border-radius: 2px; display: inline-block; }
   .uschart-hd .sw-p { background: var(--accent); }
-  .uschart-hd .sw-c { background: var(--ok); }
-  .uschart-hd .sw-t { background: var(--warn); }
+  /* 图例必须跟实际画法一致：请求量=绿柱；成功率=琥珀曲线（右轴 %）；活跃账号=绿点。
+     原先 sw-c/sw-t 颜色互换，等于把「成功率」标成绿、「活跃账号」标成琥珀——图例说谎。 */
+  .uschart-hd .sw-c { background: var(--warn); }
+  .uschart-hd .sw-t { background: var(--ok); }
   .uschart-body { padding: 8px 10px 4px; min-height: 48px; }
 /* 空数据兜底：JS 在没有数据时不渲染任何节点，卡片就只剩标题和一条「—」，看起来像坏了。
    这里用 :empty 给一个统一的空态文案；一旦 JS 插入 svg/canvas，:empty 自动失效。 */
