@@ -244,9 +244,9 @@ function renderUsage(d) {
   const pctW = (part) => total ? Math.max(0, Math.min(100, Number(part || 0) / total * 100)).toFixed(2) + '%' : '0%';
   // 4 张大卡：请求 / Token / 成功率 / 延迟——比 6 张散卡更聚焦。
   $('usStats').innerHTML =
-    usKpi(fmtTok(reqs), '请求数', 'c-accent',
+    usKpi(fmtTok(reqs), '请求数', 'c-blue',
       errs ? '失败 ' + errs + ' 次 · 成功率 ' + (okRate == null ? '—' : okRate.toFixed(1) + '%') : '全部成功') +
-    usKpi(fmtTok(total), '总 Token', 'c-accent',
+    usKpi(fmtTok(total), '总 Token', 'c-violet',
       'prompt ' + usPct(pt, total) + ' · completion ' + usPct(ct, total),
       '<div class="kbar"><i style="width:' + pctW(pt) + ';background:var(--accent)"></i>' +
       '<i style="width:' + pctW(ct) + ';background:var(--ok)"></i></div>') +

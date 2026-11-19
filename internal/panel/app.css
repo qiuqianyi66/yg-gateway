@@ -691,6 +691,10 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
   .kpi.c-warn { --kpi-c: var(--warn); } .kpi.c-warn .v { color: var(--warn); }
   .kpi.c-bad { --kpi-c: var(--bad); } .kpi.c-bad .v { color: var(--bad); }
   .kpi.c-mute { --kpi-c: var(--line); }
+/* 数据量类指标用中性色相区分，避免一排卡片全是同一支绿（成功率/延迟仍走语义色）：
+   请求数=蓝（流量）、总 Token=紫（体量）。语义不冲突：蓝紫只表示「这是量」，不表示好坏。 */
+.kpi.c-blue { --kpi-c: var(--blue); } .kpi.c-blue .v { color: var(--blue); }
+.kpi.c-violet { --kpi-c: var(--violet); } .kpi.c-violet .v { color: var(--violet); }
   /* 中性但带一点主色：用于 prompt / 平均延迟这类"要看但不抢眼"的指标——
      纯灰轨在深色主题下几乎看不见，纯主色又会让六张卡都在喊。 */
   .kpi.c-soft { --kpi-c: color-mix(in srgb, var(--accent) 45%, var(--line)); }
