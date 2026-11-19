@@ -129,7 +129,10 @@
     if (t2) t2.textContent = '归档 ' + (d.window || 0) + ' 条 · ' +
       (d.accounts || []).length + ' 个账号';
 
-    const xOf = t => PL + (t - t0) / span * iw;
+    /* 绘图区左右各让出 16px（≈半个最宽柱 + 1）：柱心如果直接落在 PL/(W-PR) 上，
+       首尾柱会盖住 Y 轴数值与右轴百分比（Y 轴刻度右对齐在 PL-6，柱左边缘在 PL-15）。 */
+    const I0 = PL + 16, I1 = W - PR - 16;
+    const xOf = t => I0 + (t - t0) / span * (I1 - I0);
     const yReq = v => PT + ih - ih * (v / yMax);
     const yRate = v => PT + ih - ih * (v / 100);
 
@@ -139,7 +142,7 @@
     for (let k = 0; k <= ticksReq; k++) {
       const v = Math.round(yMax * k / ticksReq);
       const y = yReq(v).toFixed(1);
-      out += '<line class="gl" x1="' + PL + '" y1="' + y + '" x2="' + (W - PR) + '" y2="' + y + '" style="opacity:.18"/>';
+      out += '<line class="gl" x1="' + I0 + '" y1="' + y + '" x2="' + I1 + '" y2="' + y + '" style="opacity:.18"/>';
       out += '<text class="tk" x="' + (PL - 6) + '" y="' + (y + 2) + '" text-anchor="end">' + v + '</text>';
     }
     for (const v of [0, 50, 100]) {
