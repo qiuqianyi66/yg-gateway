@@ -10,7 +10,10 @@ json.Unmarshal([]byte("null"), &obj) → err == nil，obj == nil
 obj["messages"] = ...            → 对 nil map 赋值 → panic
 ```
 
-对 7×24 常驻网关而言这不是「一个请求失败」，是**进程死掉、所有在途请求一起失败**。
+对 7×24 常驻网关而言这**不是进程级故障**（`net/http` recover 只终结该 goroutine，
+进程存活），但危害仍成立：客户端拿到空响应（`curl` HTTP=000），网关侧不报错、
+监控不报警，排障只能靠翻 stderr 里的 `panic serving` 栈。**2026-11-19 实测修正**，
+原表述"进程死掉、所有在途请求一起失败"过重。
 
 需求来源不是推测：`FuzzRewrite` 的种子集里放 `null` 后，第一次运行即复现，
 栈顶为 `prompt.go:62`。
