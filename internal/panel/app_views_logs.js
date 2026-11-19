@@ -179,7 +179,7 @@ function renderRequestTable() {
       '<td><span class="clip model" title="' + esc(e && e.model || '') + '">' + esc(e && e.model || '—') + '</span></td>' +
       '<td><span class="clip acct" title="' + esc(e && e.account || '') + '">' + esc(e && e.account || '—') + '</span></td>' +
       '<td>' + (ip ? '<span class="clip ip" title="' + esc(ip) + '">' + esc(ip) + '</span>' : '<span class="muted">—</span>') + '</td>' +
-      '<td>' + (ua ? '<span class="clip" title="' + esc(ua) + '">' + esc(ua) + '</span>' : '<span class="muted">—</span>') + '</td>' +
+      '<td>' + (ua ? '<span class="clip ua" title="' + esc(ua) + '">' + esc(ua) + '</span>' : '<span class="muted">—</span>') + '</td>' +
       '<td class="num">' + fmtMs(e && e.duration_ms) + '</td>' +
       '<td class="num">' + reqTokenCell(e) + '</td>' +
       '<td class="num">' + reqCreditCell(e) + '</td>' +

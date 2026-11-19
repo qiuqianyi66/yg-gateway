@@ -1017,3 +1017,6 @@ body {
 /* 请求表的模型 / 账号列：不收窄就会被文字撑成两行，整张表行高参差。 */
 .clip.model { max-width: 190px; }
 .clip.acct { max-width: 140px; }
+/* UA 用 .clip 的 300px 上限会把整张表顶出卡片（实测 1274 > 1182，横向溢出 92px，
+   末列被卡片边缘硬切）。UA 只是排障线索，190px + title 足够。 */
+.clip.ua { max-width: 190px; }
