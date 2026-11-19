@@ -128,9 +128,14 @@ def s1_config(key):
     print("\n== S1 配置自检 ==")
     with open(CONFIG_PATH, encoding="utf-8") as f:
         c = json.load(f)
-    check("config guardrails 500k/300k",
-          c["guardrails"].get("context_max_tokens") == 500000 and c["guardrails"].get("context_warn_tokens") == 300000,
-          f"max={c['guardrails'].get('context_max_tokens')} warn={c['guardrails'].get('context_warn_tokens')}")
+    # 断言不变式而非某个快照值：早先这里写死 ==500000/==300000，配置调到 1M 后
+    # 每天假红一条。真正要守的是「上限可用 + 警告值确实低于上限」——warn >= max
+    # 会让警告永远不触发，那才是缺陷。
+    mx = c["guardrails"].get("context_max_tokens")
+    warn = c["guardrails"].get("context_warn_tokens")
+    check("config guardrails 合法（warn < max 且均 > 0）",
+          isinstance(mx, int) and isinstance(warn, int) and 0 < warn < mx,
+          f"max={mx} warn={warn}")
     check("config prompt append",
           c["prompt"].get("mode") == "append", f"mode={c['prompt'].get('mode')}")
     check("config session_rpm=20",
@@ -170,8 +175,19 @@ def s2_healthy(key, model, n):
 
 
 def s3_max_boundary(key, model):
-    print("\n== S3 护栏 max 边界（构造 ~520k token）==")
-    big = "测" * 520000
+    # 边界要跟着实际配置走：早先写死「520k 字符」压在 500k 上限之上，
+    # 配置调到 1M 之后这条永远不触发，每天报一条假红。
+    with open(CONFIG_PATH, encoding="utf-8") as f:
+        mx = json.load(f)["guardrails"].get("context_max_tokens") or 500000
+    # 字符→token 按 1:1 粗估（中文实际略高于此，够越界即可）
+    n_chars = int(mx * 1.05) + 20000
+    if n_chars > 2_000_000:
+        # 超长文本本身要几 MB、构造与传输都慢，且本地护栏是逐字计数的
+        # 确定性路径，不值得为一个配置值付这个代价。
+        print(f"  [skip] 配置 max={mx} → 需构造 {n_chars} 字符，超过 2M 安全阈值，本轮不判定")
+        return
+    print(f"\n== S3 护栏 max 边界（配置 max={mx}，构造 ~{n_chars} 字符）==")
+    big = "测" * n_chars
     st, data, dt, extra = request("/v1/chat/completions", key,
                                   {"model": model, "messages": [{"role": "user", "content": big}], "stream": False})
     code = (data.get("error") or {}).get("code") if isinstance(data.get("error"), dict) else None
@@ -218,8 +234,13 @@ def s4_session_rpm(key, model, n=21):
 def s5_invalid_inputs(key, model):
     print("\n== S5 无效输入族（错误处理最坏情景）==")
     # 5.1 坏 auth（POST 带 body）
+    # 必须显式 Connection: close。服务端拒绝时未读请求体就直接返回 401，Go 因此
+    # 发送 Connection: close；若客户端复用这条已关闭的连接，第二次写入会吃到
+    # RST(10054)，urllib 不重试 → 断言变成 status=-1 的假红。
+    # 这不是服务端缺陷（拒绝即断开是防御性行为），是脚本的连接脆弱性。
     st, data, _, _ = request("/v1/chat/completions", "sk-bad-key",
-                             {"model": model, "messages": [{"role": "user", "content": "hi"}]})
+                             {"model": model, "messages": [{"role": "user", "content": "hi"}]},
+                             headers={"Connection": "close"})
     check("坏 auth → 401", st == 401, f"status={st}")
     # 5.2 畸形 JSON
     url = BASE + "/v1/chat/completions"
