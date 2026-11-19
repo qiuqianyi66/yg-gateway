@@ -246,6 +246,13 @@
       if (h === 'usage' && $('trChart')) loadTrends();
     }
     addEventListener('hashchange', maybeLoad);
+    /* 导航点击走 history.pushState 写 hash，**不触发 hashchange**，所以只看 hash 的话
+       点「用量」进来这张卡永远是空的（只有前进后退/手改地址栏才会加载）。补一个点击
+       监听：捕获阶段拿到 data-view，等 app.js 完成 pushState 后（setTimeout 0）再加载。 */
+    document.addEventListener('click', function (e) {
+      const a = e.target && e.target.closest ? e.target.closest('a[data-view]') : null;
+      if (a && a.dataset.view === 'usage') setTimeout(maybeLoad, 0);
+    }, true);
     maybeLoad();
   });
 })();

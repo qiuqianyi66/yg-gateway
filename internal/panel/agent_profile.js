@@ -153,6 +153,11 @@
       if (h === 'usage' && $('agProfileHost')) loadProfile();
     }
     addEventListener('hashchange', maybeLoad);
+    /* 导航点击走 pushState，不触发 hashchange（同 trends.js 的注释），故补点击监听。 */
+    document.addEventListener('click', function (e) {
+      const a = e.target && e.target.closest ? e.target.closest('a[data-view]') : null;
+      if (a && a.dataset.view === 'usage') setTimeout(maybeLoad, 0);
+    }, true);
     maybeLoad();
   });
 })();
