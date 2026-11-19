@@ -48,12 +48,18 @@ func Load(mode, file string) (string, error) {
 //
 // 解析失败 → 原样返回（绝不失败）：Rewrite 是出站改写的关键路径，
 // 任何解析错误都不应阻塞请求转发，让上游按其原始语义处理。
+//
+// `null` 的处理单独说明（2026-11-19，FuzzRewrite 抓出）：`null` 是**合法 JSON**，
+// json.Unmarshal 对它不返回 err，但解出的 obj 是 nil map；随后
+// obj["messages"] = ... 是**对 nil map 赋值**，Go 直接 panic。对 7×24 网关来说
+// 那不是「这一个请求失败」，是进程死掉、所有请求失败。因此判据不能只看 err，
+// 必须同时看 obj 非 nil；nil 与"非对象输入"同义，走同一条原样返回的降级路径。
 func Rewrite(body []byte, systemPrompt string) []byte {
 	if len(body) == 0 || systemPrompt == "" {
 		return body
 	}
 	var obj map[string]any
-	if err := json.Unmarshal(body, &obj); err != nil {
+	if err := json.Unmarshal(body, &obj); err != nil || obj == nil {
 		return body
 	}
 	msgs, ok := obj["messages"].([]any)
@@ -113,7 +119,7 @@ func Append(body []byte, systemPrompt string) []byte {
 		return body
 	}
 	var obj map[string]any
-	if err := json.Unmarshal(body, &obj); err != nil {
+	if err := json.Unmarshal(body, &obj); err != nil || obj == nil {
 		return body
 	}
 	msgs, ok := obj["messages"].([]any)
