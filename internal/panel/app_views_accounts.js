@@ -249,11 +249,18 @@ async function loadOverview(quiet) {
     const remSum = (d.accounts || []).reduce((a, s) => a + (s.credits || 0), 0);
     const totSum = (d.accounts || []).reduce((a, s) => a + (s.credits_total || 0), 0);
     setCount('sCredits', totSum > 0 ? remSum + ' / ' + totSum : remSum);
-    // 能量环：积分占比一眼可见。总额缺失（含不限量账号）时占比未知，环留空不臆造。
+    // 能量环：积分占比一眼可见。总额缺失（含不限量账号）时占比**未知**——不得渲染成
+    // 0%（那会被读成「积分用完了」）。未知就藏环，只留剩余数。
     const ringEl = $('statCredits');
     if (ringEl) {
-      const pct = totSum > 0 ? Math.min(100, Math.round(remSum / totSum * 100)) : 0;
-      ringEl.style.setProperty('--ring', pct + '%');
+      if (totSum > 0) {
+        const pct = Math.min(100, Math.round(remSum / totSum * 100));
+        ringEl.style.setProperty('--ring', pct + '%');
+        ringEl.removeAttribute('data-unknown');
+      } else {
+        ringEl.style.removeProperty('--ring');
+        ringEl.setAttribute('data-unknown', '1');
+      }
     }
     setCount('sSticky', d.sticky_sessions);
     // 粘性会话详情列表：join accounts 数据显示昵称 + 成本层级。
@@ -343,8 +350,13 @@ async function loadOverview(quiet) {
     if (!overviewData) {
       const tb = $('accBody');
       if (tb) {
-        tb.innerHTML = '<tr><td colspan="9">' +
-          loadErrorHTML('读取账号池失败', e.message, '重试') + '</td></tr>';
+        // 错误条是绕过 accRenderSig 直接写进 DOM 的。必须让签名失效，否则下一次
+        // 成功渲染会被「数据没变就不重建」短路——空池的签名恰好是空串、与初始值
+        // 相同，于是登录前那次 401 留下的「读取账号池失败/密钥无效」永远贴在页面上，
+        // 健康实例看起来像鉴权坏了（2026-11-19 在隔离实例实测复现）。
+        accRenderSig = null;
+        // accBody 是 .acc-grid（div），此前塞的是 <tr><td>，属于非法表格行。
+        tb.innerHTML = loadErrorHTML('读取账号池失败', e.message, '重试');
         bindRetry(tb, () => loadOverview(false));
       }
     }

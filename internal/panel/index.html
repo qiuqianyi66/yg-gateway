@@ -77,8 +77,8 @@
       <!-- 主次分级（D-004）：前两张是主指标（首屏视线落点），其余退为次要指标。
            顺序 = 读面板时的问答顺序：健康吗 → 积分够吗 → 异常在哪 → 细项。 -->
       <div class="stats">
-        <div class="stat hero" id="boxHealthy"><div class="v" id="sHealthy">-</div><div class="k">可用账号</div></div>
-        <div class="stat hero hero-ring" id="statCredits"><div class="v" id="sCredits">-</div><div class="k">积分剩余 / 总额</div></div>
+        <div class="stat hero span-4" id="boxHealthy"><div class="v" id="sHealthy">-</div><div class="k">可用账号</div></div>
+        <div class="stat hero span-3 hero-ring" id="statCredits"><div class="v" id="sCredits">-</div><div class="k">积分剩余 / 总额</div></div>
         <div class="stat minor"><div class="v" id="sTotal">-</div><div class="k">账号总数</div></div>
         <div class="stat minor warn"><div class="v" id="sCooling">-</div><div class="k">冷却中</div></div>
         <div class="stat minor warn"><div class="v" id="sPaused">-</div><div class="k">已暂停选号</div></div>
@@ -191,8 +191,7 @@
     <section class="view" id="view-models" hidden>
       <div class="box">
         <header>
-          <h3>模型能力 <span class="hint">max_tokens bug已修复目前可以正常透传最大输出,但是官方返回的最大输出仅为参考，不保证完全正确
-          </span></h3>
+          <h3>模型能力 <span class="hint">max_tokens 原样透传；上游返回的最大输出仅供参考</span></h3>
           <span class="grow"></span>
           <span class="note" id="mdNote">实时查询上游</span>
           <button class="xs" id="btnModels">重新获取</button>
