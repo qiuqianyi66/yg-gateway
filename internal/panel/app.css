@@ -338,7 +338,9 @@ label.fld > .hint { display: block; font-size: 11.5px; color: var(--ink-3); marg
    由 JS 置 data-unknown 隐藏——未知不是 0%，不能画成一个空环假装用完了。 */
 .stat.hero.hero-ring::after {
   content: ''; position: absolute; right: 18px; top: 50%; width: 44px; height: 44px; margin-top: -22px;
-  border-radius: 50%; background: conic-gradient(var(--accent) var(--ring, 0%), var(--line) 0);
+  border-radius: 50%;
+  /* 轨道别用 --line：hero 自身是渐变底，浅色轨道整圈看不见，环读起来像一条悬空弧线。 */
+  background: conic-gradient(var(--accent) var(--ring, 0%), color-mix(in srgb, var(--ink-3) 34%, var(--surface)) 0);
   -webkit-mask: radial-gradient(circle, transparent 62%, #000 63%);
   mask: radial-gradient(circle, transparent 62%, #000 63%);
 }
@@ -712,10 +714,9 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
   .uschart-hd .legend .sep { width: 1px; height: 11px; background: var(--line); margin: 0 3px; }
   .uschart-hd .sw { width: 9px; height: 9px; border-radius: 2px; display: inline-block; }
   .uschart-hd .sw-p { background: var(--accent); }
-  /* 图例必须跟实际画法一致：请求量=绿柱；成功率=琥珀曲线（右轴 %）；活跃账号=绿点。
-     原先 sw-c/sw-t 颜色互换，等于把「成功率」标成绿、「活跃账号」标成琥珀——图例说谎。 */
+  /* 图例必须跟实际画法一致：请求量=绿柱；成功率=琥珀曲线（右轴 %）；活跃账号=蓝点。 */
   .uschart-hd .sw-c { background: var(--warn); }
-  .uschart-hd .sw-t { background: var(--ok); }
+  .uschart-hd .sw-t { background: var(--blue); }
   .uschart-body { padding: 8px 10px 4px; min-height: 48px; }
 /* 空数据兜底：JS 在没有数据时不渲染任何节点，卡片就只剩标题和一条「—」，看起来像坏了。
    这里用 :empty 给一个统一的空态文案；一旦 JS 插入 svg/canvas，:empty 自动失效。 */
@@ -781,10 +782,10 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
   .pk-expiry-row > span { color: var(--ink-3); font-size: 11.5px; }
   .pk-expiry-row > b { text-align: right; font: 600 11.5px var(--mono);
     font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
-  .pk-expiry-track { display: flex; align-items: stretch; gap: 1px; height: 10px;
+  .pk-expiry-track { display: flex; align-items: stretch; gap: 0; height: 10px;
     border-radius: 5px; background: var(--surface-2); overflow: hidden; }
   /* 段与段之间原来 2px 白隙 + 每段 min-width 3px，包多了会碎成一排虚线；
-     收到 1px / 2px 后仍能看出分界，但整条读起来是一根容量条。 */
+     去掉缝隙后相邻不同账号靠色差分界，同账号连续段直接连成一根容量条。 */
   .pk-expiry-seg { display: block; min-width: 2px; height: 100%; cursor: default;
     background: var(--seg-color, var(--accent)); transition: filter .15s, transform .15s; }
   .pk-expiry-seg:hover { filter: brightness(1.12); transform: scaleY(1.35); }

@@ -23,11 +23,12 @@
   function $(id) { return document.getElementById(id); }
 
   function loadingMsg(text) {
-    return '<div class="us-empty" style="color:var(--muted,#888)">' + esc(text) + '</div>';
+    return '<div class="us-empty" style="color:var(--ink-3)">' + esc(text) + '</div>';
   }
 
   function loadErrorHTML(title, msg, retryLabel) {
-    return '<div class="us-empty" style="color:var(--err,#e11d48)">' + esc(title) +
+    /* --err/--muted 都不在本仓令牌表里（只有 --bad/--ink-3），原来靠兜底色硬撑。 */
+    return '<div class="us-empty" style="color:var(--bad)">' + esc(title) +
       '<span style="opacity:.75">（' + esc(msg) + '）</span>' +
       '<button class="xs" data-retry>' + esc(retryLabel) + '</button></div>';
   }
@@ -163,7 +164,9 @@
       out += '<rect x="' + (x - bw / 2).toFixed(1) + '" y="' + y.toFixed(1) + '" width="' + bw.toFixed(1) +
              '" height="' + h.toFixed(1) + '" rx="2" fill="var(--accent)" opacity=".95"/>';
       const ya = yReq(p.acct);
-      out += '<circle cx="' + x.toFixed(1) + '" cy="' + ya.toFixed(1) + '" r="2.6" fill="var(--ok,#22c55e)"/>';
+      /* 活跃账号用 --blue：原先取 --ok，和请求量柱同色系的绿，图例里两个绿点分不清
+         哪个是柱、哪个是线（色弱尤甚）。 */
+      out += '<circle cx="' + x.toFixed(1) + '" cy="' + ya.toFixed(1) + '" r="2.8" fill="var(--blue,#3b82f6)"/>';
       if (p.rate !== null) {
         const yr = yRate(p.rate).toFixed(1);
         out += '<circle cx="' + x.toFixed(1) + '" cy="' + yr + '" r="3" fill="var(--warn,#f59e0b)"/>';
@@ -176,7 +179,7 @@
       ma.push([xOf(pts[i].t), yReq((pts[i - 2].req + pts[i - 1].req + pts[i].req) / 3)]);
     }
     const maD = smoothPath(ma);
-    if (maD) out += '<path d="' + maD + '" fill="none" stroke="var(--accent-2,#059669)" stroke-width="1.4" opacity=".55"/>';
+    if (maD) out += '<path d="' + maD + '" fill="none" stroke="var(--blue,#3b82f6)" stroke-width="1.4" opacity=".55"/>';
 
     // 成功率曲线：Catmull-Rom 平滑（连续有观测的段内平滑；无观测日断开、不插值——
     // 四态纪律：无观测 ≠ 任何值）。

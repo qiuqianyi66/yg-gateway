@@ -138,7 +138,8 @@ function renderExpiryDistribution(list, now) {
   const legend = (list || []).filter(a =>
     a && !a.error && a.uid && pkAccountSegments(a, now).some(s => s.days != null)
   ).map(a => '<span><i style="background:' + (colors.get(String(a.uid)) || 'var(--accent)') +
-    '"></i>' + esc(a.nickname || String(a.uid).slice(0, 8)) + '</span>').join('');
+    /* 未命名账号（暂停/未拉余额）nickname 为空、uid 也可能缺，直接渲染就成了一个光秃秃的色点。 */
+    '"></i>' + esc(a.nickname || (a.uid ? String(a.uid).slice(0, 8) : '未命名账号')) + '</span>').join('');
   const hdr = '<div class="pk-expiry-hdr"><span>剩余天数</span><span style="text-align:center">各账号该批剩余</span><b>剩余积分</b></div>';
   $('pkExpiry').innerHTML = (rows
     ? hdr + '<div class="pk-expiry-chart">' + rows + '</div>'
