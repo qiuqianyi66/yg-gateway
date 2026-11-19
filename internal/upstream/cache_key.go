@@ -60,7 +60,7 @@ func InjectPromptCacheKey(body []byte, uid, conversationID string) []byte {
 		return body
 	}
 	var obj map[string]any
-	if err := json.Unmarshal(body, &obj); err != nil {
+	if err := json.Unmarshal(body, &obj); err != nil || obj == nil {
 		return body
 	}
 	// 优先级 1：客户端已显式带 key → 绝不覆盖。

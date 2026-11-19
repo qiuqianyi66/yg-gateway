@@ -47,7 +47,7 @@ func PrepareBodyOptWithEffortsAndDefaultAndCache(src []byte, sanitize bool, effo
 		return src
 	}
 	var obj map[string]any
-	if err := json.Unmarshal(src, &obj); err != nil {
+	if err := json.Unmarshal(src, &obj); err != nil || obj == nil {
 		return src
 	}
 	prepareBodyAST(obj, sanitize, efforts, defaultEfforts)
@@ -126,7 +126,7 @@ func PrepareBodyOptWithEffortsAndDefault(src []byte, sanitize bool, efforts map[
 		return src
 	}
 	var obj map[string]any
-	if err := json.Unmarshal(src, &obj); err != nil {
+	if err := json.Unmarshal(src, &obj); err != nil || obj == nil {
 		return src
 	}
 	prepareBodyAST(obj, sanitize, efforts, defaultEfforts)
