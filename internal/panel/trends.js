@@ -107,7 +107,7 @@
     }
     if (!pts.length) return;
 
-    const W = 1200, H = 200, PL = 78, PR = 46, PT = 18, PB = 30;
+    const W = 1200, H = 200, PL = 78, PR = 54, PT = 18, PB = 30;
     const iw = W - PL - PR, ih = H - PT - PB;
     /* 时间轴一律用毫秒数：t 是 Date，`t0 + span * k` 会走字符串拼接（Date + number
        → "Thu Nov 13 ... " + 数字），随后 `pts[i].t - target` 得 NaN，最近点全落回 0，
@@ -156,8 +156,9 @@
       const x = xOf(p.t);
       const h = ih * (p.req / yMax);
       const y = PT + ih - h;
+      /* 柱体接近不透明：0.78 时底下的网格线会从柱里透出来，看起来像柱内被划了几道白线。 */
       out += '<rect x="' + (x - bw / 2).toFixed(1) + '" y="' + y.toFixed(1) + '" width="' + bw.toFixed(1) +
-             '" height="' + h.toFixed(1) + '" rx="2" fill="var(--accent)" opacity=".78"/>';
+             '" height="' + h.toFixed(1) + '" rx="2" fill="var(--accent)" opacity=".95"/>';
       const ya = yReq(p.acct);
       out += '<circle cx="' + x.toFixed(1) + '" cy="' + ya.toFixed(1) + '" r="2.6" fill="var(--ok,#22c55e)"/>';
       if (p.rate !== null) {
