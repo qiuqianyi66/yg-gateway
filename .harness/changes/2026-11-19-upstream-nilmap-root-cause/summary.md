@@ -8,6 +8,11 @@
 三处判据统一为 `err != nil || obj == nil`（nil map 与「非对象输入」同义，
 走同一条原样返回路径）：
 
+**穷尽口径更正**：第一版按**变量名** `var obj map[string]any` 搜，报"9 处"，把
+`chunk`/`delta`/`root`/`m`/`ev` 漏了。改按类型模式重搜，非测试文件共 **18 处**；
+会 panic 的仍是这 3 处，其余 15 处（4 处 `!ok → return` 守卫、6 处只读、5 处非
+Unmarshal 来源）不受影响。按变量名 grep 不算穷尽。
+
 - `internal/upstream/payload.go:50`（`PrepareBodyOptWithEffortsAndDefaultAndCache`）
 - `internal/upstream/payload.go:129`（`PrepareBodyOptWithEffortsAndDefault`）
 - `internal/upstream/cache_key.go:63`（`InjectPromptCacheKey`）
