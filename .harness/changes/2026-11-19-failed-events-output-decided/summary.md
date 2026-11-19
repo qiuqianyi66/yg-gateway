@@ -1,7 +1,7 @@
 # `failedEvents` 的 output：从「待决策」变成「已决策」
 
 日期：2026-11-19
-提交：`<待填>`
+提交：`6fcbdd6`
 上一提交：`e684aad`
 改动文件：`internal/server/responses_out.go`（**只改注释，行为零变化**）
 
