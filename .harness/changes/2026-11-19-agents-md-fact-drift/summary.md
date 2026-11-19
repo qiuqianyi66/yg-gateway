@@ -76,5 +76,5 @@ go test ./... -count=1  → ok 28 个包，FAIL 0
 ## 回滚
 
 ```powershell
-git revert --no-edit <本批 sha>
+git revert --no-edit 7658d64
 ```
