@@ -66,6 +66,33 @@ func TestSaveConfigRejectsBadInputWithoutWriting(t *testing.T) {
 		}
 	})
 
+	// `null` 解到 map 时 err == nil（得到 nil map），此前会被当成「合法提交」走完
+	// 合并与落盘，把「什么都没改」当成功返回。数组/标量则由 unmarshal 直接报错，
+	// 这里一并钉住「四种都必须拒、且原文件不变」。
+	t.Run("提交非 JSON 对象（null/数组/标量）→ 报错且原文件不变", func(t *testing.T) {
+		before, err := os.ReadFile(good)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, raw := range []string{`null`, `[]`, `"x"`, `7`} {
+			if _, err := saveConfig([]byte(raw), good, nil, nil, nil, nil); err == nil {
+				t.Errorf("body=%q 不是 JSON 对象，必须报错", raw)
+			}
+			after, err := os.ReadFile(good)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(before) != string(after) {
+				t.Errorf("body=%q 被拒时不得改动原配置文件", raw)
+			}
+		}
+		// null 是唯一一个「unmarshal 不报错」的形态，必须由显式守卫兜住。
+		if _, err := saveConfig([]byte(`null`), good, nil, nil, nil, nil); err == nil ||
+			!strings.Contains(err.Error(), "不是 JSON 对象") {
+			t.Errorf("null 应由显式守卫拒绝并说明原因，got %v", err)
+		}
+	})
+
 	// D-03：磁盘上的配置文件本身已是坏 JSON 时，此前降级成空 map 继续合并——
 	// 一次保存就把用户手写的未知键整体洗掉。必须报错拒绝，且原文件不得被触碰。
 	t.Run("磁盘配置文件已损坏 → 报错且原样保留（不降级空 map 洗掉手写键）", func(t *testing.T) {

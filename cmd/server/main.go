@@ -408,6 +408,12 @@ func saveConfig(raw []byte, path string, live *livecfg.Holder, p *pool.Pool, up 
 	if err := json.Unmarshal(raw, &incoming); err != nil {
 		return nil, fmt.Errorf("parse submitted config: %w", err)
 	}
+	// 字面 `null` 解到 map 是零值 nil map 且**不报错**：不挡住会走完合并（对 nil
+	// map 的循环是空操作，等于原样保留旧配置）与落盘，然后把「什么都没改」当成功
+	// 返回给面板。属于无信号的成功，与 count_tokens 对 `null` 静默 0 token 同类。
+	if incoming == nil {
+		return nil, fmt.Errorf("提交的配置不是 JSON 对象")
+	}
 	merged := mergeConfigMaps(cur, incoming)
 
 	// 2) 校验（与启动同一套 Default+normalize），失败直接返回、不落盘。
