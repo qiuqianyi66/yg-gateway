@@ -382,7 +382,19 @@ func (w *responsesStreamWriter) completionEvents() []string {
 	return evs
 }
 
-// failedEvents 上游 error 帧 → response.failed（已开始则带已累积输出）。
+// failedEvents 上游 error 帧 → response.failed。
+//
+// output 恒为空数组，**这是有意的**，不是漏了「带已累积输出」：
+//   - 客户端在失败前已通过 response.output_text.delta 收到全部已产出文本，
+//     failed 对象带不带 output 都不影响内容可恢复性；
+//   - OpenAI 官方 failed 事件的 output 语义为 unknown（搜到过真实报文但输出字段
+//     被截断，未取得可引用的规范原文），而 status=failed 意味着响应未完成，
+//     空数组是更保守且更可能一致的选择；
+//   - 不为了「让两条路径对称」去改一个没有证据的协议形状。
+//
+// 若将来取得官方证据表明该带部分输出，改法是把这里换成
+// st.partialResponse("failed") 再覆盖 status/error 字段（数据都在 st.text /
+// st.toolCalls 里，取用成本为零）。
 func (w *responsesStreamWriter) failedEvents(chunk map[string]any) []string {
 	st := w.st
 	if st.done {
