@@ -204,6 +204,11 @@ func (h *Handler) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 入口形状守卫：非 JSON 对象就地 400（见 body_shape.go）。
+	if rejectIfNotJSONObject(w, body) {
+		return
+	}
+
 	streamReq, streamNote := anthropicStreamIntent(body)
 	if streamNote != "" {
 		// 未知留痕：不再静默降级（见 anthropicStreamIntent 注释）。

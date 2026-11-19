@@ -96,6 +96,12 @@ func (h *Handler) prepareChatRequest(w http.ResponseWriter, r *http.Request) (*c
 	}
 	p.body = body
 
+	// 入口形状守卫：非 JSON 对象（`null` / `[]` / 标量 / 空体）就地 400，
+	// 不占账号名额、不打上游（见 body_shape.go 与 REQ-entry-body-shape-2026-11-19）。
+	if rejectIfNotJSONObject(w, body) {
+		return nil, false
+	}
+
 	// 入站请求体**只解析一次**（F-701）：顶层惰性视图 + 子树按需解析。
 	//
 	// 此前每个消费方各自全文档 json.Unmarshal（peek / 日志取 model / 工具名单 /

@@ -14,11 +14,11 @@ import (
 // 它们不是"为了凑覆盖率"——每条都是客户端真会遇到的情形：
 // 发坏 JSON、上游 5xx、上游返回非 JSON。
 
-// TestAnthropicMessagesRejectsNonJSONBody：body 不是合法 JSON 时必须 400，且错误来自 transform。
+// TestAnthropicMessagesRejectsNonJSONBody：body 不是 JSON 对象时必须 400。
 //
-// 注意 anthropicStreamIntent 对坏 JSON 只是留一条 WARN 不阻断（Unknown 不得冒充结论），
-// 真正拒绝发生在 transformAnthropicToOpenAI。若这里变成 500 或 200 空体，
-// 客户端会以为请求被受理了。
+// **2026-11-19 行为变更**：此前拒绝发生在 transformAnthropicToOpenAI（错误信封带
+// "transform"），现在提前到入口 body_shape 守卫（REQ-entry-body-shape-2026-11-19）。
+// 契约不变：坏 body 不得 500、不得 200 空体，客户端必须收到 400。
 func TestAnthropicMessagesRejectsNonJSONBody(t *testing.T) {
 	h := NewHandler(Config{
 		Pool:     testPoolWith(&auth.Auth{UID: "u1", AccessToken: "at1", ExpiresAt: 9999999999}),
@@ -30,8 +30,8 @@ func TestAnthropicMessagesRejectsNonJSONBody(t *testing.T) {
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("坏 JSON 应 400，实际 %d body=%s", rec.Code, rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), "transform") {
-		t.Errorf("错误信封应指明是 transform 阶段失败，实际: %s", rec.Body.String())
+	if !strings.Contains(rec.Body.String(), "must be a JSON object") {
+		t.Errorf("错误信封应说明请求体必须是 JSON 对象，实际: %s", rec.Body.String())
 	}
 }
 

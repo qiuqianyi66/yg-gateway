@@ -12,6 +12,7 @@
 package server
 
 import (
+	"net/http"
 	"strings"
 	"testing"
 
@@ -80,15 +81,14 @@ func TestChatCompletionsBehaviorSnapshot(t *testing.T) {
 		}
 	})
 
-	t.Run("3 请求体非 JSON：宽容放行到上游（既有语义，**不是** 400）", func(t *testing.T) {
-		// 这一条是本快照测试第一个纠正假设的地方：写测试时以为"非 JSON 必 400"，
-		// 实测是 200 且请求照常发往上游。查代码确认这是**有意设计**——body 解析
-		// 失败（ParseRequestView 返回 viewOK=false）时各消费方回落空值语义，请求
-		// 继续由上游判定（注释：「与旧实现各自解析失败逐位一致，不引入新的失败
-		// 模式」）。
+	t.Run("3 请求体非 JSON：入口 400（2026-11-19 有意变更，原为宽容放行到上游）", func(t *testing.T) {
+		// 这条快照此前钉的是旧语义：body 解析失败（ParseRequestView viewOK=false）
+		// 时各消费方回落空值，请求继续由上游判定，客户端最终拿上游的 400。
 		//
-		// 钉住它的价值：重构若把这里改成"解析失败即 400"，客户端畸形 body 的行为
-		// 就变了（影响面比想象大）。快照记录现状，变化必须被解释。
+		// 2026-11-19 有意改成入口 400（REQ-entry-body-shape-2026-11-19）：
+		// 非对象 body 不该占账号名额、不该跑一次往返，`null` 更是在上游出站
+		// 规范化里对 nil map 赋值 panic 过。契约从「宽容放行」改为「就地拒绝」，
+		// 变化必须被解释——所以这里钉新语义：400 且**不打上游**。
 		var called bool
 		up := newFakeUpstream(t, func(string) (int, string, bool) {
 			called = true
@@ -96,9 +96,11 @@ func TestChatCompletionsBehaviorSnapshot(t *testing.T) {
 		})
 		h := NewHandler(Config{Pool: testPoolWith(oneAcct()), Upstream: up})
 		rec := doChat(t, h, "", `not a json`)
-		if !called {
-			t.Errorf("既有语义是宽容放行（请求继续到上游），未打上游说明行为已变；status=%d body=%s",
-				rec.Code, rec.Body.String())
+		if called {
+			t.Errorf("非 JSON 对象不应打到上游（应入口拒绝）")
+		}
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("应 400，got %d body=%s", rec.Code, rec.Body.String())
 		}
 	})
 

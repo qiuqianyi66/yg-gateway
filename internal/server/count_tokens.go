@@ -85,6 +85,11 @@ func (h *Handler) countTokens(w http.ResponseWriter, r *http.Request) {
 		writeOpenAIError(w, http.StatusBadRequest, "invalid_request", "read body: "+err.Error())
 		return
 	}
+	// 入口形状守卫：非 JSON 对象就地 400。此前 `null` 会被解成零值结构体、
+	// 静默返回 0 token，看起来像成功（见 body_shape.go）。
+	if rejectIfNotJSONObject(w, body) {
+		return
+	}
 	var req struct {
 		System   json.RawMessage `json:"system"`
 		Messages json.RawMessage `json:"messages"`

@@ -346,7 +346,7 @@ func ensureConsoleSystem(body []byte) []byte {
 		return body
 	}
 	var obj map[string]any
-	if err := json.Unmarshal(body, &obj); err != nil {
+	if err := json.Unmarshal(body, &obj); err != nil || obj == nil {
 		return body
 	}
 	msgs, ok := obj["messages"].([]any)

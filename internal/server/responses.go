@@ -57,6 +57,10 @@ func (h *Handler) responses(w http.ResponseWriter, r *http.Request) {
 		writeOpenAIError(w, http.StatusBadRequest, "invalid_request", "read body: "+err.Error())
 		return
 	}
+	// 入口形状守卫：非 JSON 对象就地 400（见 body_shape.go）。
+	if rejectIfNotJSONObject(w, body) {
+		return
+	}
 	chatBody, err := responsesToChat(body)
 	if err != nil {
 		writeOpenAIError(w, http.StatusBadRequest, "invalid_request", err.Error())

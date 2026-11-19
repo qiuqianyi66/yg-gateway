@@ -578,6 +578,11 @@ func loadConfigMasked(path string) (any, error) {
 	if err := json.Unmarshal(raw, &m); err != nil {
 		return nil, err
 	}
+	// `json.Marshal` 只有在 c 是 nil 指针时才会产出字面 `null`，而 `null` 解到 map
+	// 是零值 nil map 且**不报错**——不挡住会把字面 `null` 原样回给面板。
+	if m == nil {
+		return nil, fmt.Errorf("config 序列化结果不是 JSON 对象")
+	}
 	// api_key：留空（不返回真实值，也不返回占位符，前端空 = 不修改），
 	// 另加 api_key_configured 状态（前端据此显示「已配置」而不误提交）。
 	if v, ok := m["api_key"]; ok {
