@@ -9,13 +9,13 @@ yg-gateway 生产稳定性回归（worst-case 覆盖版）
   S1  配置自检          config.json 关键值 vs /status（护栏 500k/300k、rpm 20、append）
   S2  健康基线          N 次非流式小请求 → 期望 100% 200
   S3  护栏 max 边界     ~520k 中文 → 期望 413 context_length_exceeded（本地拦截，不达上游）
-  S4  会话 RPM 限流     同 conversationId 连发 N 次 → 期望触发 429（⚠️ 故意打上游冷却，默认 skip）
+  S4  会话 RPM 限流     同 conversationId 连发 N 次 → 期望触发 429（⚠️ 故意打上游冷却，须 --s4 显式开启）
   S5  无效输入族        坏 auth→401；畸形 JSON→400；不存在模型→4xx；空 messages→400
   S6  超大 body         >64MB → 期望 413（body 上限，非 guardrail 拦截）
   S7  流式完整性        M 次 SSE：期望全部 200 且以 data: [DONE] 收尾
   S8  并发无 panic      8 线程 × 2 请求 → 期望全有响应（200/429），无 5xx/超时
 
-用法：python yg-regression-test.py [-n 健康次数] [--model <模型>] [--skip S4,S8] [--base <url>]
+用法：python yg-regression-test.py [-n 健康次数] [--model <模型>] [--skip S4,S8] [--base <url>] [--s4]
 默认模型 cn:hy3 ×0（限时免费，零积分消耗）；失败可改 --model cn:deepseek-v4.1-flash ×0.11
 --base 切换测试端口（如 http://127.0.0.1:7864），避免打生产
 """
@@ -196,39 +196,58 @@ def s3_max_boundary(key, model):
     print(f"  msg={str((data.get('error') or {}).get('message'))[:90]}")
 
 
-def s4_session_rpm(key, model, n=21):
+def s4_session_rpm(key, model, n=21, workers=6):
     from collections import Counter
-    print(f"\n== S4 会话 RPM 限流（同 conversationId 并发连发 {n} 次，rpm=20）==")
+    print(f"\n== S4 会话 RPM 限流（同 conversationId 共 {n} 次 / {workers} 并发，rpm=20）==")
     cid = f"reg-rpm-{int(time.time())}"
-    statuses, lock = [], threading.Lock()
+    results, lock = [], threading.Lock()
+    todo = list(range(1, n + 1))
 
-    def one(i):
-        st, data, _, _ = request("/v1/chat/completions", key,
-                                 {"model": model, "conversationId": cid,
-                                  "messages": [{"role": "user", "content": f"rpm #{i}"}], "stream": False})
-        with lock:
-            statuses.append((i, st))
+    def worker():
+        while True:
+            with lock:
+                if not todo:
+                    return
+                i = todo.pop(0)
+            st, data, _, _ = request("/v1/chat/completions", key,
+                                     {"model": model, "conversationId": cid,
+                                      "messages": [{"role": "user", "content": f"rpm #{i}"}], "stream": False})
+            code = ""
+            if isinstance(data, dict) and isinstance(data.get("error"), dict):
+                code = data["error"].get("code") or ""
+            with lock:
+                results.append((i, st, code))
 
-    # 并发 6 线程（= global_max_in_flight，不额外触发 in-flight 429）确保 21 次落在同一 60s 窗口
-    threads = [threading.Thread(target=one, args=(i,)) for i in range(1, n + 1)]
+    # 用 workers 个线程抽取 n 个任务：并发不超过 global_max_in_flight（=6），
+    # 否则大部分请求会先被全局准入 429（server_busy）挡掉、根本进不到会话护栏，
+    # 会话窗口永远凑不满 20 次 —— 2026-11-19 实测：直接开 21 线程时 15/21 是
+    # server_busy，脚本却只数「有没有 429」于是假通过。
+    threads = [threading.Thread(target=worker) for _ in range(workers)]
     t0 = time.time()
     for t in threads:
         t.start()
     for t in threads:
-        t.join(150)
+        t.join(300)
     alive = sum(1 for t in threads if t.is_alive())
-    statuses.sort()
-    seq = [st for _, st in statuses]
-    n429 = seq.count(429)
-    # RPM 仅统计「被受理」（进入选号流程）的请求；账号全冷却时 503 选号前返回、不 record。
-    # 受理数≥21（同一 60s 窗口）才具备触发前提；不足 = 上游冷却干扰，本轮不判定。
-    served = [s for s in seq if s != 503]
-    print(f"  状态分布={Counter(seq)}  受理(非503)={len(served)}  耗时={time.time()-t0:.1f}s")
-    if len(served) >= 21:
-        check("RPM 触发（受理≥21 → 必有 429）", n429 >= 1, f"n429={n429}")
+    results.sort()
+    seq = [st for _, st, _ in results]
+    codes = Counter(c for _, st, c in results if st == 429)
+    n_busy = codes.get("server_busy", 0)
+    n_session = codes.get("session_rate_limit", 0)
+    n_unserved = sum(1 for s in seq if s in (503, -1))
+    served = len(seq) - n_busy - n_unserved
+    print(f"  状态分布={Counter(seq)}  429 细分={dict(codes)}  进入业务层={served}/{n}  耗时={time.time()-t0:.1f}s")
+    if served >= n:
+        # 关键：必须是 session_rate_limit，不能被 server_busy / key 级 429 冒充。
+        check("会话 RPM 触发（21 次全部进入业务层 → 第 21 次必被 session_rate_limit 拒）",
+              n_session >= 1, f"n_session={n_session} codes={dict(codes)}")
     else:
-        print(f"  [skip] 受理 {len(served)} < 21（上游冷却干扰），RPM 触发前提不满足，本轮不判定")
-    check("无挂死无超时", alive == 0, f"alive={alive}")
+        print(f"  [skip] 仅 {served}/{n} 进入业务层（server_busy={n_busy} 未受理={n_unserved}），"
+              "会话窗口凑不满，本轮不判定")
+    check("无线程挂死", alive == 0, f"alive={alive}")
+    # 客户端侧异常（连接重置/超时）取决于拒绝时机与连接复用，属外部状态：报观察不判 FAIL。
+    if n_unserved:
+        print(f"  [obs] 客户端未拿到响应的请求 {n_unserved} 条（连接重置/超时），不计入判定")
 
 
 def s5_invalid_inputs(key, model):
@@ -382,6 +401,8 @@ def main():
     ap.add_argument("-n", type=int, default=20, help="S2 健康基线次数（上游慢时建议 20）")
     ap.add_argument("--model", default=DEFAULT_MODEL)
     ap.add_argument("--skip", default="", help="逗号分隔：S3,S4 等")
+    ap.add_argument("--s4", action="store_true",
+                    help="显式开启 S4（21 连发触发上游冷却，只该在有账号余量时跑）")
     ap.add_argument("--base", default=BASE, help="网关地址（默认生产 7863；测试用 7864）")
     args = ap.parse_args()
     skip = {s.strip().upper() for s in args.skip.split(",") if s.strip()}
@@ -418,10 +439,13 @@ def main():
             sys.exit(2)
     print(f"  [probe] {model} OK dt={dt:.1f}s")
 
-    # S4 默认 skip：它会故意打 21 连发触发 429，污染生产账号冷却。
-    # 需要测 RPM 限流时显式加 --skip "" 或 --skip 其他节来开启。
+    # S4 默认 skip：它会故意打 21 连发触发 429，污染生产账号冷却，属「显式点名才跑」。
+    # 2026-11-19 修：原写法 `if "S4" not in skip: skip.add("S4")` 把 S4 无条件加进
+    # skip，导致这节**永远不执行**——注释里「加 --skip 其他节来开启」在代码里不成立，
+    # RPM 限流这条防线因此从未被回归覆盖。现在改为 --s4 显式开启。
+    s4_enabled = args.s4 and "S4" not in skip
     skip_with_s4_default = set(skip)
-    if "S4" not in skip and not any(s == "S4" for s in skip):
+    if not s4_enabled:
         skip_with_s4_default.add("S4")
 
     # S4 会话限流放最后：21 连发会打上游账号冷却，避免污染其他节
