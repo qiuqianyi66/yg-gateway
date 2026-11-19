@@ -262,12 +262,23 @@ func (p *Pool) selectFromCandidates(cands []*entry, reqModel, realm string, now 
 			ws = append(ws, weighted{e: e, w: p.routingWeightOf(e, maxCredits, now, medianLatencyMs, medianPace, class), tier: infos[i].tier, cost1k: infos[i].cost1k})
 		}
 	}
-	// 等权重洗牌：仅当存在权重相等且候选数超过 top5 时，才对 ws 做 Fisher-Yates
-	// 洗牌（且**不消耗 p.randInt64N 注入源**，避免改变 pickWeighted 的确定性语义，
-	// 见 TestPickDeterministicViaSetRandomSource）。权重全等或存在并列时，按字典序
-	// 截断会让 uid 靠后的账号永远进不了 top5（等权重账号被字典序饿死、LRU 兜底
-	// 又只在 top5 内转——惊群集中单号的根因）。洗牌用独立的 time-seeded 源，
-	// 只在截断边界制造等权重随机次序，不影响加权抽签本身的确定性。
+	// 等权重洗牌：候选超过 top5 且**第一名与其余项权重相等**时，做一次 Fisher-Yates
+	// （不消耗 p.randInt64N 注入源，避免改变 pickWeighted 的确定性语义，
+	// 见 TestPickDeterministicViaSetRandomSource）。
+	//
+	// 它覆盖的只是「全员并列、由 UID 字典序决定谁进 top5」这一种边界：一批刚导入、
+	// 积分与闲置时长都相同的账号。
+	//
+	// **非第一名之间的并列不靠这里解决**：那由 idle 衰减承担——账号一旦被用过，
+	// lastUsed 归零、idle 权重从 max 掉到 0，下一轮权重自然低于还没用过的并列号，
+	// 于是让位。TestPickTiedBelowLeaderNotStarved 固化这个不变式：把
+	// defaultIdleWeightMax 改成 0，该测试立即 FAIL（u6/u7 在 3000 轮里恒为 0）。
+	// 换言之，「字典序饿死」这个病真正的解药是权重随使用衰减，洗牌只处理权重
+	// 完全冻住的那一类。
+	//
+	// 2026-11-19 注：本分支删除后 pool 全套测试仍全绿，说明它**没有测试保护**。
+	// 保留而不删，是因为它在「全员并列」场景下确实打散截断次序；但任何改动若让它
+	// 变成死代码，删掉不会有测试变红——改它时需要自己确认行为。
 	if len(ws) > 5 {
 		eq := false
 		for i := 1; i < len(ws); i++ {

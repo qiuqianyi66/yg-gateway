@@ -168,10 +168,9 @@ Unknown 是**一等公民实体**，不是面板上的一个展示区：
 
 ## 变更追踪
 
-每次改动建 `.harness/changes/{feat-name}/`，配：
-- `docs/prd/REQ-*.md`（需求 + Given-When-Then 验收）
-- `docs/adr/ADR-NNN-*.md`（仅当满足：难逆转 / 未来读者会困惑 / 有真实权衡）
-- `summary.md`（改了什么、怎么验证的、怎么回滚）
+改 `.harness/changes/{feat-name}/summary.md`（改了什么、怎么验证、怎么回滚）。
+**行为/契约变更另配 `docs/prd/REQ-*.md`**；难逆转或有真实权衡时配 ADR。
+文档修正、补测试、一行修复不配 PRD——`check-harness.ps1` 也只查 summary。
 
 ## 部署纪律
 
