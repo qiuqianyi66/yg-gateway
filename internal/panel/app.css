@@ -469,8 +469,7 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
 .hr { height: 1px; background: var(--line-soft); margin: 4px 0 16px; }
 .switch { display: flex; align-items: center; justify-content: space-between; padding: 9px 0; }
 .switch .lb { font-size: 13.5px; }
-/* Key 管理页的 toggle switch（无 .lb，纯开关） */
-#view-keys .switch { display: inline-flex; padding: 0; cursor: pointer; }
+/* Key 管理页的 toggle switch（无 .lb，纯开关） */#view-keys .switch { display: inline-flex; padding: 0; cursor: pointer; }
 #view-keys .switch input { appearance: none; width: 0; height: 0; margin: 0; position: absolute; }
 #view-keys .switch-track {
   width: 34px; height: 18px; border-radius: 10px; background: var(--line);
@@ -483,6 +482,15 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
 }
 #view-keys .switch input:checked + .switch-track { background: var(--ok); }
 #view-keys .switch input:checked + .switch-track::after { transform: translateX(16px); }
+/* 配置页开关原来用原生 checkbox（方块 + 焦点框），跟 Key 页药丸开关不是一套；
+   且右对齐到本列边缘紧挨右列标签，读起来像「☑ Token 保活」。改成同一套药丸。 */
+#view-config .switch input[type=checkbox] { appearance: none; -webkit-appearance: none; width: 34px; height: 18px; margin: 0;
+  border-radius: 10px; background: var(--line); position: relative; cursor: pointer; transition: background .15s; flex: none; }
+#view-config .switch input[type=checkbox]::before { content: ''; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px;
+  border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,.2); transition: transform .15s; }
+#view-config .switch input[type=checkbox]:checked { background: var(--ok); }
+#view-config .switch input[type=checkbox]:checked::before { transform: translateX(16px); }
+#view-config .grid2 { gap: 0 28px; }
 
 /* ── Key 管理：卡片式列表 ──────────────────────────────────────────
     对齐 hub 的 .key-card 模式：每把 Key 一张卡片，弹性换行适配窄屏。
