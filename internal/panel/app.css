@@ -1021,3 +1021,6 @@ body {
 /* UA 用 .clip 的 300px 上限会把整张表顶出卡片（实测 1274 > 1182，横向溢出 92px，
    末列被卡片边缘硬切）。UA 只是排障线索，190px + title 足够。 */
 .clip.ua { max-width: 190px; }
+/* 模型表：能力徽标并入副标题行（原独占一行 → 每行 88px），这里只补行内间距。 */
+.mdcaps { margin-left: 6px; }
+.mdcaps .tag { transform: scale(.94); }

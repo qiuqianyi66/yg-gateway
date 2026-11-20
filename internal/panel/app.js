@@ -1360,7 +1360,7 @@ function renderExpirySnapshot(d) {
     return x.key - y.key;
   });
   const rows = keyed.map(({ a, ms }) => {
-    const nm = esc(a.nickname || String(a.uid || '').slice(0, 8));
+    const nm = esc(acctLabel(a));
     if (!ms || !a.credits_earliest_remaining) {
       return '<div class="exp-row lv-none">' +
         '<span class="exp-nm">' + nm + '</span>' +
