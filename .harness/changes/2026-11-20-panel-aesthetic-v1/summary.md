@@ -15,6 +15,12 @@
 | 第二轮加强 | `--sec` 改挂在 `body:has(可见视图)` 上（一次定义全页继承，含顶栏）；顶栏底部 2px 强调线随视图变色；视图 wash 提到 13%/7% 双层径向；卡片头染色 6%→10% 并把分隔线也掺 16% 色相。低于 105 的浏览器无 `:has` 时回落品牌绿。 |
 | 加载指示 | 新增 `app_progress.js`：包一层 `window.fetch`，只统计 `/panel/api/*` 的并发请求，`.topbar.is-loading` 期间顶部扫一条 3px 色相线（`loadSweep`），停止后延迟 260ms 熄灭防闪烁；不追踪 `/v1/*` 流式代理，不改变 fetch 返回/错误语义。`prefers-reduced-motion` 下改为定格中段。 |
 | 第三轮 | 账号卡状态轨：`renderAccountsUnsafe` 把原来统一的 `off` 拆成 `st-dis`（禁用）/`st-pause`（暂停）/`st-cool`（冷却），左缘 3px 色条分别取 red/amber/blue，健康卡不加轨；主指标 `#sHealthy`/`#sCredits` 数字按分区色相着色（82% sec + 18% ink，保留对比度，语义类 good/warn/bad 优先）。 |
+| 第四轮 · 窄屏 | `≤760px`：`.nav` 子项 `flex:none` + `white-space:nowrap`，行模式下不再被压成逐字竖排；导航条 `max-height:56px` 并收窄 brand/sig 内边距，横向溢出交给 `.nav` 自身滚动。`≤560px`：`.topbar` 换行、`.view` 降 padding。 |
+
+窄屏空白带的根因与修法（实测记录）：
+
+- 375×820 下 opsagent 页内容仅 669px，`.shell{min-height:100vh}` 的 grid 把剩余 150.5px 均摊给 auto 行，导航条被拉成 163px 高、topbar 从 y151 才开始（accounts / logs 内容超过视口，行高正常 56px，所以两页表现不同）。加 `.shell{align-content:start}` 后三页行高都回到 56px，topbar y=56。
+- 375 下账号页原「账号池」标题、导航项、按钮逐字竖排，原因是 flex 收缩；`flex:none` 后标题单行、按钮成行。
 
 同批修两个实测渲染缺陷：
 

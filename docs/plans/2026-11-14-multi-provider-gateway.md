@@ -158,7 +158,8 @@ provider 分派。**现有 CodeBuddy 路径行为逐位不变**是硬验收。
 - 前端（`app_views_accounts.js:110` 账号卡）：
   - provider 徽标：`codebuddy` 绿、`ark` 蓝；**字段缺失不渲染**（不是"不支持"）
   - 账号池页顶部加 provider 汇总条：`{id, kind, quota, 账号数, 启用}`；空注册表显示"仅 CodeBuddy"
-- 样式沿用已扁平的令牌（本轮 panel-visual-flat 已去渐变）
+- 样式沿用面板令牌（~~本轮 panel-visual-flat 已去渐变~~ → 2026-11-20 起由 ADR-028 部分取代：
+  分区色相 + 轻渐变允许，霓虹/极光/渐变文字仍禁止）
 
 **GWT 验收**
 1. Given 账号无 provider 字段；When 面板渲染；Then 不显示任何 provider 徽标（unknown ≠ false）。
@@ -232,7 +233,8 @@ provider 分派。**现有 CodeBuddy 路径行为逐位不变**是硬验收。
   3 条 unknown（剩余点位接口、SSE 形状、Ark 额度查询）未消解前只登记不做。
 - **不做 Electron / WebView 桌面壳**：见 F8。
 - **不把 taste-skill 整包安装**：100+ 条落地页规则与运维面板无关；只吸收 app-screen 禁令
-  （已在 `panel-visual-flat` 落地）。
+  （已在 `panel-visual-flat` 落地；其中「不叠渐变 / 彩色方块 / 按钮纯色」三条自 2026-11-20
+  起被 ADR-028 取代，其余禁令——霓虹、极光、渐变文字、指针光斑——仍然有效）。
 - **不做多租户计费 / 兑换码 / OIDC**：AGENTS.md「不是什么」第 1 条。
 - **不做路由组 `pace`**：需要订阅窗口重置时刻，P2 再评估。
 
