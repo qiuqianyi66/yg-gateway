@@ -37,6 +37,7 @@
 - 生产实测（`4bb2daf` 上线后）：`#accBody` 4 张卡里 2 张为 `acc-card off st-pause`，暂停轨 `::after` = `rgb(245,158,11)`；`#sHealthy` 数字 = `color(srgb 0.0698 0.6196 0.4501)`（分区绿）。截图 `%TEMP%\panel-aes-live3\accounts.png`。
 - 实测：请求表 `clientH=460→440`、`rowH=40.8`、`theadH=34.3`，截图底部无半行；积分页加载态 4 张骨架横排；`/panel/aesthetic.css` 由测试实例正常 200 下发。
 - 门禁 `scripts/pre-commit.ps1` 全绿后提交，`deploy-prod.ps1 -Build` 退出码 0 + 冒烟 3/3。
+- 生产实测（`70c82b1`，报告 `deploy-prod-20261120-220305.json`）：375×820 下 accounts / opsagent / logs 三页均 `navH=56`、`topY=56`、`overflow=0`；768 / 1024 均为侧栏 `navH=820`、`overflow=0`。截图 `%TEMP%\panel-mobile2\prod375-*.png`。
 
 ## 被否方案 / 边界
 
