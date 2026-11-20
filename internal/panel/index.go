@@ -25,6 +25,9 @@ var indexHTML []byte
 //go:embed app_core.js
 var appCoreJS []byte
 
+//go:embed app_progress.js
+var appProgressJS []byte
+
 //go:embed app_views_models.js
 var appViewsModelsJS []byte
 
@@ -132,6 +135,7 @@ var panelStyles = []string{
 
 var panelScripts = []string{
 	"app_core.js",
+	"app_progress.js", // 顶栏加载指示：包 fetch，必须在 app.js 之前完成包装
 	"app_views_models.js",
 	"app_views_packages.js",
 	"app_views_keys.js",
@@ -236,6 +240,17 @@ func (p *Panel) appScript(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(appJS)
+}
+
+// appProgressScript 输出顶栏加载指示（2026-11-20）。
+// 独立文件的原因：能力是横切的（包 fetch），放进 app.js 会被 1368 行棘轮顶红；
+// 单独成文件后任何视图的 /panel/api 请求都自动点亮顶栏，各 loader 零改动。
+func (p *Panel) appProgressScript(w http.ResponseWriter, r *http.Request) {
+	setSecurityHeaders(w)
+	w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	// 忽略：静态资源全量写回，写失败即客户端断连，无可恢复语义（与 appScript 同口径）。
+	_, _ = w.Write(appProgressJS)
 }
 
 // appViewsLogsScript 输出日志视图组件（从 app.js 拆出的第十个组件，2026-11-02）。

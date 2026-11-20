@@ -4,18 +4,56 @@
    层叠顺序：排在 app.css 之后、panel.css 之前，最后一份 panel.css 仍可覆盖。 */
 
 /* 1) 分区色相 ------------------------------------------------------------
-   9 个视图若共用一支绿色，切页就没有身份差。每个视图给一支 --sec，
-   只用于「标题方块 / 卡片顶线 / 悬停描边 / 表头微染」，主按钮与 logo
-   保持品牌绿，避免整站变调色盘。 */
-#view-accounts    { --sec: #10b981; }
-#view-usage       { --sec: #3b82f6; }
-#view-packages    { --sec: #8b5cf6; }
-#view-taskscenter { --sec: #f59e0b; }
-#view-models      { --sec: #06b6d4; }
-#view-keys        { --sec: #6366f1; }
-#view-config      { --sec: #64748b; }
-#view-logs        { --sec: #0ea5e9; }
-#view-opsagent    { --sec: #475569; }
+   9 个视图若共用一支绿色，切页就没有身份差。用 body:has(可见视图) 挂一支
+   --sec，全页继承（视图、顶栏、卡片都拿得到）；主按钮与 logo 仍保持品牌绿。
+   浏览器不支持 :has 时回落 var(--accent)（纯绿，不会坏）。 */
+body:has(#view-accounts:not([hidden]))    { --sec: #10b981; }
+body:has(#view-usage:not([hidden]))       { --sec: #3b82f6; }
+body:has(#view-packages:not([hidden]))    { --sec: #8b5cf6; }
+body:has(#view-taskscenter:not([hidden])) { --sec: #f59e0b; }
+body:has(#view-models:not([hidden]))      { --sec: #06b6d4; }
+body:has(#view-keys:not([hidden]))        { --sec: #6366f1; }
+body:has(#view-config:not([hidden]))      { --sec: #64748b; }
+body:has(#view-logs:not([hidden]))        { --sec: #0ea5e9; }
+body:has(#view-opsagent:not([hidden]))    { --sec: #475569; }
+
+/* 1b) 顶栏底部 2px 强调线随视图变色——切页时最容易被看见的一处身份变化 */
+.topbar::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -1px;
+  height: 2px;
+  pointer-events: none;
+  background: linear-gradient(90deg,
+    color-mix(in srgb, var(--sec, var(--accent)) 72%, transparent),
+    transparent 55%);
+  opacity: .75;
+}
+
+/* 1c) 顶栏加载指示：任何 /panel/api 请求进行中，顶部扫一条 2px 色相线。
+   app_progress.js 只加/去 .is-loading；这里负责表现，两边互不依赖。 */
+.topbar.is-loading::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: 3px;
+  z-index: 3;
+  pointer-events: none;
+  background: linear-gradient(90deg, transparent,
+    color-mix(in srgb, var(--sec, var(--accent)) 90%, transparent) 50%,
+    transparent);
+  background-size: 50% 100%;
+  background-repeat: no-repeat;
+  animation: loadSweep 1.15s linear infinite;
+}
+@keyframes loadSweep {
+  from { background-position: -50% 0; }
+  to   { background-position: 150% 0; }
+}
 
 /* 2) 卡片：顶部一线色相 + 悬停描边 ------------------------------------
    大站（Linear / Vercel）的层级感来自 1px 细边 + 极浅阴影，而不是粗边框。
@@ -51,17 +89,22 @@
   -webkit-backdrop-filter: blur(14px) saturate(1.12);
 }
 .view {
-  background: radial-gradient(1200px 260px at 28% -60px,
-    color-mix(in srgb, var(--sec, var(--accent)) 9%, transparent),
-    transparent 72%);
+  background:
+    radial-gradient(980px 300px at 18% -80px,
+      color-mix(in srgb, var(--sec, var(--accent)) 13%, transparent),
+      transparent 70%),
+    radial-gradient(760px 240px at 92% -40px,
+      color-mix(in srgb, var(--sec, var(--accent)) 7%, transparent),
+      transparent 72%);
 }
 
 /* 3) 卡片头：微染底色 + 标题前色相方块 --------------------------------
    h3 前的小方块是唯一稳定的「我在哪一页」信号，比整块彩色标题更克制。 */
 .view .box > header {
   background: linear-gradient(90deg,
-    color-mix(in srgb, var(--sec, var(--accent)) 6%, var(--surface)),
-    var(--surface) 46%);
+    color-mix(in srgb, var(--sec, var(--accent)) 10%, var(--surface)),
+    var(--surface) 52%);
+  border-bottom-color: color-mix(in srgb, var(--sec, var(--accent)) 16%, var(--line-soft));
 }
 .view .box > header h3 {
   position: relative;
@@ -172,5 +215,10 @@ button.primary {
     animation: none;
     transform: none;
     transition: none;
+  }
+  /* 加载指示保留（它在传达真实状态），但不滑动：定格在中间段 */
+  .topbar.is-loading::before {
+    animation: none;
+    background-position: 50% 0;
   }
 }

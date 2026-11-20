@@ -29,6 +29,7 @@ func TestSecurityHeadersOnAllPanelResponses(t *testing.T) {
 		{"GET", "/panel/app_views_config.js"},
 		{"GET", "/panel/app_views_tasks.js"},
 		{"GET", "/panel/app_views_logs.js"},
+		{"GET", "/panel/app_progress.js"},           // 顶栏加载指示（2026-11-20）
 		{"GET", "/panel/app_views_gamify.js"},       // 游戏化微动效层组件（P0，2026-11-03）
 		{"GET", "/panel/app_views_achievements.js"}, // 成就带组件（P1，2026-11-03）
 		{"GET", "/panel/app_qr.js"},

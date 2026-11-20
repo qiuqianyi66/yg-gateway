@@ -12,6 +12,8 @@
 | 渐进入场 | 只挂在 `.view:not([hidden])` 与 `.view > .box`（index.html 静态节点）：切视图整页 260ms 淡入，卡片 400ms 上浮并 40ms 递增延迟。5s 轮询重绘的是卡片**内部**内容，不会重播——这是本轮与第六批「逐卡入场」被否方案的关键区别。`prefers-reduced-motion` 下全部退化为静态终态。 |
 | 表格 | `thead th` 4% 色相微染；行 hover 5% 色相；细滚动条（`scrollbar-width: thin`）。 |
 | 交互 | 按钮按下 1px 位移；`.primary` 竖向轻渐变；全站 `:focus-visible` 2px 焦点环（键盘可见）。 |
+| 第二轮加强 | `--sec` 改挂在 `body:has(可见视图)` 上（一次定义全页继承，含顶栏）；顶栏底部 2px 强调线随视图变色；视图 wash 提到 13%/7% 双层径向；卡片头染色 6%→10% 并把分隔线也掺 16% 色相。低于 105 的浏览器无 `:has` 时回落品牌绿。 |
+| 加载指示 | 新增 `app_progress.js`：包一层 `window.fetch`，只统计 `/panel/api/*` 的并发请求，`.topbar.is-loading` 期间顶部扫一条 3px 色相线（`loadSweep`），停止后延迟 260ms 熄灭防闪烁；不追踪 `/v1/*` 流式代理，不改变 fetch 返回/错误语义。`prefers-reduced-motion` 下改为定格中段。 |
 
 同批修两个实测渲染缺陷：
 
@@ -23,7 +25,8 @@
 ## 怎么验证
 
 - `go build ./...` 通过；`go test ./internal/panel/...` 51.8s ok；`gofmt -l ./cmd ./internal` 无输出。
-- 生产实例（7863，只注入新 CSS，不改服务）逐屏截图：`%TEMP%\panel-aes-prod3\*.png`（9 视图）；暗色 `%TEMP%\panel-aes-dark\*.png`。
+- 生产实例（7863，只注入新 CSS，不改服务）逐屏截图：`%TEMP%\panel-aes-prod3\*.png`（9 视图）；暗色 `%TEMP%\panel-aes-dark\*.png`；第二轮 `%TEMP%\panel-aes-v2\*.png`。
+- 加载指示在隔离实例（7864）用 Playwright 延迟 1.2s 的 `/panel/api/*` 验证：请求中 `is-loading=true`、截图见顶栏 3px 扫线；2.2s 后 `false`。截图 `%TEMP%\panel-progress2\loading.png`。
 - 实测：请求表 `clientH=460→440`、`rowH=40.8`、`theadH=34.3`，截图底部无半行；积分页加载态 4 张骨架横排；`/panel/aesthetic.css` 由测试实例正常 200 下发。
 - 门禁 `scripts/pre-commit.ps1` 全绿后提交，`deploy-prod.ps1 -Build` 退出码 0 + 冒烟 3/3。
 

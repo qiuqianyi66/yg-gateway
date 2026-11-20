@@ -6,6 +6,7 @@ func (p *Panel) routes() {
 	// 静态资源（前端壳 / JS / CSS）：不含敏感数据，不鉴权（鉴权由 API 承担）。
 	p.mux.HandleFunc("GET /panel/{$}", p.index)
 	p.mux.HandleFunc("GET /panel/app_views_logs.js", p.appViewsLogsScript)
+	p.mux.HandleFunc("GET /panel/app_progress.js", p.appProgressScript)
 	p.mux.HandleFunc("GET /panel/app_views_tasks.js", p.appViewsTasksScript)
 	p.mux.HandleFunc("GET /panel/app_views_config.js", p.appViewsConfigScript)
 	p.mux.HandleFunc("GET /panel/app_views_accounts.js", p.appViewsAccountsScript)
