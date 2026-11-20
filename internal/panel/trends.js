@@ -116,8 +116,12 @@
     const t0 = +pts[0].t, t1 = +pts[pts.length - 1].t;
     const span = Math.max(1, t1 - t0);
     const maxReq = Math.max(1, ...pts.map(p => p.req));
-    const maxAcct = Math.max(1, ...pts.map(p => p.acct));
-    const yMax = Math.max(maxReq, maxAcct);
+    /* 活跃账号（2–3 个）与请求量（上千）不同量级，画在同一条 Y 轴上是贴在 0 线上的一条
+       假波动线（2026-11-20 生产实测 acct=2..3 / req 最高 1128）。改为在标题里给区间，
+       保留观察值、不假装它是趋势。 */
+    const aMin = Math.min(...pts.map(p => p.acct));
+    const aMax = Math.max(...pts.map(p => p.acct));
+    const yMax = maxReq;
     const total = pts.reduce((s, p) => s + p.req, 0);
     const avgRate = pts.filter(p => p.rate !== null)
                        .reduce((s, p) => s + p.rate, 0);
@@ -125,6 +129,7 @@
     const cn = $('trChartNote');
     if (cn) cn.textContent = days.length + ' 天 · 总请求 ' + total + ' · 平均成功率 ' +
       (rateDays ? (avgRate / rateDays).toFixed(1) + '%' : '—') + '（无观测天不参与）' +
+      ' · 活跃账号 ' + aMin + (aMax > aMin ? '–' + aMax : '') + '/日' +
       ' · 深绿线 = 3 日均值（derivation）';
     const t2 = $('trNote');
     if (t2) t2.textContent = '归档 ' + (d.window || 0) + ' 条 · ' +
@@ -165,10 +170,6 @@
       /* 柱体接近不透明：0.78 时底下的网格线会从柱里透出来，看起来像柱内被划了几道白线。 */
       out += '<rect x="' + (x - bw / 2).toFixed(1) + '" y="' + y.toFixed(1) + '" width="' + bw.toFixed(1) +
              '" height="' + h.toFixed(1) + '" rx="4" fill="var(--accent)" opacity=".95"/>';
-      const ya = yReq(p.acct);
-      /* 活跃账号用 --blue：原先取 --ok，和请求量柱同色系的绿，图例里两个绿点分不清
-         哪个是柱、哪个是线（色弱尤甚）。 */
-      out += '<circle cx="' + x.toFixed(1) + '" cy="' + ya.toFixed(1) + '" r="2.8" fill="var(--blue,#3b82f6)"/>';
       if (p.rate !== null) {
         const yr = yRate(p.rate).toFixed(1);
         out += '<circle cx="' + x.toFixed(1) + '" cy="' + yr + '" r="3" fill="var(--warn,#f59e0b)"/>';
@@ -181,7 +182,7 @@
       ma.push([xOf(pts[i].t), yReq((pts[i - 2].req + pts[i - 1].req + pts[i].req) / 3)]);
     }
     const maD = smoothPath(ma);
-    if (maD) out += '<path d="' + maD + '" fill="none" stroke="var(--blue,#3b82f6)" stroke-width="1.4" opacity=".55"/>';
+    if (maD) out += '<path d="' + maD + '" fill="none" stroke="var(--accent-2,#059669)" stroke-width="1.4" opacity=".55"/>';
 
     // 成功率曲线：Catmull-Rom 平滑（连续有观测的段内平滑；无观测日断开、不插值——
     // 四态纪律：无观测 ≠ 任何值）。
