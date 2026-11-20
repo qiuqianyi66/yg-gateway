@@ -92,8 +92,9 @@
       '<th>会话</th><th>Prompt</th><th>补全</th><th>缓存命中</th><th>缓存未命中</th>' +
       '</tr></thead><tbody>' + names.map(function (k) {
         const b = byAgent[k] || {};
-        const label = agentLabel(k) + (k === 'unknown' ? ' <span class="c-mute">（未采集 UA）</span>'
-          : k === 'other' ? ' <span class="c-mute">（未识别 UA）</span>' : '');
+        /* AGENT_LABELS 里 other/unknown 已经写成「未识别 UA」「UA 未知」，再追加一次
+           「（未识别 UA）」就成了「未识别 UA（未识别 UA）」（2026-11-20 生产实测）。 */
+        const label = agentLabel(k);
         return '<tr><td>' + label + '</td>' +
           '<td class="num">' + (b.requests || 0) + '</td>' +
           '<td class="num">' + (b.sessions || 0) + '</td>' +
