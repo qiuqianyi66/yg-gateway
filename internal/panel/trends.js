@@ -182,7 +182,8 @@
       ma.push([xOf(pts[i].t), yReq((pts[i - 2].req + pts[i - 1].req + pts[i].req) / 3)]);
     }
     const maD = smoothPath(ma);
-    if (maD) out += '<path d="' + maD + '" fill="none" stroke="var(--accent-2,#059669)" stroke-width="1.4" opacity=".55"/>';
+    // 1.4px / .55 在浅底上几乎看不见（图例写着「深绿线」，实测读不出来）→ 1.6px / .8
+    if (maD) out += '<path d="' + maD + '" fill="none" stroke="var(--accent-2,#059669)" stroke-width="1.6" opacity=".8"/>';
 
     // 成功率曲线：Catmull-Rom 平滑（连续有观测的段内平滑；无观测日断开、不插值——
     // 四态纪律：无观测 ≠ 任何值）。

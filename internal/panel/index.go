@@ -100,6 +100,9 @@ var panelCSS []byte
 //go:embed provider.css
 var providerCSS []byte
 
+//go:embed aesthetic.css
+var aestheticCSS []byte
+
 // ── 面板资源清单：加载顺序的唯一真相（2026-11-03）────────────────────────
 //
 // 为什么改成生成式：原先 index.html 尾部手写了 17 行 `<script src=...>`，head 里
@@ -123,7 +126,8 @@ var panelStyles = []string{
 	"app.css", // 基础样式层：设计令牌 / 布局 / 基础组件。必须最先 —— 组件样式依赖 var(--*)
 	"gamify.css",
 	"provider.css",
-	"panel.css", // 命令面板与 Playground。必须末位 —— 原先写在 body 尾部，语义是「最后覆盖」
+	"aesthetic.css", // 视觉层：分区色相 / 卡片光边 / 渐进入场。排在 app.css 之后、panel.css 之前
+	"panel.css",     // 命令面板与 Playground。必须末位 —— 原先写在 body 尾部，语义是「最后覆盖」
 }
 
 var panelScripts = []string{
@@ -474,6 +478,18 @@ func (p *Panel) appStyle(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	// 忽略：静态资源全量写回，写失败即客户端断连，无可恢复语义（与 appScript 同口径）。
 	_, _ = w.Write(appCSS)
+}
+
+// aestheticStyle 输出视觉层样式表（2026-11-20）。
+// 独立 CSS 而非并进 app.css：app.css 已 999/1000 非空行，任何增量都会把
+// oversizeFrontendFiles 从 1 顶到 2（check-depth 只许收紧）。承载分区色相、
+// 卡片顶线、切视图渐进入场与交互反馈；排在 panel.css 之前，末位覆盖语义不变。
+func (p *Panel) aestheticStyle(w http.ResponseWriter, r *http.Request) {
+	setSecurityHeaders(w)
+	w.Header().Set("Content-Type", "text/css; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	// 忽略：静态资源全量写回，写失败即客户端断连，无可恢复语义（与 appScript 同口径）。
+	_, _ = w.Write(aestheticCSS)
 }
 
 // panelStyle 输出命令面板（Ctrl+K）与 API 调试台的样式（2026-11-15）。

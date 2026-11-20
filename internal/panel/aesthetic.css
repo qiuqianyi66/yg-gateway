@@ -1,0 +1,176 @@
+/* 视觉层（2026-11-20）——单独成文件的原因：app.css 已到 999/1000 非空行，
+   再挤任何视觉增量都会把 oversizeFrontendFiles 从 1 顶到 2。
+   本文件只做「观感增量」：分区色相、卡片光边、渐进入场、交互反馈。
+   层叠顺序：排在 app.css 之后、panel.css 之前，最后一份 panel.css 仍可覆盖。 */
+
+/* 1) 分区色相 ------------------------------------------------------------
+   9 个视图若共用一支绿色，切页就没有身份差。每个视图给一支 --sec，
+   只用于「标题方块 / 卡片顶线 / 悬停描边 / 表头微染」，主按钮与 logo
+   保持品牌绿，避免整站变调色盘。 */
+#view-accounts    { --sec: #10b981; }
+#view-usage       { --sec: #3b82f6; }
+#view-packages    { --sec: #8b5cf6; }
+#view-taskscenter { --sec: #f59e0b; }
+#view-models      { --sec: #06b6d4; }
+#view-keys        { --sec: #6366f1; }
+#view-config      { --sec: #64748b; }
+#view-logs        { --sec: #0ea5e9; }
+#view-opsagent    { --sec: #475569; }
+
+/* 2) 卡片：顶部一线色相 + 悬停描边 ------------------------------------
+   大站（Linear / Vercel）的层级感来自 1px 细边 + 极浅阴影，而不是粗边框。
+   顶线用渐变淡出，只在卡片左上方留下一点色身份。 */
+.view .box {
+  position: relative;
+  transition: border-color .2s ease, box-shadow .2s ease;
+}
+.view .box::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 1px;
+  z-index: 1;
+  pointer-events: none;
+  background: linear-gradient(90deg,
+    color-mix(in srgb, var(--sec, var(--accent)) 62%, transparent),
+    transparent 58%);
+}
+.view .box:hover {
+  border-color: color-mix(in srgb, var(--sec, var(--accent)) 26%, var(--line));
+  box-shadow: inset 0 1px 0 var(--hair),
+              0 1px 2px rgba(15, 23, 42, .04),
+              0 12px 28px -24px rgba(15, 23, 42, .5);
+}
+
+/* 2b) 顶层观感：毛玻璃顶栏 + 当前视图的极浅色相 wash -------------------
+   顶栏是 sticky 的，透出滚动内容 = 大站通行的层次信号（--glass 令牌已有，
+   亮暗两套自动跟随）。视图 wash 只铺在顶部 260px，压住背景点纹的单调。 */
+.topbar {
+  background: var(--glass);
+  backdrop-filter: blur(14px) saturate(1.12);
+  -webkit-backdrop-filter: blur(14px) saturate(1.12);
+}
+.view {
+  background: radial-gradient(1200px 260px at 28% -60px,
+    color-mix(in srgb, var(--sec, var(--accent)) 9%, transparent),
+    transparent 72%);
+}
+
+/* 3) 卡片头：微染底色 + 标题前色相方块 --------------------------------
+   h3 前的小方块是唯一稳定的「我在哪一页」信号，比整块彩色标题更克制。 */
+.view .box > header {
+  background: linear-gradient(90deg,
+    color-mix(in srgb, var(--sec, var(--accent)) 6%, var(--surface)),
+    var(--surface) 46%);
+}
+.view .box > header h3 {
+  position: relative;
+  padding-left: 13px;
+}
+.view .box > header h3::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 50%;
+  width: 5px;
+  height: 5px;
+  border-radius: 2px;
+  transform: translateY(-50%);
+  background: var(--sec, var(--accent));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--sec, var(--accent)) 13%, transparent);
+}
+/* 4) 渐进入场：切视图时整页淡入 + 卡片按序上浮 -----------------------
+   只挂在 .view 与 .view 的直接子 .box 上：二者都是 index.html 静态节点，
+   5s 轮询重绘的是内部内容，不会重播动画（否则每次刷新都会闪）。 */
+.view:not([hidden]) { animation: viewFade .26s ease-out both; }
+@keyframes viewFade {
+  from { opacity: 0; transform: translateY(3px); }
+  to   { opacity: 1; transform: none; }
+}
+.view:not([hidden]) > .box { animation: cardRise .4s cubic-bezier(.22, .61, .36, 1) both; }
+@keyframes cardRise {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: none; }
+}
+.view:not([hidden]) > .box:nth-child(2) { animation-delay: 40ms; }
+.view:not([hidden]) > .box:nth-child(3) { animation-delay: 80ms; }
+.view:not([hidden]) > .box:nth-child(4) { animation-delay: 120ms; }
+.view:not([hidden]) > .box:nth-child(5) { animation-delay: 160ms; }
+.view:not([hidden]) > .box:nth-child(n+6) { animation-delay: 200ms; }
+
+/* 5) 表格：表头微染 + 行悬停走分区色相 ---------------------------------
+   数据表是最常被盯的区域，表头一层 3% 的底色就能把它和白底正文分开。 */
+.view .acc thead th {
+  background: color-mix(in srgb, var(--sec, var(--accent)) 4%, var(--surface));
+  letter-spacing: .01em;
+}
+.view .acc tbody tr { transition: background .14s ease; }
+.view .acc tbody tr:hover {
+  background: color-mix(in srgb, var(--sec, var(--accent)) 5%, var(--surface-2));
+}
+
+/* 6) 按钮与焦点：按下有 1px 反馈，键盘焦点始终可见 -------------------- */
+button:active:not(:disabled) { transform: translateY(1px); }
+button.primary {
+  background: linear-gradient(180deg,
+    color-mix(in srgb, var(--accent) 92%, #ffffff),
+    var(--accent));
+}
+:where(a, button, input, select, textarea, summary):focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 62%, transparent);
+  outline-offset: 2px;
+}
+
+/* 7) 侧栏：悬停过渡，不改变内边距（避免 hover 挤动布局） ---------------- */
+.nav a { transition: background .16s ease, color .16s ease; }
+.nav a:hover svg { opacity: 1; }
+.nav a.on svg { opacity: 1; color: var(--accent-2); }
+
+/* 8) 图表区：用分区色相铺一层极浅径向底，避免整块灰白 ------------------ */
+#view-usage .uschart-body {
+  border-radius: 8px;
+  background: radial-gradient(115% 130% at 0% 0%,
+    color-mix(in srgb, var(--sec, var(--accent)) 7%, transparent),
+    transparent 62%);
+}
+
+/* 9) 滚动容器：细滚动条，长表不再出现一条系统灰槽 ---------------------- */
+.tbl-wrap, .req-wrap {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--ink-3) 42%, transparent) transparent;
+}
+/* 请求表 460px 高度落在 10.4 行处，底部永远是半行被分页条压住。
+   实测（2026-11-20）：表头 34.3px + 每行 40.8px → 10 行整 = 442.4px，
+   取 440px 留 2px 余量，半个空行消失。 */
+.req-wrap { max-height: 440px; }
+
+/* 10) 积分加载骨架：.skel-grid 是 .pk-grid（flex）的单个子项，
+   不加 flex-basis 会被压成 220px 宽，4 张骨架竖着排。 */
+.pk-grid > .skel-grid { flex: 1 1 100%; }
+.view .pk-card { transition: border-color .18s ease, box-shadow .18s ease; }
+.view .pk-card:hover {
+  border-color: color-mix(in srgb, var(--sec, var(--accent)) 22%, var(--line));
+  box-shadow: 0 8px 20px -18px rgba(15, 23, 42, .45);
+}
+
+/* 11) 深色主题：阴影在暗底会糊成黑块，换成描边为主 -------------------- */
+:root[data-theme="dark"] .view .box:hover {
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .04),
+              0 12px 28px -22px rgba(0, 0, 0, .85);
+}
+:root[data-theme="dark"] .view .box > header {
+  background: linear-gradient(90deg,
+    color-mix(in srgb, var(--sec, var(--accent)) 9%, var(--surface)),
+    var(--surface) 50%);
+}
+
+/* 12) 降低动效：系统开启减少动画时，全部入场动画退化为静态终态 -------- */
+@media (prefers-reduced-motion: reduce) {
+  .view:not([hidden]),
+  .view:not([hidden]) > .box,
+  button:active:not(:disabled) {
+    animation: none;
+    transform: none;
+    transition: none;
+  }
+}

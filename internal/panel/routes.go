@@ -31,6 +31,7 @@ func (p *Panel) routes() {
 	p.mux.HandleFunc("GET /panel/gamify.css", p.gamifyStyle)
 	p.mux.HandleFunc("GET /panel/panel.css", p.panelStyle)
 	p.mux.HandleFunc("GET /panel/provider.css", p.providerStyle)
+	p.mux.HandleFunc("GET /panel/aesthetic.css", p.aestheticStyle)
 
 	// 面板 API：一律经 p.api 注册（内部强制 withAuth）——「API 必须鉴权」是注册期
 	// 结构性保证，新增端点不可能裸奔（P1-3 面板鉴权组合拳落地，见 api() 注释）。
