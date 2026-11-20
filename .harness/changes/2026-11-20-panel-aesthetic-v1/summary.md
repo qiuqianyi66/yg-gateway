@@ -28,6 +28,7 @@
 - `go build ./...` 通过；`go test ./internal/panel/...` 51.8s ok；`gofmt -l ./cmd ./internal` 无输出。
 - 生产实例（7863，只注入新 CSS，不改服务）逐屏截图：`%TEMP%\panel-aes-prod3\*.png`（9 视图）；暗色 `%TEMP%\panel-aes-dark\*.png`；第二轮 `%TEMP%\panel-aes-v2\*.png`。
 - 加载指示在隔离实例（7864）用 Playwright 延迟 1.2s 的 `/panel/api/*` 验证：请求中 `is-loading=true`、截图见顶栏 3px 扫线；2.2s 后 `false`。截图 `%TEMP%\panel-progress2\loading.png`。
+- 生产实测（`4bb2daf` 上线后）：`#accBody` 4 张卡里 2 张为 `acc-card off st-pause`，暂停轨 `::after` = `rgb(245,158,11)`；`#sHealthy` 数字 = `color(srgb 0.0698 0.6196 0.4501)`（分区绿）。截图 `%TEMP%\panel-aes-live3\accounts.png`。
 - 实测：请求表 `clientH=460→440`、`rowH=40.8`、`theadH=34.3`，截图底部无半行；积分页加载态 4 张骨架横排；`/panel/aesthetic.css` 由测试实例正常 200 下发。
 - 门禁 `scripts/pre-commit.ps1` 全绿后提交，`deploy-prod.ps1 -Build` 退出码 0 + 冒烟 3/3。
 
