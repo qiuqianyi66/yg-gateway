@@ -14,6 +14,7 @@
 | 交互 | 按钮按下 1px 位移；`.primary` 竖向轻渐变；全站 `:focus-visible` 2px 焦点环（键盘可见）。 |
 | 第二轮加强 | `--sec` 改挂在 `body:has(可见视图)` 上（一次定义全页继承，含顶栏）；顶栏底部 2px 强调线随视图变色；视图 wash 提到 13%/7% 双层径向；卡片头染色 6%→10% 并把分隔线也掺 16% 色相。低于 105 的浏览器无 `:has` 时回落品牌绿。 |
 | 加载指示 | 新增 `app_progress.js`：包一层 `window.fetch`，只统计 `/panel/api/*` 的并发请求，`.topbar.is-loading` 期间顶部扫一条 3px 色相线（`loadSweep`），停止后延迟 260ms 熄灭防闪烁；不追踪 `/v1/*` 流式代理，不改变 fetch 返回/错误语义。`prefers-reduced-motion` 下改为定格中段。 |
+| 第三轮 | 账号卡状态轨：`renderAccountsUnsafe` 把原来统一的 `off` 拆成 `st-dis`（禁用）/`st-pause`（暂停）/`st-cool`（冷却），左缘 3px 色条分别取 red/amber/blue，健康卡不加轨；主指标 `#sHealthy`/`#sCredits` 数字按分区色相着色（82% sec + 18% ink，保留对比度，语义类 good/warn/bad 优先）。 |
 
 同批修两个实测渲染缺陷：
 

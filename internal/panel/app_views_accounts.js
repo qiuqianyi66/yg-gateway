@@ -77,10 +77,10 @@ function renderAccountsUnsafe(list) {
     const dg = (new Date(s.degrade_until || 0) - Date.now()) / 1000;
     const cool = Math.max(s.cool_remaining_sec || 0, bl > 0 ? bl : 0, dg > 0 ? dg : 0);
     let cls = '', tag;
-    if (s.disabled) { cls = 'off'; tag = '<span class="tag bad">已禁用</span>'; }
-    else if (s.paused) { cls = 'off'; tag = '<span class="tag warn">已暂停</span>'; }
+    if (s.disabled) { cls = 'off st-dis'; tag = '<span class="tag bad">已禁用</span>'; }
+    else if (s.paused) { cls = 'off st-pause'; tag = '<span class="tag warn">已暂停</span>'; }
     else if (cool > 0) {
-      cls = 'off';
+      cls = 'off st-cool';
       const kind = bl > Math.max(s.cool_remaining_sec || 0, dg > 0 ? dg : 0) ? '熔断'
         : (dg > (s.cool_remaining_sec || 0) ? '连败降权' : (s.cool_kind === 'hard_credit' ? '积分冷却' : '限流冷却'));
       tag = '<span class="tag warn">' + kind + ' ' + dur(cool) + '</span>';
