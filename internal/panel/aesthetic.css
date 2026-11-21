@@ -122,6 +122,14 @@ body:has(#view-opsagent:not([hidden]))    { --sec: #475569; }
   background: var(--sec, var(--accent));
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--sec, var(--accent)) 13%, transparent);
 }
+/* 3b) 卡片头长说明在 1280 会把右侧小按钮顶出 .box：实测 header scrollW 1033 >
+   clientW 1022，「检查」被裁 11px。让说明可收缩并省略，按钮保持完整。 */
+.view .box > header .note {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* 4) 渐进入场：切视图时整页淡入 + 卡片按序上浮 -----------------------
    只挂在 .view 与 .view 的直接子 .box 上：二者都是 index.html 静态节点，
    5s 轮询重绘的是内部内容，不会重播动画（否则每次刷新都会闪）。 */
