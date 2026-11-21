@@ -56,6 +56,8 @@ profile 复测：全排序热点消失，`topKBy` 约占 10%，`auth.Realm` 不�
 冒烟 `/v1/models` 18 模型 + 非流式 + 流式 3/3；备份
 `D:\yg-gateway\yg-gateway.exe.pre-backend-pick-topk-20261121.bak`（旧 sha256 `3074BEE7…`），
 报告 `D:\yg-gateway\data\logs\deploy-prod-20261121-103929.json`。
+生产回归 `python scripts/yg-regression-test.py --base http://127.0.0.1:7863 --skip S4,S8`：
+S1/S2/S3/S5/S6/S7 共 **14 PASS / 0 FAIL**（S2 20/20 200、SSE 5/5 完整）。
 
 ## 回滚
 
