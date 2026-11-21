@@ -185,6 +185,47 @@ func TestStatusCoolingIncludesDegrade(t *testing.T) {
 	}
 }
 
+// TestModelCostTierRequiresRepeatedFreeEvidence 成本 tier 的置信度门槛：
+// 单条 credit=0 只能判 unknown（tier 1），累计到 minFreeCostSamples 条才判免费；
+// 目录显式 0 是第二证据源，可提前毕业；目录收费而单条实测 0 则保守判收费。
+//
+// 牙齿：把 modelCostTier 里的样本门槛去掉（单条 0 直接 tier 0）→ 本测试 FAIL。
+func TestModelCostTierRequiresRepeatedFreeEvidence(t *testing.T) {
+	p := New("")
+	p.Add(&auth.Auth{UID: "u1", AccessToken: "at", ExpiresAt: 9999999999})
+	p.SetCredits("u1", 1000, 0)
+	now := p.now()
+
+	p.NoteModelCost("u1", "weak-free", 0, 1000)
+	p.mu.RLock()
+	e := p.byUID["u1"]
+	p.mu.RUnlock()
+
+	if tier, _ := p.modelCostTier(e, "weak-free", "", now); tier != 1 {
+		t.Fatalf("单条 0 观测 tier=%d want 1（证据不足按 unknown，不得判免费）", tier)
+	}
+	for i := 1; i < minFreeCostSamples; i++ {
+		p.NoteModelCost("u1", "weak-free", 0, 1000)
+	}
+	if tier, _ := p.modelCostTier(e, "weak-free", "", now); tier != 0 {
+		t.Fatalf("累计 %d 条 0 观测 tier=%d want 0", minFreeCostSamples, tier)
+	}
+
+	// 目录显式 0：第二证据源，单条 0 即可判免费。
+	p.SetModelRateOf(rates(map[string]map[string]string{"": {"cat-free": "0.00"}}))
+	p.NoteModelCost("u1", "cat-free", 0, 1000)
+	if tier, _ := p.modelCostTier(e, "cat-free", "", now); tier != 0 {
+		t.Fatalf("目录显式 0 + 单条实测 0 tier=%d want 0", tier)
+	}
+
+	// 目录收费 vs 单条实测 0：矛盾，保守按收费。
+	p.SetModelRateOf(rates(map[string]map[string]string{"": {"cat-paid": "0.29"}}))
+	p.NoteModelCost("u1", "cat-paid", 0, 1000)
+	if tier, cost := p.modelCostTier(e, "cat-paid", "", now); tier != 2 || cost <= 0 {
+		t.Fatalf("目录收费 + 单条 0 tier=%d cost=%v want 2/正数", tier, cost)
+	}
+}
+
 // TestModelCostTTLUsesInjectableClock 成本账本的 LastSeen 必须与选号读侧同用
 // p.now()：否则注入冻结时钟后 LastSeen 贴墙钟，TTL 判定在测试里永远不可复现。
 // 牙齿：把 NoteModelCost 里的 seenAt 改回 time.Now() → 本测试 FAIL。

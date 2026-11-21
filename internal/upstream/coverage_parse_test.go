@@ -23,8 +23,8 @@ import (
 
 // ---- helpers ----
 
-// upstreamparseTransportErr 注入的传输层失败（不打真网）。
-var upstreamparseTransportErr = errors.New("simulated transport failure")
+// errUpstreamparseTransport 注入的传输层失败（不打真网）。
+var errUpstreamparseTransport = errors.New("simulated transport failure")
 
 // upstreamparseScheduleShape 是 v3ModelPromotion.Schedule 字段类型的**类型别名**
 // （别名 → 与生产代码里的匿名 struct 类型完全同一，可直接赋值）。
@@ -1301,7 +1301,7 @@ func TestUpstreamParseGlobalModelsOnce(t *testing.T) {
 
 	t.Run("传输层失败 → err 且不解析半截 body", func(t *testing.T) {
 		c := newClient(func(r *http.Request) (*http.Response, error) {
-			return nil, upstreamparseTransportErr
+			return nil, errUpstreamparseTransport
 		})
 		names, infos, err := c.globalModelsOnce(a, "/v2/enterprises/personal/models")
 		if err == nil || names != nil || infos != nil {
@@ -1723,7 +1723,7 @@ func TestUpstreamParseFetchDoc(t *testing.T) {
 		upstreamparseResetCatalog(t)
 		f := &modelsDevFetcher{}
 		client := &http.Client{Transport: rtFunc(func(r *http.Request) (*http.Response, error) {
-			return nil, upstreamparseTransportErr
+			return nil, errUpstreamparseTransport
 		})}
 		f.fetchDoc(client, "https://models.example/api.json")
 		f.mu.Lock()

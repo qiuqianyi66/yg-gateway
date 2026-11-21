@@ -133,7 +133,6 @@ type activityStreakStub struct {
 	reportCalls atomic.Int32
 	days        int  // streak 返回的连登天数
 	streakErr   bool // 让 streak 返回 500
-	noUserId    bool // 待测：上报不带 userId（服务端 200 但静默丢弃）
 	streakHits  atomic.Int32
 }
 
@@ -155,15 +154,6 @@ func (s *activityStreakStub) handler() http.Handler {
 			http.Error(w, "not found", 404)
 		}
 	})
-}
-
-// activityStreakScheduler 构造带 streak 自检 stub 的调度器。
-func activityStreakScheduler(t *testing.T, srv *httptest.Server) (*Scheduler, *pool.Pool) {
-	t.Helper()
-	p := pool.New("")
-	p.Add(&auth.Auth{UID: "u1", AccessToken: "at", RefreshToken: "rt", ExpiresAt: 9999999999})
-	up := &upstream.Client{HTTP: srv.Client(), ChatBaseCN: srv.URL, BillingBaseCN: srv.URL}
-	return New(Config{Pool: p, Upstream: up}), p
 }
 
 // TestRunActivityNowSelfCheckDaysNormal 上报成功后回读 streak：days>=1 → 无告警。

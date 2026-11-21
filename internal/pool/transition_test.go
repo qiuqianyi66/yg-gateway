@@ -112,7 +112,13 @@ func TestTransitionSessionDeadDisableClearsCooling(t *testing.T) {
 		t.Fatal("precondition: 应处于软冷却")
 	}
 
-	if p.NoteSessionDead("u1") || p.NoteSessionDead("u1") || !p.NoteSessionDead("u1") {
+	if p.NoteSessionDead("u1") {
+		t.Fatal("第 1 次 NoteSessionDead 不应达阈值")
+	}
+	if p.NoteSessionDead("u1") {
+		t.Fatal("第 2 次 NoteSessionDead 不应达阈值")
+	}
+	if !p.NoteSessionDead("u1") {
 		t.Fatal("第 3 次 NoteSessionDead 应达阈值禁用")
 	}
 	st, _ := p.Status("u1")

@@ -208,6 +208,15 @@ type modelCooldown struct {
 // 白天会把已开始收费的号继续当成免费。
 const modelCostTTL = 6 * time.Hour
 
+// minFreeCostSamples 判「实测免费」所需的最少零扣费观测数。
+//
+// 为什么不是 1：上游 usage 的 credit 字段缺失时会被读成 0（真实发生过），
+// 单条零观测若直接进 tier 0，上游已收费的模型会被免费层垄断、积分快速耗光。
+// 目录倍率显式为 0 时可提前毕业（第二证据源），否则累计到本阈值才判免费。
+// 3 条是在「漏判成本」与「免费模型不被选用」之间的保守取值：
+// 连续 3 次真实请求都 0 扣费，credit 缺失/单次延迟记账同时命中的概率已很低。
+const minFreeCostSamples = 3
+
 // modelCostEntry 运行时成本账本（持久化镜像 stateModelCost 与其字段一一对应）。
 type modelCostEntry struct {
 	CostPer1k float64

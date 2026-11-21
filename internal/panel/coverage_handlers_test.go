@@ -754,8 +754,7 @@ func TestPanelHandlersAccountBalance(t *testing.T) {
 	}
 
 	// 上游错误 → 502 且带上下文前缀。
-	bad := chStubOK(`{"code":14001,"msg":"boom"}`)
-	bad = chStubFn(func(chCaptured) (int, string) { return 400, `{"code":14001,"msg":"boom"}` })
+	bad := chStubFn(func(chCaptured) (int, string) { return 400, `{"code":14001,"msg":"boom"}` })
 	p2 := chPanel(t, Config{Pool: pl, Upstream: chUpstream(bad, false)})
 	out = chWant(t, chDo(t, p2, "POST", "/panel/api/accounts/uid-bal/balance", ""), http.StatusBadGateway)
 	if got := chErrMsg(t, out); !strings.HasPrefix(got, "user resource: ") {

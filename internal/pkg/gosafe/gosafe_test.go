@@ -30,7 +30,8 @@ func TestGoSwallowsPanicAndKeepsGoing(t *testing.T) {
 	Go("test/panics", func() {
 		defer done.Done()
 		var m map[string]int
-		m["boom"] = 1 // 向 nil map 写入：确定性的 runtime panic
+		//lint:ignore SA5000 有意向 nil map 写入，制造确定性 panic 验证 Go 的 recover
+		m["boom"] = 1
 	})
 	Go("test/survives", func() {
 		defer done.Done()

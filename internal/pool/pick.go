@@ -148,6 +148,40 @@ type pickSelection struct {
 	explored bool
 }
 
+// modelCostTier 把单候选按该模型的成本证据分层（0 免费 / 1 未知 / 2 收费）。
+//
+// 为什么单条 credit=0 不直接判免费：上游 usage 的 credit 字段缺失会被读成 0
+// （global 侧 deepseek-v4.1-flash 实案：网关误判免费疯狂打流量，440 积分半天耗完）。
+// 判定顺序：
+//  1. 有正单价观测 → tier 2（收费）。
+//  2. 目录显式收费而实测 0 → 矛盾，保守 tier 2。
+//  3. 目录显式 0（第二证据源）→ tier 0，即使只有 1 条零观测。
+//  4. 仅实测 0 且累计 ≥minFreeCostSamples 条 → tier 0。
+//  5. 其余（含单条 0、无观测、观测过期）→ tier 1（未知，不当免费）。
+//
+// 四态语义：tier 0/2 是 inference（凭样本外推），tier 1 是 unknown；
+// 证据不足时必须留在 unknown，不能因为「没看到扣费」就当成免费。
+func (p *Pool) modelCostTier(e *entry, model, realm string, now time.Time) (int, float64) {
+	mc, ok := e.modelCostOf(model, now)
+	if !ok {
+		return 1, 0
+	}
+	if mc.CostPer1k > 0 {
+		return 2, mc.CostPer1k
+	}
+	rate, known := p.catalogRate(realm, model)
+	if known && rate > 0 {
+		return 2, rate
+	}
+	if known && rate == 0 {
+		return 0, 0
+	}
+	if mc.Samples >= minFreeCostSamples {
+		return 0, 0
+	}
+	return 1, 0
+}
+
 // selectFromCandidates 在已过滤的候选集上执行成本分层、条件探索、权重预计算、
 // top5 截断与加权抽签，返回选中账号与决策溯源。调用方需已持有 p.mu 读锁。
 //
@@ -158,34 +192,15 @@ type pickSelection struct {
 func (p *Pool) selectFromCandidates(cands []*entry, reqModel, realm string, now time.Time, class RequestClass) pickSelection {
 	maxCredits := maxCreditsOf(cands)
 	// 成本分层（reqModel 非空时）：按该模型的实测扣费把候选分层，只保留最优层。
-	//   0 = 已实测免费（限免期/夜间免费的号，最强偏好）
-	//   1 = 无观测（含观测过期）
-	//   2 = 已实测收费
+	//   0 = 已实测免费（≥minFreeCostSamples 条零扣费观测，或目录显式倍率 0）
+	//   1 = 无观测 / 证据不足（含观测过期、单条 credit=0）
+	//   2 = 已实测收费（或实测 0 与目录收费矛盾）
 	// 为什么"无观测"排在"已实测收费"之前：新号的限免状态只能靠实测发现，
 	// 若已知收费的号恒压过未知号，那台免费的号永远轮不到，也就永远学不到。
 	// 为什么用硬过滤而非仅排序：pickWeighted 会在候选内加权随机，只排序的话
 	// 收费号仍有机会抽中，达不到"优先免费"的语义。
 	costTier := func(e *entry) (int, float64) {
-		mc, ok := e.modelCostOf(reqModel, now)
-		if !ok {
-			return 1, 0
-		}
-		if mc.CostPer1k <= 0 {
-			// 实测免费，但交叉验证目录倍率（global 侧 deepseek-v4.1-flash 实案：
-			// usage 上报 credit 字段缺失被误读为 0，网关误判免费疯狂打流量，
-			// 实际上游已改价收费，440 积分半天耗完）。
-			// 目录说收费而实测说免费 → 矛盾，保守按 tier 2 收费处理，
-			// 宁可少跑免费流量，也不要误判免费快速耗积分。
-			if p.modelRateOf != nil && reqModel != "" {
-				if rate := p.modelRateOf(realm, reqModel); rate != "" {
-					if v, err := strconv.ParseFloat(rate, 64); err == nil && v > 0 {
-						return 2, v
-					}
-				}
-			}
-			return 0, 0
-		}
-		return 2, mc.CostPer1k
+		return p.modelCostTier(e, reqModel, realm, now)
 	}
 	bestTier := 2
 	hasTier1 := false
@@ -457,21 +472,40 @@ func (p *Pool) floorBlockedForRealmModel(e *entry, model, realm string, now time
 	}
 	// 1) 本地实测台账：最权威（真实扣费证据）。
 	if mc, ok := e.modelCostOf(model, now); ok {
-		return mc.CostPer1k > 0
+		if mc.CostPer1k > 0 {
+			return true
+		}
+		// 已累计足够多零观测：视为实测免费，放行（目录与实测矛盾时实测优先）。
+		if mc.Samples >= minFreeCostSamples {
+			return false
+		}
+		// 单条 0 观测证据不足（credit 缺失也会是 0）：落到目录倍率交叉验证。
 	}
-	// 2) 上游目录倍率兜底：无实测观测时用牌价判收费，堵住「无观测 = 放行」漏洞。
-	if p.modelRateOf == nil {
-		return false
-	}
-	rate := p.modelRateOf(realm, model)
-	if rate == "" {
+	// 2) 上游目录倍率兜底：无实测观测（或零观测不足）时用牌价判收费，
+	// 堵住「无观测/单条 0 = 放行」漏洞。
+	rate, known := p.catalogRate(realm, model)
+	if !known {
 		return false // 目录未覆盖：未知，放行（见上方注释）
 	}
-	v, err := strconv.ParseFloat(rate, 64)
-	if err != nil {
-		return false // 倍率非数值（异常形态）：不据此惩罚账号
+	return rate > 0
+}
+
+// catalogRate 查询上游目录倍率并解析为数值。
+// known=false 表示目录未注入、未覆盖该 (realm, model)、或倍率不是合法数值——
+// 这三种情况都按「未知」处理，不得当成免费（v=0 且 known=true 才是显式免费）。
+func (p *Pool) catalogRate(realm, model string) (float64, bool) {
+	if p.modelRateOf == nil || model == "" {
+		return 0, false
 	}
-	return v > 0
+	raw := p.modelRateOf(realm, model)
+	if raw == "" {
+		return 0, false
+	}
+	v, err := strconv.ParseFloat(raw, 64)
+	if err != nil {
+		return 0, false
+	}
+	return v, true
 }
 
 // pickEarliestExpiryLocked 全冷却兜底：在非禁用的软冷却/熔断账号中选截止最早的一个。

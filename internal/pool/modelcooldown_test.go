@@ -105,7 +105,7 @@ func TestCooldownSoftForModelCapsUntilKeepsResetAt(t *testing.T) {
 	if !ok {
 		t.Fatal("modelCooldowns 缺少 glm-5.3")
 	}
-	if rem := mc.Until.Sub(time.Now()); rem <= 0 || rem > 10*time.Minute+time.Second {
+	if rem := time.Until(mc.Until); rem <= 0 || rem > 10*time.Minute+time.Second {
 		t.Errorf("Until 应在 (0,10m] 区间，实际剩余 %v", rem)
 	}
 	if d := mc.ResetAt.Sub(reset); d < -time.Second || d > time.Second {

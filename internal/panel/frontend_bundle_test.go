@@ -95,7 +95,7 @@ func TestIndexHTMLPlaceholdersReplaced(t *testing.T) {
 // 牙齿：把 panelStyles 里 panel.css 与 gamify.css 互换 → 本用例立刻红。
 func TestPanelStyleLinksRenderedInCascadeOrder(t *testing.T) {
 	rendered := string(renderIndexHTML())
-	order := []string{"app.css", "gamify.css", "provider.css", "panel.css"}
+	order := []string{"app.css", "views.css", "gamify.css", "provider.css", "panel.css"}
 	prevName, prev := "", -1
 	for _, name := range order {
 		link := `<link rel="stylesheet" href="` + name + `">`

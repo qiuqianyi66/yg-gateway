@@ -38,6 +38,7 @@ func TestSecurityHeadersOnAllPanelResponses(t *testing.T) {
 		{"GET", "/panel/app_cmdp.js"},       // 命令面板组件（同上）
 		{"GET", "/panel/gamify.css"},        // 游戏化动效层独立样式（P0，2026-11-03）
 		{"GET", "/panel/app.css"},           // 面板基础样式层（2026-11-15 从 index.html 抽出）
+		{"GET", "/panel/views.css"},         // 视图层（2026-11-21 从 app.css 拆出）
 		{"GET", "/panel/aesthetic.css"},     // 视觉层（2026-11-20）
 		{"GET", "/panel/panel.css"},         // 命令面板 / Playground 样式（2026-11-15 抽出）
 		{"GET", "/panel/api/overview"},      // 401（未提供 key）

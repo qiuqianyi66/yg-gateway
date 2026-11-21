@@ -350,18 +350,6 @@ func (f *caFakeUpstream) caSetMPTask(t upstream.Task) {
 	f.mpTasks[t.TaskCode] = t
 }
 
-// caTaskState 读回任务表当前状态（模拟回读上游进度）。
-func (f *caFakeUpstream) caTaskState(code string, mp bool) (upstream.Task, bool) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	tbl := f.defaultTasks
-	if mp {
-		tbl = f.mpTasks
-	}
-	t, ok := tbl[code]
-	return t, ok
-}
-
 // caAdvance 模拟「上游异步计分」：把任务进度推进到指定值。
 func (f *caFakeUpstream) caAdvance(code string, mp bool, current int64, accept string) {
 	f.mu.Lock()

@@ -772,10 +772,13 @@ func TestPanelStylesExternalized(t *testing.T) {
 	if len(appCSS) == 0 {
 		t.Error("app.css 嵌入为空（go:embed 未生效？）")
 	}
+	if len(viewsCSS) == 0 {
+		t.Error("views.css 嵌入为空（go:embed 未生效？）")
+	}
 	if len(panelCSS) == 0 {
 		t.Error("panel.css 嵌入为空（go:embed 未生效？）")
 	}
-	for _, want := range []string{"app.css", "panel.css"} {
+	for _, want := range []string{"app.css", "views.css", "panel.css"} {
 		idx := -1
 		for i, name := range panelStyles {
 			if name == want {

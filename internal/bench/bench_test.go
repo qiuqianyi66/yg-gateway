@@ -99,7 +99,7 @@ func TestEvalEmptyInputs(t *testing.T) {
 	if rep.Health.HealthyRatio.Kind != KindUnknown {
 		t.Errorf("empty accounts healthy should be unknown, got %s", rep.Health.HealthyRatio.Kind)
 	}
-	if rep.Routing != nil && len(rep.Routing) != 0 {
+	if len(rep.Routing) != 0 {
 		t.Errorf("empty routing should be empty map")
 	}
 }

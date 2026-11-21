@@ -41,6 +41,7 @@ func TestCreditFloorBlocksPaidBelowFloor(t *testing.T) {
 
 // TestCreditFloorAllowsFreeBelowFloor 触底号对免费模型（tier 0）照常可选：
 // 保底的目的恰是「留点余额让免费模型还能用」，免费请求 credit=0 不再扣减。
+// 免费判定需累计 minFreeCostSamples 条零扣费观测（单条 0 可能是 credit 缺失）。
 func TestCreditFloorAllowsFreeBelowFloor(t *testing.T) {
 	withNoPickGap(t)
 	p := New("")
@@ -49,7 +50,9 @@ func TestCreditFloorAllowsFreeBelowFloor(t *testing.T) {
 	p.SetRandomSource(func(n int64) int64 { return 0 })
 	p.Add(&auth.Auth{UID: "poor"})
 	p.SetCredits("poor", 30, 0)
-	p.NoteModelCost("poor", "hy4-preview", 0, 1000) // 实测免费
+	for i := 0; i < minFreeCostSamples; i++ {
+		p.NoteModelCost("poor", "hy4-preview", 0, 1000) // 实测免费
+	}
 
 	a := p.PickExcludingForRealm(nil, "hy4-preview", "")
 	if a == nil {
@@ -57,6 +60,36 @@ func TestCreditFloorAllowsFreeBelowFloor(t *testing.T) {
 	}
 	if a.UID != "poor" {
 		t.Fatalf("选中 %v，want poor（免费模型不受 floor 限制）", a.UID)
+	}
+}
+
+// TestCreditFloorWeakFreeEvidenceWithPaidCatalogBlocks 单条 credit=0 不足以
+// 覆盖目录收费证据：credit 字段缺失也会读成 0，若直接放行触底号，上游已收费
+// 的模型会被免费层持续打流量。累计到 minFreeCostSamples 后才按实测免费放行。
+func TestCreditFloorWeakFreeEvidenceWithPaidCatalogBlocks(t *testing.T) {
+	withNoPickGap(t)
+	p := New("")
+	p.SetCostExploreInterval(0)
+	p.SetCreditFloor(100)
+	p.SetModelRateOf(rates(map[string]map[string]string{
+		"global": {"hy4-preview": "0.29"},
+	}))
+
+	g := &auth.Auth{UID: "poor"}
+	auth.BackfillRealmFor(g, "global")
+	p.Add(g)
+	p.SetCredits("poor", 30, 0)
+	p.NoteModelCost("poor", "hy4-preview", 0, 1000) // 仅 1 条零观测：证据不足
+
+	if a := p.PickExcludingForRealm(nil, "hy4-preview", "global"); a != nil {
+		t.Fatalf("单条 0 观测不得判免费（目录收费），got %v", a)
+	}
+	// 累计到阈值：实测免费毕业，触底号恢复可选。
+	for i := 1; i < minFreeCostSamples; i++ {
+		p.NoteModelCost("poor", "hy4-preview", 0, 1000)
+	}
+	if a := p.PickExcludingForRealm(nil, "hy4-preview", "global"); a == nil {
+		t.Fatal("累计足够零观测后应判免费并放行，got nil")
 	}
 }
 
@@ -178,6 +211,9 @@ func TestCreditFloorStickyPathBlocked(t *testing.T) {
 	}
 	// 免费模型不受影响：同一粘性号照常出票。
 	p.NoteModelCost("sticky", "free-model", 0, 1000)
+	for i := 1; i < minFreeCostSamples; i++ {
+		p.NoteModelCost("sticky", "free-model", 0, 1000)
+	}
 	if a := p.PickByUIDForModel("sticky", "free-model"); a == nil {
 		t.Fatal("粘性号触底 + 免费模型应照常出票，got nil")
 	}
@@ -293,7 +329,8 @@ func TestCreditFloorNoRateTableKeepsLegacyBehavior(t *testing.T) {
 }
 
 // TestCreditFloorLocalLedgerFreeBeatsCatalogPaid 本地实测优先于目录：某号实测该
-// 模型免费（限免/夜间优惠），目录牌价收费时以实测为准——实测是更强的证据。
+// 模型免费（限免/夜间优惠），目录牌价收费时以实测为准——但实测须累计到
+// minFreeCostSamples 条零扣费观测才算「强证据」，单条 0 不覆盖牌价收费。
 func TestCreditFloorLocalLedgerFreeBeatsCatalogPaid(t *testing.T) {
 	withNoPickGap(t)
 	p := New("")
@@ -308,7 +345,9 @@ func TestCreditFloorLocalLedgerFreeBeatsCatalogPaid(t *testing.T) {
 	auth.BackfillRealmFor(g, "global")
 	p.Add(g)
 	p.SetCredits("poor", 30, 0)
-	p.NoteModelCost("poor", "hy4-preview-f", 0, 1000) // 实测免费（限免中）
+	for i := 0; i < minFreeCostSamples; i++ {
+		p.NoteModelCost("poor", "hy4-preview-f", 0, 1000) // 实测免费（限免中）
+	}
 
 	a := p.PickExcludingForRealm(nil, "hy4-preview-f", "global")
 	if a == nil || a.UID != "poor" {
@@ -396,7 +435,9 @@ func TestStickyPaidHitsCounter(t *testing.T) {
 	// free 号在该模型上免费（tier 0），是"更便宜的健康号"。
 	p.Add(&auth.Auth{UID: "free"})
 	p.SetCredits("free", 5000, 0)
-	p.NoteModelCost("free", "paid-model", 0, 1000)
+	for i := 0; i < minFreeCostSamples; i++ {
+		p.NoteModelCost("free", "paid-model", 0, 1000)
+	}
 
 	if a := p.PickByUIDForModel("sticky", "paid-model"); a == nil {
 		t.Fatal("粘性号应出票（积分充足）")
@@ -407,6 +448,9 @@ func TestStickyPaidHitsCounter(t *testing.T) {
 
 	// 绑定号在 free-model 上免费 → 不计数。
 	p.NoteModelCost("sticky", "free-model", 0, 1000)
+	for i := 1; i < minFreeCostSamples; i++ {
+		p.NoteModelCost("sticky", "free-model", 0, 1000)
+	}
 	p.PickByUIDForModel("sticky", "free-model")
 	if got := p.StickyPaidHits(); got != 1 {
 		t.Fatalf("免费号命中不应计数，StickyPaidHits = %d, want 1", got)

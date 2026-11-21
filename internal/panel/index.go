@@ -94,6 +94,9 @@ var benchJS []byte
 //go:embed app.css
 var appCSS []byte
 
+//go:embed views.css
+var viewsCSS []byte
+
 //go:embed gamify.css
 var gamifyCSS []byte
 
@@ -126,10 +129,11 @@ var aestheticCSS []byte
 // 改动本清单必须同时满足 TestComponentLoadOrder（顺序规则）与
 // TestIndexHTMLHasNoHandWrittenAssetTags（骨架里不许再手写标签）。
 var panelStyles = []string{
-	"app.css", // 基础样式层：设计令牌 / 布局 / 基础组件。必须最先 —— 组件样式依赖 var(--*)
+	"app.css",   // 基础样式层：设计令牌 / 布局 / 基础组件。必须最先 —— 组件样式依赖 var(--*)
+	"views.css", // 视图层：Key 弹窗 / 用量图表 / 请求表 / 日志 / 渐进入场。从 app.css 拆出（见下）
 	"gamify.css",
 	"provider.css",
-	"aesthetic.css", // 视觉层：分区色相 / 卡片光边 / 渐进入场。排在 app.css 之后、panel.css 之前
+	"aesthetic.css", // 视觉层：分区色相 / 卡片光边 / 渐进入场。排在 views.css 之后、panel.css 之前
 	"panel.css",     // 命令面板与 Playground。必须末位 —— 原先写在 body 尾部，语义是「最后覆盖」
 }
 
@@ -493,6 +497,19 @@ func (p *Panel) appStyle(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	// 忽略：静态资源全量写回，写失败即客户端断连，无可恢复语义（与 appScript 同口径）。
 	_, _ = w.Write(appCSS)
+}
+
+// viewsStyle 输出面板视图层样式（2026-11-21 从 app.css 拆出）。
+// 拆分原因：app.css 已到 999/1000 非空行，任何布局级重排都会把
+// oversizeFrontendFiles 从 1 顶到 2（check-depth 只许收紧）；按「基础层 / 视图层」
+// 切分后两份都在阈值内，后续视图样式有增量空间。加载顺序紧跟 app.css，
+// 原有层叠关系不变（tail 段只被 aesthetic.css 在其后覆盖）。
+func (p *Panel) viewsStyle(w http.ResponseWriter, r *http.Request) {
+	setSecurityHeaders(w)
+	w.Header().Set("Content-Type", "text/css; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	// 忽略：静态资源全量写回，写失败即客户端断连，无可恢复语义（与 appScript 同口径）。
+	_, _ = w.Write(viewsCSS)
 }
 
 // aestheticStyle 输出视觉层样式表（2026-11-20）。
