@@ -17,6 +17,7 @@
 | 第三轮 | 账号卡状态轨：`renderAccountsUnsafe` 把原来统一的 `off` 拆成 `st-dis`（禁用）/`st-pause`（暂停）/`st-cool`（冷却），左缘 3px 色条分别取 red/amber/blue，健康卡不加轨；主指标 `#sHealthy`/`#sCredits` 数字按分区色相着色（82% sec + 18% ink，保留对比度，语义类 good/warn/bad 优先）。 |
 | 第四轮 · 窄屏 | `≤760px`：`.nav` 子项 `flex:none` + `white-space:nowrap`，行模式下不再被压成逐字竖排；导航条 `max-height:56px` 并收窄 brand/sig 内边距，横向溢出交给 `.nav` 自身滚动。`≤560px`：`.topbar` 换行、`.view` 降 padding。 |
 | 第五轮 · 悬停 | 注册 `@property --sec`（`<color>`、inherits），`body` 上 `transition: --sec .35s`，切视图时分区分色相平滑插值而非硬切；次级按钮 / 图标按钮 hover 改中性描边 + 4% 浅底（品牌绿只留主按钮，危险按钮仍红）；请求表可点击表头与积分分组开关 hover 跟随分区色相。`prefers-reduced-motion` 下取消 `--sec` 过渡。 |
+| 第六轮 · 弹层 | `.veil.on` 遮罩 180ms 淡入，`.dlg` 260ms 上浮 10px + 1.5% 缩放；`.veil` 从 `display:none` 切到 `flex` 自动重播，不需改 `showVeil`。`prefers-reduced-motion` 下取消。 |
 
 窄屏空白带的根因与修法（实测记录）：
 
@@ -40,6 +41,7 @@
 - 门禁 `scripts/pre-commit.ps1` 全绿后提交，`deploy-prod.ps1 -Build` 退出码 0 + 冒烟 3/3。
 - 生产实测（`70c82b1`，报告 `deploy-prod-20261120-220305.json`）：375×820 下 accounts / opsagent / logs 三页均 `navH=56`、`topY=56`、`overflow=0`；768 / 1024 均为侧栏 `navH=820`、`overflow=0`。截图 `%TEMP%\panel-mobile2\prod375-*.png`。
 - 第五轮注入预览实测：`--sec` 在切页后 0/120/240/400ms 依次为 `rgb(16,185,129) → rgb(44,149,206) → rgb(57,132,242) → rgb(59,130,246)`，插值生效；模型页顶栏图标 hover 描边 `color(srgb .707 .730 .739)`（中性灰），账号卡 ghost 按钮同值。
+- 第六轮注入预览实测：点击「添加账号」后立即采样 `.dlg` = `dlgIn` / `matrix(.985,0,0,.985,0,10)` / `opacity:0`，400ms 后 `matrix(1,0,0,1,0,0)` / `opacity:1`；`.veil` 同步跑 `veilIn`。
 
 ## 被否方案 / 边界
 
