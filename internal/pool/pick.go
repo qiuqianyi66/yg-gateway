@@ -262,41 +262,22 @@ func (p *Pool) selectFromCandidates(cands []*entry, reqModel, realm string, now 
 			ws = append(ws, weighted{e: e, w: p.routingWeightOf(e, maxCredits, now, medianLatencyMs, medianPace, class), tier: infos[i].tier, cost1k: infos[i].cost1k})
 		}
 	}
-	// 等权重洗牌：候选超过 top5 且**第一名与其余项权重相等**时，做一次 Fisher-Yates
-	// （不消耗 p.randInt64N 注入源，避免改变 pickWeighted 的确定性语义，
-	// 见 TestPickDeterministicViaSetRandomSource）。
+	// 2026-11-21 复核：原先还有一段「全员等权重时 Fisher-Yates 洗牌」分支，意图是
+	// 打散 UID 字典序决定的 top5。但下面的比较器以 UID 作严格全序兜底，全排序/topK
+	// 对任何输入排列都返回同一组 top5——洗牌对结果没有任何影响（删除前 Pick* 全绿，
+	// 删除后同样全绿）。真正防止「字典序饿死」的是 idle 衰减：账号一旦被用过，
+	// lastUsed 归零、idle 权重从 max 掉到 0，下一轮自然让位（TestPickTiedBelowLeaderNotStarved
+	// 固定该不变式）。因此该分支已删，不再保留无测试保护且无效果的随机化。
 	//
-	// 它覆盖的只是「全员并列、由 UID 字典序决定谁进 top5」这一种边界：一批刚导入、
-	// 积分与闲置时长都相同的账号。
-	//
-	// **非第一名之间的并列不靠这里解决**：那由 idle 衰减承担——账号一旦被用过，
-	// lastUsed 归零、idle 权重从 max 掉到 0，下一轮权重自然低于还没用过的并列号，
-	// 于是让位。TestPickTiedBelowLeaderNotStarved 固化这个不变式：把
-	// defaultIdleWeightMax 改成 0，该测试立即 FAIL（u6/u7 在 3000 轮里恒为 0）。
-	// 换言之，「字典序饿死」这个病真正的解药是权重随使用衰减，洗牌只处理权重
-	// 完全冻住的那一类。
-	//
-	// 2026-11-19 注：本分支删除后 pool 全套测试仍全绿，说明它**没有测试保护**。
-	// 保留而不删，是因为它在「全员并列」场景下确实打散截断次序；但任何改动若让它
-	// 变成死代码，删掉不会有测试变红——改它时需要自己确认行为。
-	if len(ws) > 5 {
-		eq := false
-		for i := 1; i < len(ws); i++ {
-			if ws[i].w == ws[0].w {
-				eq = true
-				break
-			}
-		}
-		if eq {
-			shuf := rand.New(rand.NewPCG(uint64(now.UnixNano()), uint64(len(ws))))
-			shuf.Shuffle(len(ws), func(i, j int) { ws[i], ws[j] = ws[j], ws[i] })
-		}
-	}
 	// 排序用 slices.SortFunc 而非 sort.SliceStable（2026-11-14 热路径优化）：
 	//   - sort.SliceStable 走 reflect.Swapper + 闭包，46 账号实测占 Pick 总耗时的大头；
 	//   - 比较器是**严格全序**（cost1k → w → UID，UID 唯一），不存在相等元素，
 	//     因此稳定排序与不稳定排序结果逐位相同（TestPick* 全绿即证据）。
-	slices.SortFunc(ws, func(a, b weighted) int {
+	//
+	// 2026-11-21：只需要 top5，不再对全部候选做 O(n log n) 全排序（profile 显示
+	// 排序约占 Pick CPU 28%）。topKBy 维护长度 5 的有序前缀，其余候选只做一次
+	// 「是否优于当前最差」比较；LRU 兜底扫 candsAll 的 usedSeq，不依赖排序结果。
+	cmpCand := func(a, b weighted) int {
 		// costTier 硬过滤后 ws 全员同层，但仍按 cost1k 升序排（tier 2 层内单价低者
 		// 在前；tier 0/1 层 cost1k 恒 0，本比较退化为权重比较）——读缓存字段不现算。
 		if a.cost1k != b.cost1k {
@@ -306,42 +287,51 @@ func (p *Pool) selectFromCandidates(cands []*entry, reqModel, realm string, now 
 			return cmp.Compare(b.w, a.w) // 权重降序
 		}
 		return strings.Compare(a.e.a.UID, b.e.a.UID) // 全序兜底（洗牌后此项几乎不触发）
-	})
-	cands = cands[:0]
-	for _, c := range ws {
-		cands = append(cands, c.e)
 	}
-	// candsAll 保留截断前的全候选（权重降序），供 LRU 兜底在全量范围选最旧者，
-	// 避免 top5 字典序截断把等权重靠后账号饿死（惊群根因之一）。
+	ws = topKBy(ws, 5, cmpCand)
+	// candsAll 保留截断前的全候选，供 LRU 兜底在全量范围选最旧者，避免 top5
+	// 字典序截断把等权重靠后账号饿死（惊群根因之一）。顺序不再保证权重降序：
+	// LRU 只看 usedSeq 单调序号。
 	candsAll := cands
-	if len(cands) > 5 {
-		cands = cands[:5]
-	}
 	var e *entry
 	pickMode := "weighted" // 决策溯源：weighted 或 lru（top5 全刚用过的兜底分支）
 	// 防并发撞号：基于「上次选中时刻」过滤。改读锁后（ADR-005 D-500）同一瞬间
 	// 的并发 pick 可能都读到旧 lastUsed 而同选一号（语义放宽见 pick 头注释，
 	// 由 Acquire 租约 + tried 轮换自愈）；对「下一个进入者」而言，下方原子写回
 	// 让 lastUsed 立即可见，时间窗口判定继续生效。
-	// eligible 至多 len(cands) ≤ 5 个元素（cands 已在上面截到 top5），用固定数组
+	// eligible 至多 len(ws) ≤ 5 个元素（ws 已在上方截到 top5），用固定数组
 	// 免掉每请求一次堆分配；逃逸分析能把 backing array 留在栈上（见 BenchmarkPick46
 	// 的 allocs/op，改回 make(...) 会让它 +1）。
 	var eligibleArr [5]*entry
 	eligible := eligibleArr[:0]
-	for _, c := range cands {
-		if t := c.lastUsedTime(); t.IsZero() || now.Sub(t) >= minPickGap {
-			eligible = append(eligible, c)
+	for _, c := range ws {
+		if t := c.e.lastUsedTime(); t.IsZero() || now.Sub(t) >= minPickGap {
+			eligible = append(eligible, c.e)
 		}
 	}
 	if len(eligible) == 0 {
 		pickMode = "lru"
 		// top5 全部刚被用过：LRU 兜底，在**全候选 candsAll**（非仅 top5）里选最旧者。
-		// 用 usedSeq 单调序号而非 lastUsed 墙钟比较：Windows 等平台 time.Now() 精度
-		// ~0.5ms，快速连续选号时所有 lastUsed 完全相等，Before 全 false 会恒选
-		// candsAll[0] 导致集中。usedSeq 严格全序，与时间精度无关。
+		// 排序键为 lastUsed（墙钟）→ usedSeq → UID：
+		//   - lastUsed 是持久化语义（重启后 usedSeq 全为 0，不能把它当唯一依据，
+		//     否则会退化成按 map 遍历顺序选号）；
+		//   - usedSeq 解决 Windows ~0.5ms 时钟粒度下 lastUsed 完全相等的问题；
+		//   - UID 兜底保证三者全相等时仍确定性，不依赖 map 顺序。
+		// 该比较是全序，candsAll 无需预先按权重排序（topK 截断后顺序已不保证）。
+		lruBefore := func(a, b *entry) bool {
+			at, bt := a.lastUsedTime(), b.lastUsedTime()
+			if !at.Equal(bt) {
+				return at.Before(bt)
+			}
+			as, bs := a.usedSeq.Load(), b.usedSeq.Load()
+			if as != bs {
+				return as < bs
+			}
+			return a.a.UID < b.a.UID
+		}
 		e = candsAll[0]
 		for _, c := range candsAll[1:] {
-			if c.usedSeq.Load() < e.usedSeq.Load() {
+			if lruBefore(c, e) {
 				e = c
 			}
 		}
@@ -528,10 +518,7 @@ func (p *Pool) pickEarliestExpiryLocked(tried map[string]bool, now time.Time, re
 			// 最小请求间隔限流（风控规避）：expiry 零值但仍在间隔窗内 →
 			// 兜底可见，恢复时刻 = lastRequestAt + interval。全池被间隔限制时
 			// 选最早恢复者，不 503（和 failureWindow 同哲学）。
-			interval := p.minRequestInterval
-			if e.a.IsGlobal() && p.minRequestIntervalGlobal > 0 {
-				interval = p.minRequestIntervalGlobal
-			}
+			interval := p.minRequestIntervalFor(e)
 			if interval > 0 {
 				last := e.lastRequestAt.Load()
 				if last > 0 {
@@ -756,6 +743,34 @@ func (p *Pool) ewmaWeightFactor(e *entry, medianMs float64) float64 {
 		f *= 1 - pen
 	}
 	return f
+}
+
+// topKBy 返回 items 中按 cmp 最小的前 k 个（结果按 cmp 升序，原地重排 items）。
+// k<=0 返回空；len(items)<=k 时等价于全排序；否则只维护长度 k 的有序前缀，
+// 避免为取 top5 对全部候选做 O(n log n) 排序。
+// 返回切片与 items 共享底层数组；被淘汰元素的内容不保证，调用方不得依赖。
+func topKBy[T any](items []T, k int, cmpFn func(a, b T) int) []T {
+	if k <= 0 || len(items) == 0 {
+		return items[:0]
+	}
+	if len(items) <= k {
+		slices.SortFunc(items, cmpFn)
+		return items
+	}
+	top := items[:k]
+	slices.SortFunc(top, cmpFn)
+	for i := k; i < len(items); i++ {
+		if cmpFn(items[i], top[k-1]) >= 0 {
+			continue // 不优于当前第 k 名：淘汰
+		}
+		j := k - 1
+		for j > 0 && cmpFn(items[i], top[j-1]) < 0 {
+			top[j] = top[j-1]
+			j--
+		}
+		top[j] = items[i]
+	}
+	return top
 }
 
 // SetCredits 更新账号余额。

@@ -49,10 +49,7 @@ func (g pickGuards) failureWindowBlocked(e *entry) bool {
 // 单账号短时间打太密触发上游风控（真实用户不会每秒发多次请求）。
 // global 账号阈值更严（国际版风控更敏感）。0 = 关闭（零回归）。
 func (g pickGuards) minIntervalBlocked(e *entry) bool {
-	interval := g.p.minRequestInterval
-	if e.a.IsGlobal() && g.p.minRequestIntervalGlobal > 0 {
-		interval = g.p.minRequestIntervalGlobal
-	}
+	interval := g.p.minRequestIntervalFor(e)
 	if interval <= 0 {
 		return false
 	}

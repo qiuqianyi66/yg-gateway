@@ -269,8 +269,8 @@ type entry struct {
 	lastUsed atomic.Int64
 	// usedSeq 单调递增的选中序号：每次被 pick 选中时取 p.pickSeq 自增值。
 	// Windows 等平台 time.Now() 精度有限（~0.5ms），高并发/快速连续选号时多个
-	// 账号 lastUsed 完全相等，基于 wall-clock 的 LRU/防惊群判定失效。
-	// usedSeq 提供严格全序，与时间精度无关。运行态，不持久化。
+	// 账号 lastUsed 完全相等；usedSeq 为 LRU 兜底提供与时间精度无关的 tie-break
+	// （排序键 lastUsed → usedSeq → UID）。运行态，不持久化。
 	// atomic（同 lastUsed 口径，ADR-005 D-500）。
 	usedSeq atomic.Uint64
 	// breakerUntil / fails / retryCount 为熔断器运行态（不持久化）。

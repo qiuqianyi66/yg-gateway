@@ -133,9 +133,9 @@ type Pool struct {
 	// 这把锁的持有者从不持有 p.mu，故锁序单向、无死锁面。
 	saveMu sync.Mutex
 	// pickSeq 单调递增的选号序号：每次 pick 选中账号时自增并记到 entry.usedSeq，
-	// 为 LRU 兜底/防惊群提供与 time.Now() 精度无关的严格全序（Windows ~0.5ms 精度下
-	// lastUsed 墙钟会全等）。atomic（ADR-005 D-500）：pick 改读锁后由读锁路径
-	// Add(1) 分配序号，普通字段跨读锁写会成数据竞争。
+	// 为 LRU 兜底在 lastUsed 墙钟相等（Windows ~0.5ms 精度）时提供 tie-break；
+	// 再相等时以 UID 兜底，保证确定性全序。atomic（ADR-005 D-500）：pick 改读锁后
+	// 由读锁路径 Add(1) 分配序号，普通字段跨读锁写会成数据竞争。
 	pickSeq atomic.Uint64
 	// stickyPaidHits 粘性命中"已实测收费号且池里有免费/未知号"的累计次数。
 	// 纯观测：不自动换号（保上游 prompt 缓存），只让面板看到"哪些会话钉在收费号上"。
@@ -475,6 +475,20 @@ func (p *Pool) inFlightLimit(e *entry) int {
 		return p.maxInFlightGlobal
 	}
 	return p.maxInFlight
+}
+
+// minRequestIntervalFor 返回账号生效的最小请求间隔（global 分档优先，0 = 关闭）。
+// 两个阈值都为 0 时直接返回，不触碰 e.a.IsGlobal()（内部要拿 Auth 互斥锁，
+// 默认配置下每次 Pick 对每个候选白锁一次——2026-11-21 profile 实测 14% CPU）。
+func (p *Pool) minRequestIntervalFor(e *entry) time.Duration {
+	if p.minRequestInterval <= 0 && p.minRequestIntervalGlobal <= 0 {
+		return 0
+	}
+	interval := p.minRequestInterval
+	if p.minRequestIntervalGlobal > 0 && e.a.IsGlobal() {
+		interval = p.minRequestIntervalGlobal
+	}
+	return interval
 }
 
 // SetStore 注入池状态快照镜像（redisstore.Store）。nil 表示不镜像（纯本地恢复）。
