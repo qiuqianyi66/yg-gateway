@@ -64,7 +64,30 @@
   - 768：2 列（224px）；375：单列（317px），无横向溢出；
   - 暗色 1440 卡片/统计条/侧栏正常。
 
-## 五、回滚
+## 五、生产换版与回归
+
+`powershell -NoProfile -File scripts/deploy-prod.ps1 -Build -Feature cost-tier-layout`：
+
+- 报告：`D:\yg-gateway\data\logs\deploy-prod-20261121-112507.json`
+- `stage=done`、`git_head=daeb559`、`git_dirty=false`、健康 `healthy=2/4`
+- 冒烟 3/3：`/v1/models` 18 模型；非流式 200；流式 200 + 增量帧 + `[DONE]`
+- 备份：`D:\yg-gateway\yg-gateway.exe.pre-cost-tier-layout-20261121.bak`
+  （旧 sha256 `3E7CF85D…`，新 `293CCF31…`）
+
+生产回归 `python scripts/yg-regression-test.py --base http://127.0.0.1:7863 --skip S4,S8`：
+
+- S1/S2/S3/S5/S6/S7：**14 PASS / 0 FAIL**
+- S2 20/20 200；S7 SSE 5/5 完整；S3/S6 分别 413 边界正确
+
+生产面板 Playwright 实测：1440 账号卡 4 张同排（273px、单行 248px）；
+1280 三列 315px；375 单列 317px；无 pageerror/console error；添加账号弹层样式正常。
+
+成本台账生产抽样：12 条 `model_costs`，其中 3 条零观测 `samples=1`
+（`hy4flash-free` ×2、`space-bunny` ×1）。`hy4flash-free` 目录优惠倍率显式 `0`，
+新旧规则都判 tier 0；`space-bunny` 目录 `0.08`，新旧规则都判 tier 2——
+本轮变更未在这两条上产生未预期的免费层丢失。
+
+## 六、回滚
 
 - 成本 tier：回滚 `internal/pool/pick.go`、`entry.go` 与对应测试；`state.json` 无迁移。
 - 面板：回滚 `app.css` / `views.css` 与 `index.go` / `routes.go` 资源清单即可；
