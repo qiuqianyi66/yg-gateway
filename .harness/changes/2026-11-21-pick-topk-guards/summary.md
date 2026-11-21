@@ -51,6 +51,12 @@ profile 复测：全排序热点消失，`topKBy` 约占 10%，`auth.Realm` 不�
 正确性：`go test ./internal/pool -count=1` 全绿（含 starvation/LRU/成本分层/保底全套）；
 `topK_test.go` 对 n=0..60、k=0..5 的所有随机数组与 `slices.Sort` 前 k 比对通过。
 
+生产部署（2026-11-21 10:39:29，`deploy-prod.ps1 -Build -Feature backend-pick-topk`）：
+`stage=done`、`git_head=2be5314`、`git_dirty=false`、健康 `healthy=2/4`、
+冒烟 `/v1/models` 18 模型 + 非流式 + 流式 3/3；备份
+`D:\yg-gateway\yg-gateway.exe.pre-backend-pick-topk-20261121.bak`（旧 sha256 `3074BEE7…`），
+报告 `D:\yg-gateway\data\logs\deploy-prod-20261121-103929.json`。
+
 ## 回滚
 
 `git revert <this-commit>`。回退后 `TestPickLRUFallbackWhenTopAllRecentlyUsed`
