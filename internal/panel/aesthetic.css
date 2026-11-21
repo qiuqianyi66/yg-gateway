@@ -263,8 +263,31 @@ button.primary {
   .view { padding: 16px 14px 48px; }
 }
 
-/* 13) 降低动效：系统开启减少动画时，全部入场动画退化为静态终态 -------- */
+/* 13) 分区色相过渡：切视图时 --sec 若瞬间跳变，整页描边/底色会硬切。
+   注册成 <color> 才能插值；旧浏览器忽略 @property，退化为瞬时切换。 */
+@property --sec {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: #10b981;
+}
+body { transition: --sec .35s ease; }
+
+/* 14) 悬停统一：次级按钮 / 图标按钮用中性描边 + 4% 浅底，品牌绿只留给主按钮，
+   避免青色模型页出现绿色悬停环；危险按钮保持红描边（app.css 中的规则）。 */
+.topbar button:hover:not(:disabled):not(.primary):not(.danger),
+.view button:hover:not(:disabled):not(.primary):not(.danger) {
+  border-color: color-mix(in srgb, var(--ink) 24%, var(--line));
+  background: color-mix(in srgb, var(--ink) 4%, var(--surface));
+}
+/* 可点击表头与积分分组开关跟随分区色相，而不是全站品牌绿。 */
+.view .acc.req thead th.sortable:hover {
+  color: color-mix(in srgb, var(--sec, var(--accent)) 78%, var(--ink));
+}
+.view .pk-group-toggle:hover:not(:disabled) { color: var(--sec, var(--accent)); }
+
+/* 15) 降低动效：系统开启减少动画时，全部入场动画退化为静态终态 -------- */
 @media (prefers-reduced-motion: reduce) {
+  body { transition: none; }
   .view:not([hidden]),
   .view:not([hidden]) > .box,
   button:active:not(:disabled) {
