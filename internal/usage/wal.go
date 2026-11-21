@@ -3,6 +3,7 @@ package usage
 import (
 	"bufio"
 	"encoding/json"
+	"io"
 	"log"
 	"os"
 	"path/filepath"
@@ -28,8 +29,9 @@ import (
 // （R-205 v2 修订消除了 ADR-016 §三的复活窗口妥协）。同键同批 delete+upsert（折叠后又被
 // 新流量重建）时此序天然正确：先删后建。
 
-// walFileVersion WAL 格式版本。首行写入，旧程序不认则忽略（不影响主文件加载）。
-const walFileVersion = 1
+// WAL 格式无版本头：ADR-016 只承诺「旧二进制不读写 WAL」，从未约定首行版本号，
+// 因此不要凭注释假设存在版本协商；字段演进必须保持向后兼容（未知字段由
+// encoding/json 忽略）。walFileVersion 常量已删除——它从未被写入或读取。
 
 // walCheckpointAfterDefault 默认基线重写阈值（记录数）。
 // 装配期可由 config.usage.wal_checkpoint_after 覆盖（<=0 回落此默认）。
@@ -108,8 +110,13 @@ func truncateWAL(path string) {
 
 // replayWAL 回放 WAL 到内存桶/月累计（加载基线后调用）。坏行（半截追加崩溃残留）跳过。
 // 合并规则：逐字段取大（计数单调非减），消解回滚时序回退。
+//
+// 流式读取（2026-11-21）：旧实现 os.ReadFile + strings.Split 会把整个 WAL 与
+// 全部分行副本同时驻留内存；阈值 20000 条时是一次性峰值（平时在百 KB 量级，
+// 但崩溃前 WAL 可以更大）。bufio.Reader 逐行读取后，峰值只与单行长度相关，
+// 文件格式与回放顺序完全不变（半截末行仍按解析失败跳过）。
 func replayWAL(path string, buckets map[string]*bucket, monthly map[string]int64) {
-	raw, err := os.ReadFile(path)
+	f, err := os.Open(path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return
@@ -117,35 +124,55 @@ func replayWAL(path string, buckets map[string]*bucket, monthly map[string]int64
 		log.Printf("[usage] WAL 读取失败（跳过回放）: %v", err)
 		return
 	}
-	lines := strings.Split(strings.TrimSpace(string(raw)), "\n")
+	defer f.Close()
+
+	br := bufio.NewReaderSize(f, 64*1024)
 	n := 0
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		var rec walRecord
-		if err := json.Unmarshal([]byte(line), &rec); err != nil {
-			// 崩溃时可能留下半行：跳过坏行，保住其余记录。
-			continue
-		}
-		if rec.B != nil {
-			k := bucketKey(rec.B.Scope, rec.B.Realm, rec.B.UID, rec.B.Model, rec.B.Rate, rec.B.Key)
-			mergeBucketMax(buckets, k, rec.B)
+	for {
+		line, readErr := br.ReadString('\n')
+		if replayWALLine(strings.TrimSpace(line), buckets, monthly) {
 			n++
-		} else if rec.D != "" {
-			// delete 记录：顺序权威——先删，同批后续 upsert 可重建同键。
-			// 不用 merge-max 套 delete（删除是确定性操作，不是取大）。
-			delete(buckets, rec.D)
-		} else if rec.M != "" {
-			if v, ok := monthly[rec.M]; !ok || rec.V > v {
-				monthly[rec.M] = rec.V
+		}
+		if readErr != nil {
+			if readErr != io.EOF {
+				log.Printf("[usage] WAL 读取中断（已回放 %d 条桶记录）: %v", n, readErr)
 			}
+			break
 		}
 	}
 	if n > 0 {
 		log.Printf("[usage] WAL 回放 %d 条桶记录", n)
 	}
+}
+
+// replayWALLine 回放单行 WAL 记录，返回是否写入了一条桶 upsert。
+// 空行与坏行返回 false；delete/monthly 记录返回 false（沿用原计数口径：只统计桶记录）。
+func replayWALLine(line string, buckets map[string]*bucket, monthly map[string]int64) bool {
+	if line == "" {
+		return false
+	}
+	var rec walRecord
+	if err := json.Unmarshal([]byte(line), &rec); err != nil {
+		// 崩溃时可能留下半行：跳过坏行，保住其余记录。
+		return false
+	}
+	if rec.B != nil {
+		k := bucketKey(rec.B.Scope, rec.B.Realm, rec.B.UID, rec.B.Model, rec.B.Rate, rec.B.Key)
+		mergeBucketMax(buckets, k, rec.B)
+		return true
+	}
+	if rec.D != "" {
+		// delete 记录：顺序权威——先删，同批后续 upsert 可重建同键。
+		// 不用 merge-max 套 delete（删除是确定性操作，不是取大）。
+		delete(buckets, rec.D)
+		return false
+	}
+	if rec.M != "" {
+		if v, ok := monthly[rec.M]; !ok || rec.V > v {
+			monthly[rec.M] = rec.V
+		}
+	}
+	return false
 }
 
 // mergeBucketMax 把 WAL 桶记录逐字段取大合并进既有桶（计数单调非减；

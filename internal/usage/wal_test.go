@@ -306,3 +306,34 @@ func TestFlushRetainsDirtyAndRetriesOnWALFailure(t *testing.T) {
 		t.Fatalf("WAL 内容应含 u1: %q", string(raw))
 	}
 }
+
+// 流式回放：完整行照常生效，末尾无换行的半截记录按坏行跳过。旧实现 ReadFile +
+// Split 对无末尾换行的半行同样会尝试解析，但峰值内存与文件大小成正比；本测试
+// 同时钉住「流式读取不改变坏行语义」。
+func TestWALReplayStreamsTruncatedTail(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "usage.json")
+	k := bucketKey("h:2026-11-21T10", "cn", "u1", "m", "", "")
+	good, err := json.Marshal(walRecord{B: &bucket{Scope: "h:2026-11-21T10", Realm: "cn", UID: "u1", Model: "m", PT: 9, TT: 9, Req: 1}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 第二行是崩溃残留的半截 JSON，且文件末尾没有 '\n'。
+	wl := walPathOf(path)
+	content := string(good) + "\n" + `{"b":{"scope":"h:2026-11-21T10"`
+	if err := os.MkdirAll(filepath.Dir(wl), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(wl, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	buckets := map[string]*bucket{}
+	monthly := map[string]int64{}
+	replayWAL(wl, buckets, monthly)
+	got, ok := buckets[k]
+	if !ok {
+		t.Fatalf("完整行应被回放（半截末行不应拖垮前一记录）")
+	}
+	if got.PT != 9 || got.TT != 9 || got.Req != 1 {
+		t.Fatalf("回放值错误: PT=%d TT=%d Req=%d", got.PT, got.TT, got.Req)
+	}
+}

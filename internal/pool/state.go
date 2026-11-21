@@ -272,9 +272,12 @@ func (p *Pool) NoteModelCost(uid, model string, credit float64, tokens int) {
 		e.modelCost = make(map[string]modelCostEntry)
 	}
 	const alpha = 0.3
+	// 观测时刻与选号读侧（modelCostOf 的 now）必须同源：用 p.now() 而非 time.Now()，
+	// 否则测试注入冻结时钟后，LastSeen 永远贴着墙钟、TTL 判定无法复现。
+	seenAt := p.now()
 	prev, seen := e.modelCost[model]
 	if !seen {
-		e.modelCost[model] = modelCostEntry{CostPer1k: per1k, LastSeen: time.Now(), Samples: 1}
+		e.modelCost[model] = modelCostEntry{CostPer1k: per1k, LastSeen: seenAt, Samples: 1}
 	} else {
 		// 限免结束事件（判定在写入口，只看覆盖前值）：此前 tier 0（实测免费，
 		// per1k≤0）且本次实测收费（per1k>0）——账号在该模型上的免费窗口结束。
@@ -283,7 +286,7 @@ func (p *Pool) NoteModelCost(uid, model string, credit float64, tokens int) {
 		}
 		e.modelCost[model] = modelCostEntry{
 			CostPer1k: prev.CostPer1k*(1-alpha) + per1k*alpha,
-			LastSeen:  time.Now(),
+			LastSeen:  seenAt,
 			Samples:   prev.Samples + 1,
 		}
 	}

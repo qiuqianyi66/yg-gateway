@@ -10,11 +10,6 @@ import (
 	"yg-gateway/internal/unknown"
 )
 
-// degradeReason 连败降权（issue #114）写 reason 的固定文案：与冷却域的
-// reason（"429 rate limit" / "waf 403 block" / "余额不足"）共用一个字段，
-// 运维在 /status 一处即可看到「为什么被降权/冷却」，不新增台账字段。
-const degradeReason = "consecutive failures"
-
 type CoolKind int
 
 const (

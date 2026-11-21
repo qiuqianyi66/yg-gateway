@@ -346,7 +346,7 @@ func (p *Pool) selectFromCandidates(cands []*entry, reqModel, realm string, now 
 			}
 		}
 	} else {
-		e = p.pickWeighted(eligible, maxCredits, medianLatencyMs, medianPace, class) // eligible 保序 = top5 降序子集；maxCredits 用全集口径（与截断排序同基准）
+		e = p.pickWeighted(eligible, maxCredits, medianLatencyMs, medianPace, class, now) // eligible 保序 = top5 降序子集；maxCredits 用全集口径（与截断排序同基准）
 	}
 	return pickSelection{e: e, mode: pickMode, tier: bestTier, explored: explored}
 }
@@ -605,13 +605,13 @@ var minPickGap = 100 * time.Millisecond
 // credits 全 0 时仍按 idleWeight 加权（不退化均匀随机）。
 // 权重为浮点，用 int64 定点（×1e6）抽签可保持确定性随机源注入（randInt64N 语义不变）。
 // 随机源优先用 p.randInt64N（仅供测试注入确定性），nil 时回退 math/rand/v2 全局源。
-// 时刻取 p.now()（可注入时钟，见 SetClock）：与 pick 的权重计算共用同一时间口径，
-// 否则两阶段权重（截断排序 vs 抽签）会落在不同时刻上（生产差异在 µs 级，但测试
-// 需要它可冻结）。
-func (p *Pool) pickWeighted(cands []*entry, maxCredits int64, medianLatencyMs, medianPace float64, class RequestClass) *entry {
-	now := p.now()
+// now 由调用方传入（与 selectFromCandidates 的权重计算共用同一时刻）；不得在本函数
+// 内再取 p.now()：两阶段权重（截断排序 vs 抽签）落在不同时刻会破坏可比性。
+func (p *Pool) pickWeighted(cands []*entry, maxCredits int64, medianLatencyMs, medianPace float64, class RequestClass, now time.Time) *entry {
 	const scale = 1_000_000 // 定点放大：int64 累加权重大整数抽签
-	weights := make([]int64, len(cands))
+	// eligible 至多 top5（selectFromCandidates 保证），固定数组免每次抽签堆分配。
+	var weightsArr [5]int64
+	weights := weightsArr[:len(cands)]
 	var total int64
 	for i, e := range cands {
 		w := p.routingWeightOf(e, maxCredits, now, medianLatencyMs, medianPace, class)

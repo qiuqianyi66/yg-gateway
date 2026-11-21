@@ -116,8 +116,8 @@ func TestUnknownRegistryOptional(t *testing.T) {
 // 牙齿：把 pruneAllLocked 里的 reopenCostUnknown 调用去掉 → 第 4 步读到 0 → FAIL。
 func TestExpiredCostObservationReopensUnknown(t *testing.T) {
 	p, reg := newPoolWithUnknowns(t)
-	// 注意：modelCost 的 LastSeen 由 NoteModelCost 直接用 time.Now() 写入（未走 p.now()），
-	// 所以这里按**真实时钟**推进，不冻结时间——冻结会让台账永远显示"刚观测过"。
+	// 注意：modelCost 的 LastSeen 由 NoteModelCost 走 p.now() 写入；本用例不注入
+	// 冻结时钟，p.now() 即真实时钟，因此按真实时间推进越过 TTL。
 	p.Add(&auth.Auth{UID: "u1", AccessToken: "at", ExpiresAt: 9999999999})
 	p.SetCredits("u1", 1000, 0)
 

@@ -549,8 +549,9 @@ func (p *Pool) SetRandomSource(fn func(n int64) int64) {
 // now 返回当前时刻：生产路径 = time.Now()（nowFn 为 nil，逐位等价于改动前），
 // 测试经 SetClock 注入确定性时钟。
 //
-// 只给 pick 系（选号权重）用：其它路径的 time.Now() 只做「时长/过期」判定，
-// 与测试的数值断言无关，注入它们只会扩大漂移面（零收益）。
+// 只给「时间参与判定结果」的路径用：pick 系（权重/冷却截止）与成本账本的
+// 观测时刻（modelCost 的 LastSeen / TTL）。其它路径的 time.Now() 只做时长换算
+// 且不参与测试断言，注入它们只会扩大漂移面（零收益）。
 func (p *Pool) now() time.Time {
 	if p.nowFn != nil {
 		return p.nowFn()

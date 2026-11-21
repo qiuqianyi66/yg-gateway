@@ -20,7 +20,6 @@ package server
 
 import (
 	"net/http"
-	"strconv"
 	"strings"
 
 	"yg-gateway/internal/metrics"
@@ -221,6 +220,3 @@ func escapeLabel(s string) string {
 	}
 	return labelEscaper.Replace(s)
 }
-
-// formatInt 本地小工具（避免在 server 包里再引 strconv 只为格式化整数）。
-func formatInt(v int64) string { return strconv.FormatInt(v, 10) }

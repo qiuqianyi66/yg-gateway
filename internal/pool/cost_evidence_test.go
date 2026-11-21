@@ -3,6 +3,7 @@ package pool
 import (
 	"encoding/json"
 	"testing"
+	"time"
 
 	"yg-gateway/internal/auth"
 )
@@ -181,5 +182,31 @@ func TestStatusCoolingIncludesDegrade(t *testing.T) {
 	st = statusOf(t, p, "u1")
 	if st.Cooling {
 		t.Errorf("NoteSuccess 清降权后 Cooling 应=false, got %+v", st)
+	}
+}
+
+// TestModelCostTTLUsesInjectableClock 成本账本的 LastSeen 必须与选号读侧同用
+// p.now()：否则注入冻结时钟后 LastSeen 贴墙钟，TTL 判定在测试里永远不可复现。
+// 牙齿：把 NoteModelCost 里的 seenAt 改回 time.Now() → 本测试 FAIL。
+func TestModelCostTTLUsesInjectableClock(t *testing.T) {
+	p := New("")
+	base := time.Date(2026, 11, 21, 12, 0, 0, 0, time.UTC)
+	p.SetClock(func() time.Time { return base })
+	p.Add(&auth.Auth{UID: "u1", AccessToken: "at", ExpiresAt: 9999999999})
+	p.SetCredits("u1", 1000, 0)
+	p.NoteModelCost("u1", "m", 2.9, 1000)
+
+	p.mu.RLock()
+	e := p.byUID["u1"]
+	mc, ok := e.modelCostOf("m", base.Add(modelCostTTL-time.Minute))
+	p.mu.RUnlock()
+	if !ok {
+		t.Fatal("TTL 内观测应有效")
+	}
+	if !mc.LastSeen.Equal(base) {
+		t.Errorf("LastSeen=%v want %v（应走注入时钟 p.now()）", mc.LastSeen, base)
+	}
+	if _, ok := e.modelCostOf("m", base.Add(modelCostTTL+time.Minute)); ok {
+		t.Fatal("超过 TTL 的观测应失效（tier 回到 unknown）")
 	}
 }

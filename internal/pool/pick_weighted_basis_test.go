@@ -33,7 +33,7 @@ func TestPickWeightedSharesFullSetMaxCredits(t *testing.T) {
 	if a == nil || b == nil {
 		t.Fatal("账号未入池")
 	}
-	pickWeighted := p.pickWeighted([]*entry{a, b}, 1000 /* 全集 maxCredits */, 0, 0, ClassChat)
+	pickWeighted := p.pickWeighted([]*entry{a, b}, 1000 /* 全集 maxCredits */, 0, 0, ClassChat, p.now())
 	if pickWeighted != a {
 		t.Fatalf("r=0 应命中权重最高的 a")
 	}
@@ -68,5 +68,34 @@ func TestBreakerUntilUsesInjectableClock(t *testing.T) {
 	want := base.Add(time.Hour)
 	if !e.breakerUntil.Equal(want) {
 		t.Fatalf("breakerUntil = %v, want %v（注入时钟基准）", e.breakerUntil, want)
+	}
+}
+
+// TestPickWeightedUsesCallerNow 抽签权重必须使用调用方传入的 now，而不是在函数内
+// 重新 p.now()。否则截断排序与抽签两阶段落在不同时刻，闲置补偿会算出不同权重
+// （注释承诺「两阶段权重可比」）。这里把 p.now() 故意拨到与 now 不同的时刻，
+// 断言 total 只可能来自传入的 now。
+func TestPickWeightedUsesCallerNow(t *testing.T) {
+	p := New("")
+	base := time.Date(2026, 11, 21, 12, 0, 0, 0, time.UTC)
+	p.SetClock(func() time.Time { return base.Add(-9 * time.Hour) })
+	p.mu.Lock()
+	p.idleWeightPerHour = 1
+	p.idleWeightMax = 100
+	p.mu.Unlock()
+	p.Add(&auth.Auth{UID: "a"})
+	p.Add(&auth.Auth{UID: "b"})
+	a, b := p.byUID["a"], p.byUID["b"]
+	a.setLastUsed(base.Add(-time.Hour))      // 传入 now 下闲置 1h → +1
+	b.setLastUsed(base.Add(-10 * time.Hour)) // 传入 now 下闲置 10h → +10
+
+	var total int64
+	p.SetRandomSource(func(n int64) int64 { total = n; return 0 })
+	p.pickWeighted([]*entry{a, b}, 0, 0, 0, ClassChat, base)
+
+	// 每号底分 1：a=2、b=11 → total=13e6。
+	// 若函数内改用 p.now()（base-9h）：a 闲置为负钳 0、b 闲置 1h → total=4e6。
+	if total != 13_000_000 {
+		t.Fatalf("total=%d want 13000000（必须用调用方 now；用 p.now() 会是 4e6）", total)
 	}
 }

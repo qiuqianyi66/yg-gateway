@@ -12,9 +12,6 @@ import (
 	"yg-gateway/internal/auth"
 )
 
-// schoolBase 学院活动端点前缀（school 域挂 billingBase 下）。
-const schoolBase = "/portal/activity/school"
-
 // mpReportPath 小程序埋点上报端点（BillingBaseCN 固定）。
 const mpReportPath = "/v2/report"
 

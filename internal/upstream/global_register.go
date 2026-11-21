@@ -220,8 +220,9 @@ func (c *Client) GlobalCompleteRegistration(a *auth.Auth) (activated bool, err e
 	if err := c.GlobalSubmitRegion(a, countries[0]); err != nil {
 		return false, fmt.Errorf("submit region: %w", err)
 	}
-	// 重新激活验证。
-	activated, needsRegion, msg, err = c.GlobalRegisterStatus(a)
+	// 重新激活验证。needsRegion 为二次状态查询的「仍可补地区」标志；此处只要
+	// activated，未激活一律按错误返回，因此显式丢弃以免制造无用赋值。
+	activated, _, msg, err = c.GlobalRegisterStatus(a)
 	if err != nil {
 		return false, err
 	}

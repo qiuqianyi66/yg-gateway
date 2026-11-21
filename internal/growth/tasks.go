@@ -29,10 +29,6 @@ const (
 	tasksAcceptPath = "/v2/activity/growth/tasks/accept"
 )
 
-// mpPlatform 小程序口径头值：小程序限定任务（Sequential_Tasks_1 / school_season）
-// 的列表下发、accept、claim 全链路要求 X-Client-Platform: miniprogram。
-const mpPlatform = "miniprogram"
-
 // Task 单个任务的对外视图（字段名与上游 JSON 对齐，多余字段不透出）。
 type Task struct {
 	TaskCode     string `json:"task_code"`
