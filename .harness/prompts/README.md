@@ -1,6 +1,6 @@
 # .harness/prompts/ — 提示词模板库
 
-> 四个高频场景的**可直接粘贴**的提示词模板。设计口径：模板里的每一条约束都能在本仓
+> 五个高频场景的**可直接粘贴**的提示词模板。设计口径：模板里的每一条约束都能在本仓
 > 找到对应规则或机器检查（`AGENTS.md` / `.harness/rules/` / `scripts/`），
 > 不写"放之四海皆准"的套话——套话对 agent 没有约束力。
 
@@ -12,6 +12,7 @@
 | [code-review.md](code-review.md) | 改完了要评审、要独立复审 | 阶段 6 |
 | [debug-triage.md](debug-triage.md) | 有 bug / 报错 / 行为不对但不知在哪 | 阶段 5 之后的返工环 |
 | [perf-optimize.md](perf-optimize.md) | 慢、内存涨、覆盖率或体量棘轮报警 | 阶段 5 / 10 |
+| [harness-edit.md](harness-edit.md) | 改规则 / 技能 / 门禁 / 检查项（治理面自身） | 阶段 10 / 收尾 |
 
 ## 使用方式
 

@@ -603,6 +603,37 @@ if (-not (Test-Path -LiteralPath $changesRoot)) {
 }
 
 # ---------------------------------------------------------------------------
+# 检项 [11]：prompts/README 路由表 vs prompts/*.md
+# 判据：README 里 [name.md](name.md) 链接集合 = 目录实际 *.md（排除 README.md）
+# 双向：登记了不存在 / 存在了未登记，都算 error。
+# ---------------------------------------------------------------------------
+$promptsDir = Join-Path $harnessDir 'prompts'
+$promptsReadme = Join-Path $promptsDir 'README.md'
+if (Test-Path -LiteralPath $promptsDir) {
+    if (Test-Path -LiteralPath $promptsReadme) {
+        $disk = @(Get-ChildItem -LiteralPath $promptsDir -Filter '*.md' -File |
+            Where-Object { $_.Name -ne 'README.md' } | ForEach-Object { $_.Name } | Sort-Object)
+        $rt = Read-TextFile $promptsReadme
+        $listed = @([regex]::Matches($rt, '\]\(([A-Za-z0-9_.\-]+\.md)\)') |
+            ForEach-Object { $_.Groups[1].Value } | Where-Object { $_ -ne 'README.md' } | Sort-Object -Unique)
+        $onlyListed = @($listed | Where-Object { $disk -notcontains $_ })
+        $onlyDisk = @($disk | Where-Object { $listed -notcontains $_ })
+        if ($onlyListed.Count -eq 0 -and $onlyDisk.Count -eq 0) {
+            Write-Check 11 'prompts 索引一致性' 'OK' ("{0} 个模板与路由表一致" -f $disk.Count)
+        } else {
+            foreach ($m in $onlyListed) { Write-Host ('       登记但不存在: prompts/' + $m) -ForegroundColor Red }
+            foreach ($m in $onlyDisk) { Write-Host ('       存在但未登记: prompts/' + $m) -ForegroundColor Red }
+            Write-Check 11 'prompts 索引一致性' 'FAIL' ("登记 {0} / 磁盘 {1}" -f $listed.Count, $disk.Count)
+            Add-Error ("prompts/README 与磁盘不一致：{0} 条登记无文件，{1} 个文件未登记" -f $onlyListed.Count, $onlyDisk.Count)
+        }
+    } else {
+        Add-Untested '[11] prompts 索引一致性' 'prompts/README.md 不存在'
+    }
+} else {
+    Add-Untested '[11] prompts 索引一致性' 'prompts/ 目录不存在'
+}
+
+# ---------------------------------------------------------------------------
 # 结论
 # ---------------------------------------------------------------------------
 Write-Host ''
