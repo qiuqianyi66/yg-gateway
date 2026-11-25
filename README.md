@@ -219,6 +219,12 @@ curl -s http://localhost:7863/healthz
 - **延迟观测**：全局 + 按模型的 P50/P90/P95/P99（自实现固定分桶，零新依赖）。
 - **用量归因**：按域 / 账号 / 模型 / **下游 Key** 四维聚合，CSV 一键导出（带 BOM，Excel 直接打开）。
 
+### 模型/provider 声明口径
+
+- 凡写成「已验证 / 支持」的模型、provider 或协议，必须带**实测日期 + 实测值**（模型全名、端点、状态码）；没实测过的只能写成配置示例（illustrative），不得当成可用性承诺。
+- 当前唯一逐项实测项是 `json_object`（2026-10-28，deepseek-v4-flash）。示例配置里的 `glm-*` / `deepseek-*` / `doubao-*` 模型名与 Ark provider 均为 illustrative；模型可用性以运行时 `GET /v1/models` 返回为准。
+- 上游协议（CodeBuddy）的持续验证由日常运行与日志承担，本 README 不另行声明具体版本号。
+
 ### 多 API Key 派发（面板可视化，热生效）
 
 | 字段 | 作用 |
