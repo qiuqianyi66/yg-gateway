@@ -7,7 +7,7 @@
 > **状态权威**：[`roadmap/ROADMAP-prd-v3-2026-10-25.md`](roadmap/ROADMAP-prd-v3-2026-10-25.md)
 > ＋ [`归档精化-2026-11-13.md`](归档精化-2026-11-13.md)（v2 路线图已归档清理，结论见该文 §一）；
 > 事实以代码 + `git log` 为准；本表「状态/落点」均有 commit 或在仓产物实证，未核实不写「已完成」。
-> 最近核对：2026-11-16（main `472fef4`）。
+> 最近核对：2026-11-25（本地 main；本轮补登 9 份，落点见各行）。
 
 图例：✅ 已落地（合入 main 且在仓可验） · 🟡 主体落地/frontmatter 仍标待终审 · ⛔ 明确不做或阻塞
 
@@ -80,6 +80,25 @@
 
 ---
 
+## F. 2026-11-25 补登（此前索引缺 9 份）
+
+> 2026-11-25 按 `docs/prd/REQ-*.md` 全量对账后补登。状态以代码 + `git log` 实证，
+> 不照抄 REQ frontmatter 里可能过期的自述；不可解析的 summary sha 按实际提交记。
+
+| REQ | 主题 | 状态 / 落点 |
+|---|---|---|
+| [agent-profile-ui-2026-10-29](prd/REQ-agent-profile-ui-2026-10-29.md) | 面板 agent 流量画像 UI（V3-10/R5） | ✅ `e330cb6` + `internal/panel/agent_profile.go` 在仓（summary 的 5802b8b/4f4d2d3 不可解析，按实际提交记） |
+| [cache-key-session-fallback-2026-10-29](prd/REQ-cache-key-session-fallback-2026-10-29.md) | 无会话标识时缓存键回退内容派生 | ✅ `ad06712`；随 v2.3.0 上生产（change summary 仍写“待部署”，以 tag `v2.3.0` 为准） |
+| [cost-tier-confidence-2026-11-21](prd/REQ-cost-tier-confidence-2026-11-21.md) | 成本 tier 置信度（单条 credit=0 不判免费） | ✅ `daeb559`（2026-11-21 生产换版；见 `2026-11-21-final-batch-staticcheck-cost-layout`） |
+| [entry-body-shape-2026-11-19](prd/REQ-entry-body-shape-2026-11-19.md) | 入口 body 形状守卫（null/[]/标量 → 400） | ✅ `c6b6eb7`；随 `daeb559` 上生产 |
+| [pick-provenance-2026-10-25](prd/REQ-pick-provenance-2026-10-25.md) | 选号决策溯源（Status.PickReason） | 🟡 主体落地 `d3fbef7`；请求级归档/面板展示待 app.js 解锁 |
+| [pool-failure-window-2026-10-30](prd/REQ-pool-failure-window-2026-10-30.md) | 账号级故障窗（P0-2） | ✅ `dc196ab`；随 v2.3.0 上生产（change summary 仍写“待部署”，同上） |
+| [prompt-null-panic-2026-11-19](prd/REQ-prompt-null-panic-2026-11-19.md) | `null` 请求体不得打死连接 | ✅ `b4f3823`；随 `daeb559` 上生产 |
+| [upstream-nilmap-panic-2026-11-19](prd/REQ-upstream-nilmap-panic-2026-11-19.md) | 上游 nil map 根因修复 | ✅ `3b72ddc`；随 `daeb559` 上生产 |
+| [fallback-degrade-visibility-2026-11-25](prd/REQ-fallback-degrade-visibility-2026-11-25.md) | 备用源降级对客户端可见（X-YG-* 头） | 🟡 本地 `0f99c0a`；未推送、未部署（独立复审待另一只读会话） |
+
+---
+
 ## 待办 / 不做（不在本索引「已落地」内）
 
 - [reqlog-kind-2026-10-26](prd/REQ-reqlog-kind-2026-10-26.md)：reqlog 加 kind 维度
@@ -90,7 +109,8 @@
 - **V3-10 agent 流量画像**（[REQ-agent-traffic-profile-2026-10-26](prd/REQ-agent-traffic-profile-2026-10-26.md)
   在仓）——**已落地（2026-10-26，`f3385f4`）**：reqlog.Event 加 `session_fp`（会话键盐哈希）+
   `agent_kind`（UA 闭词表），`/status` 出 `agent_profile` 聚合块（by_agent/top_sessions，
-  键缺失=未观测）；面板 UI 待 V3-6 解锁，未做（可选增强，见 PLAN-v3-remaining R5）。
+  键缺失=未观测）；面板 UI 已落地（`e330cb6` + `internal/panel/agent_profile.go`，
+  REQ-agent-profile-ui-2026-10-29），原「面板 UI 待 V3-6 解锁，未做」表述已过期。
 - **V3-13 README 三护城河**（[REQ-readme-three-moats-2026-10-26](prd/REQ-readme-three-moats-2026-10-26.md)
   在仓）——**已落地（2026-10-26，`cbf1399` + `bde24a4`）**：三护城河小节 + Magpie/CC
   Switch 配合章节；同类现状措辞按 magpie 八维对比实证，禁「唯一/首家」类词。
