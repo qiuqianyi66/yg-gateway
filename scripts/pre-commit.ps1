@@ -11,7 +11,8 @@
 #   5. PS 地形      引号陷阱（L-1）+ 字面名垃圾文件（L-3）
 #   6. 阶段 0       新增的 docs/prd/REQ-*.md 必须含「必要性」段（check-req-necessity.ps1，见
 #                    .harness/rules/开发流程规范.md「零、阶段 0」）
-#   7. 治理自洽     check-harness.ps1（AGENTS.md 路径断链 / SKILL frontmatter / 路由表；
+#   7. 治理自洽     check-harness.ps1（AGENTS.md 路径断链 / SKILL frontmatter / 路由表 /
+#                    提示词索引；
 #                    「未测」项不影响退出码，REQ-harness-engineering-2026-10-19 F1）
 #   8. 上下文预算   check-context-budget.ps1（常驻层 token 估算棘轮，只许下调；同上 F2）
 #   9. R6 出站隔离  check-upstream-isolation.ps1（出站请求集中 internal/upstream，
@@ -479,7 +480,7 @@ switch ($LASTEXITCODE) {
 # 另：脚本里**故意未实现**的检项会输出「未测」且**不影响退出码**——未测 ≠ 通过，
 # 但不能让「还没做的检查」把门禁堵死（PRD §六 Q4：先跑两周统计真问题再决定是否补齐）。
 # ---------------------------------------------------------------------------
-Write-Section '检查 9/11：治理一致性体检（10 检项：路径 / 技能 / 编号 / 追踪 / 经验 / 分母 / 索引 / 引用断链）'
+Write-Section '检查 9/11：治理一致性体检（11 检项：路径 / 技能 / 编号 / 追踪 / 经验 / 分母 / 索引 / 引用断链 / 提示词索引）'
 $hout = @(& $hostExe -NoProfile -File scripts/check-harness.ps1 2>&1)
 switch ($LASTEXITCODE) {
     0 {
