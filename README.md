@@ -215,7 +215,7 @@ curl -s http://localhost:7863/healthz
 - **提示词体系**：网关层替换客户端 system prompt，从源头减少内容审核误报；`passthrough` 遇拦截自动降级重试。
 - **原生工具调用还原**：DeepSeek 系标记文本还原为结构化 `tool_calls`。
 - **结构化输出**：`response_format` 原样透传；`json_object` 已真机验证（2026-10-28，deepseek-v4-flash）；`json_schema` 形态未逐一实测（unknown）。
-- **备用上游级联**：CodeBuddy 全挂时自动转发到独立 OpenAI 兼容端点，SSE 透传，用量归因到 `realm=fallback`。
+- **备用上游级联**：CodeBuddy 全挂时自动转发到独立 OpenAI 兼容端点，SSE 透传，用量归因到 `realm=fallback`。**降级对客户端可见**：只有备用源真正写出响应时才带 `X-YG-Route: fallback`、`X-YG-Degraded: 1`、`X-YG-Served-By: <备用源 host>`（只含 host，不含路径/凭证）；非流式另带 `X-YG-Upstream-Model: <响应体里的实际 model>`。**带这些头 = 备用源服务；没有 = 未被标记**（可能是主池成功，也可能是中间代理剥掉了自定义头，不能反推成主池）。
 - **延迟观测**：全局 + 按模型的 P50/P90/P95/P99（自实现固定分桶，零新依赖）。
 - **用量归因**：按域 / 账号 / 模型 / **下游 Key** 四维聚合，CSV 一键导出（带 BOM，Excel 直接打开）。
 

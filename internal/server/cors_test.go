@@ -73,6 +73,12 @@ func TestCORSPreflightHTTPSOriginReflected(t *testing.T) {
 	if got := rec.Header().Get("Access-Control-Allow-Headers"); got == "" {
 		t.Error("Allow-Headers 不应为空（Authorization 必须放行）")
 	}
+	// 浏览器跨域只能读「安全响应头」；降级四件必须显式暴露，否则网页客户端
+	// 仍然只看到成功，降级可见等于没做。
+	const wantExpose = "X-YG-Route, X-YG-Degraded, X-YG-Served-By, X-YG-Upstream-Model"
+	if got := rec.Header().Get("Access-Control-Expose-Headers"); got != wantExpose {
+		t.Errorf("Expose-Headers=%q want %q", got, wantExpose)
+	}
 }
 
 // TestCORSPreflightHTTPOriginNotReflected：http 源预检不得回显 ACAO——

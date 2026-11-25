@@ -341,6 +341,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
 	w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Request-Id")
+	// 浏览器跨域读不到非安全响应头，必须显式暴露降级标记；否则网页客户端
+	// 仍然只能看到「成功」，降级可见等于没做（与 handler_fallback.go 的头成对）。
+	w.Header().Set("Access-Control-Expose-Headers",
+		"X-YG-Route, X-YG-Degraded, X-YG-Served-By, X-YG-Upstream-Model")
 	w.Header().Set("Access-Control-Allow-Private-Network", "true")
 	if r.Method == http.MethodOptions {
 		w.WriteHeader(http.StatusNoContent)

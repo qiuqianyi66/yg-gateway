@@ -12,6 +12,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"time"
@@ -19,6 +20,25 @@ import (
 	"yg-gateway/internal/upstream"
 	"yg-gateway/internal/usage"
 )
+
+// endpointHost 把备用源 BaseURL 收成只含 host 的展示名：响应头要对客户端
+// 说明「实际是谁服务的」，但不外泄路径、查询串与凭证。
+func endpointHost(raw string) string {
+	if u, err := url.Parse(raw); err == nil && u.Host != "" {
+		return u.Host
+	}
+	return "fallback-endpoint"
+}
+
+// setFallbackHeaders 标记「本次响应由备用源服务」。必须在真正写响应头之前调用：
+// 若在拿到上游响应后就设置，非流式读体失败会返回 false，级联转下一端点或最终
+// 走网关错误，但 w.Header 里残留的 Served-By 会把「网关报错」伪装成
+// 「备用源已服务」——客户端据此排障会走错方向（2026-11-25 复审发现）。
+func setFallbackHeaders(w http.ResponseWriter, baseURL string) {
+	w.Header().Set("X-YG-Route", "fallback")
+	w.Header().Set("X-YG-Degraded", "1")
+	w.Header().Set("X-YG-Served-By", endpointHost(baseURL))
+}
 
 // fallbackForward 把请求体原样转发到备用 OpenAI 兼容端点（P2）。
 // 返回 true = 转发成功（已写响应）；false = 转发失败（调用方继续走错误路径）。
@@ -77,19 +97,23 @@ func (h *Handler) forwardToOne(w http.ResponseWriter, r *http.Request, body []by
 	}
 	defer resp.Body.Close()
 
-	// 透传状态码 + Content-Type。
-	w.Header().Set("Content-Type", resp.Header.Get("Content-Type"))
-	w.WriteHeader(resp.StatusCode)
-	if committed != nil {
-		*committed = true
-	}
-
+	// 降级必须让客户端看得见（2026-11-21 蒸馏 K-Dense「声明+验证」后补）：
+	// 此前客户端只拿到备用源的 200，与主池成功无法区分。三个头在写状态码前
+	// 落定，流式/非流式都带；实际模型名只有非流式能解析响应体拿到。
+	// 但**必须延后到真正写响应头的那一刻**：拿到 resp 就设置的话，读体失败返回
+	// false 会把 Served-By 留给末端错误响应（见 setFallbackHeaders 注释）。
+	ct := resp.Header.Get("Content-Type")
 	// SSE stream 逐块 flush 透传（缓冲会破坏流式体验）；**不再静默吞掉 io.Copy
 	// 的错误**——R10 红线。此前 `_, _ = io.Copy(...)` 把「客户端断连 / 备用源半截流」
 	// 一律记成成功：调用方据此 return true，于是把一次实际上没走完的转发当成
 	// 已完成的成功响应（观测里看不到备用源的传输故障）。
-	ct := resp.Header.Get("Content-Type")
 	if strings.Contains(ct, "text/event-stream") {
+		w.Header().Set("Content-Type", ct)
+		setFallbackHeaders(w, ep.BaseURL)
+		w.WriteHeader(resp.StatusCode)
+		if committed != nil {
+			*committed = true
+		}
 		fw := newFlushWriter(w)
 		n, cerr := io.Copy(fw, resp.Body)
 		if cerr != nil {
@@ -101,7 +125,8 @@ func (h *Handler) forwardToOne(w http.ResponseWriter, r *http.Request, body []by
 		log.Printf("[fallback] 已转发(stream) endpoint=%s model=%s status=%d bytes=%d", compat.BaseURL, model, resp.StatusCode, n)
 		return true
 	}
-	// 非 stream：读全部 body → 解析 usage → 写回。
+	// 非 stream：先读全部 body → 解析 usage / 实际模型名 → 再写头。
+	// 读失败时尚未提交响应头，级联语义保留（可继续试下一端点），不会拼出半截响应。
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
 		// 同上：读不全不是成功。返回 false 让调用方走既有错误路径
@@ -129,6 +154,20 @@ func (h *Handler) forwardToOne(w http.ResponseWriter, r *http.Request, body []by
 				KeyID:            "fallback",
 			}, true)
 		}
+	}
+	// 响应体的 model 才是备用源实际服务的模型：与请求 model 不一致时客户端
+	// 必须能看到差异（别名/降档都在这一层暴露），不许把「请求的主模型」当结果。
+	var meta struct {
+		Model string `json:"model"`
+	}
+	if json.Unmarshal(respBody, &meta) == nil && meta.Model != "" {
+		w.Header().Set("X-YG-Upstream-Model", meta.Model)
+	}
+	w.Header().Set("Content-Type", ct)
+	setFallbackHeaders(w, ep.BaseURL)
+	w.WriteHeader(resp.StatusCode)
+	if committed != nil {
+		*committed = true
 	}
 	// 忽略：响应可能已部分写出，客户端断连后写失败无法补救或重试，不影响已提交状态（判据①）。
 	_, _ = w.Write(respBody)

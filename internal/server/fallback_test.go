@@ -46,7 +46,7 @@ func TestFallbackForwardJSON(t *testing.T) {
 			t.Errorf("Authorization=%q, want Bearer sk-test", auth)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"choices":[],"usage":{"prompt_tokens":100,"completion_tokens":50,"total_tokens":150}}`))
+		_, _ = w.Write([]byte(`{"model":"glm-5.3-fallback","choices":[],"usage":{"prompt_tokens":100,"completion_tokens":50,"total_tokens":150}}`))
 	}))
 	defer srv.Close()
 
@@ -71,6 +71,19 @@ func TestFallbackForwardJSON(t *testing.T) {
 	if got := rec.MonthlyUsed("fallback"); got != 150 {
 		t.Fatalf("fallback 月累计 = %d, want 150", got)
 	}
+	// 降级必须可见：路由、降级标记、实际服务方、上游实际模型四件。
+	if got := w.Header().Get("X-YG-Route"); got != "fallback" {
+		t.Fatalf("X-YG-Route=%q, want fallback", got)
+	}
+	if got := w.Header().Get("X-YG-Degraded"); got != "1" {
+		t.Fatalf("X-YG-Degraded=%q, want 1", got)
+	}
+	if got := w.Header().Get("X-YG-Served-By"); !strings.Contains(got, "127.0.0.1") {
+		t.Fatalf("X-YG-Served-By=%q, 应含备用源 host", got)
+	}
+	if got := w.Header().Get("X-YG-Upstream-Model"); got != "glm-5.3-fallback" {
+		t.Fatalf("X-YG-Upstream-Model=%q, want glm-5.3-fallback", got)
+	}
 }
 
 func TestFallbackForwardStream(t *testing.T) {
@@ -92,6 +105,70 @@ func TestFallbackForwardStream(t *testing.T) {
 	body, _ := io.ReadAll(w.Result().Body)
 	if !strings.Contains(string(body), "chunk1") {
 		t.Fatalf("stream body 未透传: %s", body)
+	}
+	// 流式拿不到响应体 model，但路由与服务方必须在写流前就可见。
+	if got := w.Header().Get("X-YG-Route"); got != "fallback" {
+		t.Fatalf("stream X-YG-Route=%q, want fallback", got)
+	}
+	if got := w.Header().Get("X-YG-Degraded"); got != "1" {
+		t.Fatalf("stream X-YG-Degraded=%q, want 1", got)
+	}
+	if got := w.Header().Get("X-YG-Served-By"); !strings.Contains(got, "127.0.0.1") {
+		t.Fatalf("stream X-YG-Served-By=%q, 应含备用源 host", got)
+	}
+	// 流式没有解析响应体，实际模型名是 unknown；缺该头就是「未知」，不许猜。
+	if got := w.Header().Get("X-YG-Upstream-Model"); got != "" {
+		t.Fatalf("stream X-YG-Upstream-Model=%q, want 空（未解析响应体=unknown）", got)
+	}
+}
+
+// TestFallbackFailureDoesNotLeakHeaders 所有备用源都失败时，网关错误响应不得
+// 带任何 X-YG-* 降级头：否则客户端会把「网关报错」读成「备用源已服务」。
+//
+// 牙齿：把三个 Set 移回「拿到 resp 后、读体前」→ 本测试 FAIL（Served-By 残留）。
+func TestFallbackFailureDoesNotLeakHeaders(t *testing.T) {
+	// 端点 1：声明 Content-Length 大于实际写出字节 → 客户端 ReadAll 必报错。
+	broken := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Content-Length", "64")
+		_, _ = w.Write([]byte(`{"choices":`))
+		// 不补足 64 字节，处理器返回后连接关闭 → unexpected EOF。
+	}))
+	defer broken.Close()
+
+	// 端点 2：连不上（已关闭）→ 不写任何头就失败。
+	dead := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	dead.Close()
+
+	h := &Handler{cfg: Config{Fallback: &FallbackConfig{Endpoints: []FallbackEndpoint{
+		{BaseURL: broken.URL, APIKey: "k1", Models: map[string]bool{"glm-5.3": true}},
+		{BaseURL: dead.URL, APIKey: "k2", Models: map[string]bool{"glm-5.3": true}},
+	}}}}
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{}`))
+	w := httptest.NewRecorder()
+	if h.fallbackForward(w, req, []byte(`{}`), "glm-5.3") {
+		t.Fatal("两个端点都失败时应返回 false")
+	}
+	for _, name := range []string{"X-YG-Route", "X-YG-Degraded", "X-YG-Served-By", "X-YG-Upstream-Model"} {
+		if got := w.Header().Get(name); got != "" {
+			t.Fatalf("失败响应不应带 %s=%q（会把网关错误伪装成备用源已服务）", name, got)
+		}
+	}
+}
+
+// TestEndpointHostOnlyHost X-YG-Served-By 只允许暴露 host:port，
+// 不得带 userinfo / path / query / fragment（凭证与内部路径不出网关）。
+func TestEndpointHostOnlyHost(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"https://user:secret@fallback.example.com:8443/v1/chat?key=abc#frag", "fallback.example.com:8443"},
+		{"https://fallback.example.com", "fallback.example.com"},
+		{"", "fallback-endpoint"},
+		{"://bad", "fallback-endpoint"},
+	}
+	for _, tc := range cases {
+		if got := endpointHost(tc.in); got != tc.want {
+			t.Errorf("endpointHost(%q)=%q want %q", tc.in, got, tc.want)
+		}
 	}
 }
 
