@@ -95,7 +95,7 @@
 | [pool-failure-window-2026-10-30](prd/REQ-pool-failure-window-2026-10-30.md) | 账号级故障窗（P0-2） | ✅ `dc196ab`；随 v2.3.0 上生产（change summary 仍写“待部署”，同上） |
 | [prompt-null-panic-2026-11-19](prd/REQ-prompt-null-panic-2026-11-19.md) | `null` 请求体不得打死连接 | ✅ `b4f3823`；随 `daeb559` 上生产 |
 | [upstream-nilmap-panic-2026-11-19](prd/REQ-upstream-nilmap-panic-2026-11-19.md) | 上游 nil map 根因修复 | ✅ `3b72ddc`；随 `daeb559` 上生产 |
-| [fallback-degrade-visibility-2026-11-25](prd/REQ-fallback-degrade-visibility-2026-11-25.md) | 备用源降级对客户端可见（X-YG-* 头） | 🟡 `0f99c0a` 已推送 main（2026-11-25）；生产未部署；独立复审待另一只读会话 |
+| [fallback-degrade-visibility-2026-11-25](prd/REQ-fallback-degrade-visibility-2026-11-25.md) | 备用源降级对客户端可见（X-YG-* 头） | ✅ `0f99c0a` 已推送 main；2026-11-25 生产换版（exe `5CFBE172`、回归 14/0）；独立复审待另一只读会话 |
 
 ---
 
@@ -171,4 +171,4 @@
 - **F-102** 新一轮安全审计结论：阻塞在外部输入。
 - **ROADMAP §9 记录在案（本期不做）**：面板多语言/主题、重置密钥自定义、redisstore 消费风格、
   全局开关隔离、其余 oversize 文件（sse/panel/config.go）拆分、Key-IP 白名单面板 UI。
-- **生产版本**：仓库 main 已含上述功能；`D:\yg-gateway` 在跑版本以现场为准，换版走 deploy-prod。
+- **生产版本**：仓库 main 已含上述功能；2026-11-25 已换版 `fallback-degrade-visibility`（exe `5CFBE172`，备份 `293CCF31`，health 2/4，回归 14 PASS / 0 FAIL）。换版一律走 deploy-prod，现场以报告 JSON 为准。

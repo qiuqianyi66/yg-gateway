@@ -47,6 +47,8 @@
 | 提交总闸 | `powershell -NoProfile -File scripts/pre-commit.ps1` | **通过（exit 0，90.5s）**：8 个改动文件；gofmt/R10/PS 地形/垃圾文件/build+vet/test/边界+深度/必要性/治理/预算/R6 共 11 项检查全绿；`go test ./...` 28 包 ok。 |
 | 治理一致性 | `powershell -NoProfile -File scripts/check-harness.ps1` | 11 检项全 OK；`[5]` 未测由 pre-commit 检查 8 承担；`changes/*/summary.md` 208/208，REQ 58 篇命名合规。 |
 | 推送后 CI | push `ecb23ce` → release `45624746884` / e2e `45624747148` | `test` / `gate` / `race` 与 `e2e` 全绿；`build-image` 红在已知 GHCR `write_package` 权限（`continue-on-error`，非本变更面）；`publish` 非 tag 跳过 |
+| 生产换版 | `deploy-prod.ps1 -Build -Feature fallback-degrade-visibility` | **exit 0（14.7s）**；报告 `D:\yg-gateway\data\logs\deploy-prod-20261125-214655.json`：`stage=done`、`git_head=82daaf3`、`dirty=false`、before `293CCF31` → after `5CFBE172`、health `2/4`、冒烟 3/3 |
+| 生产回归 | `python scripts/yg-regression-test.py --base http://127.0.0.1:7863 --skip S4,S8` | **PASS 14 / FAIL 0**（572.3s；S2 20/20 200、S7 5/5 SSE；S4/S8 按设计跳过） |
 
 **负向探针**：`TestFallbackFailureDoesNotLeakHeaders` 在修复前实测红（见上），修复后绿；探针即该常驻测试，未删除。CORS 暴露的牙齿由 `TestCORSPreflightHTTPSOriginReflected` 的精确断言承担。
 
@@ -54,7 +56,7 @@
 
 - [ ] **真机 fallback 端到端未验**。本轮只有 `httptest` 边界（成功/失败/级联/半截流）。`requires`：一个真实可用的备用端点 + 主池全部不可用的一次窗口；不能为验证随意打生产账号。
 - [ ] **浏览器跨域实际读取未验**。已钉响应头存在与 `Expose-Headers` 名单，但「浏览器在 https 源下确实能读到 X-YG-*」需要真实浏览器 + 跨域页面。`requires`：一个 https 源页 + 本机网关。
-- [ ] **生产未部署**。当前生产仍是 2026-11-21 的二进制；本提交已推送 `origin/main`（2026-11-25），但未换版。`requires`：换版窗口（`deploy-prod.ps1 -Build`）。
+- [x] **生产已换版（2026-11-25）**。当前生产 exe `5CFBE172`（备份 `293CCF31` 保留），health 2/4，回归 14/0；真机 fallback 端到端仍未验（未真实触发主池全挂，见上一条）。
 - [ ] **独立复审未执行**。L2 要求另一只读会话/子代理复审；本轮只有自评审 + 机械门禁，结论强度按仓库惯例降级。`requires`：另一只读会话按 `doubao-coding-review-code` 复跑。
 
 ## 四、怎么回滚
