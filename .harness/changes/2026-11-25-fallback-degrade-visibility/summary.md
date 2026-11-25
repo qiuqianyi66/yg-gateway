@@ -46,6 +46,7 @@
 | 格式 | `gofmt -l ./cmd ./internal` | 无输出（clean） |
 | 提交总闸 | `powershell -NoProfile -File scripts/pre-commit.ps1` | **通过（exit 0，90.5s）**：8 个改动文件；gofmt/R10/PS 地形/垃圾文件/build+vet/test/边界+深度/必要性/治理/预算/R6 共 11 项检查全绿；`go test ./...` 28 包 ok。 |
 | 治理一致性 | `powershell -NoProfile -File scripts/check-harness.ps1` | 11 检项全 OK；`[5]` 未测由 pre-commit 检查 8 承担；`changes/*/summary.md` 208/208，REQ 58 篇命名合规。 |
+| 推送后 CI | push `ecb23ce` → release `45624746884` / e2e `45624747148` | `test` / `gate` / `race` 与 `e2e` 全绿；`build-image` 红在已知 GHCR `write_package` 权限（`continue-on-error`，非本变更面）；`publish` 非 tag 跳过 |
 
 **负向探针**：`TestFallbackFailureDoesNotLeakHeaders` 在修复前实测红（见上），修复后绿；探针即该常驻测试，未删除。CORS 暴露的牙齿由 `TestCORSPreflightHTTPSOriginReflected` 的精确断言承担。
 
@@ -53,7 +54,7 @@
 
 - [ ] **真机 fallback 端到端未验**。本轮只有 `httptest` 边界（成功/失败/级联/半截流）。`requires`：一个真实可用的备用端点 + 主池全部不可用的一次窗口；不能为验证随意打生产账号。
 - [ ] **浏览器跨域实际读取未验**。已钉响应头存在与 `Expose-Headers` 名单，但「浏览器在 https 源下确实能读到 X-YG-*」需要真实浏览器 + 跨域页面。`requires`：一个 https 源页 + 本机网关。
-- [ ] **生产未部署**。当前生产仍是 2026-11-21 的二进制；本提交只在本地。`requires`：换版窗口（`deploy-prod.ps1 -Build`）。
+- [ ] **生产未部署**。当前生产仍是 2026-11-21 的二进制；本提交已推送 `origin/main`（2026-11-25），但未换版。`requires`：换版窗口（`deploy-prod.ps1 -Build`）。
 - [ ] **独立复审未执行**。L2 要求另一只读会话/子代理复审；本轮只有自评审 + 机械门禁，结论强度按仓库惯例降级。`requires`：另一只读会话按 `doubao-coding-review-code` 复跑。
 
 ## 四、怎么回滚
