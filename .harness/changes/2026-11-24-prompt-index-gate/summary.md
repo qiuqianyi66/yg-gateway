@@ -25,10 +25,11 @@
 | 正向 | `powershell -NoProfile -File scripts/check-harness.ps1` | `[11] OK 5 个模板与路由表一致`；`ERRORS: []` |
 | 负向探针 | 新建未登记的 `prompts/zz-probe.md` 后复跑 | `[11] FAIL 登记 5 / 磁盘 6`；`ERRORS: [prompts/README 与磁盘不一致…]` |
 | 探针清理 | 删除 `zz-probe.md` 后复跑 | `[11] OK`；`ERRORS: []` |
+| Linux runner 兼容 | 2026-11-25 在 Linux（Debian 6.6，pwsh 7.4.6）对 HEAD `7d9a958` 快照实跑 `check-harness.ps1` | 11/11 OK（[11] 5 模板一致）；路径分隔与 UTF-8 均正常，与 Windows 输出一致 |
 
 ## 三、未完成 / 待补（诚实清单）
 
-- [ ] `requires: 实测` —— 检项只在本地 PowerShell 跑过，未验证 CI runner（pwsh / Windows）行为；若 CI 用 Linux 需确认路径分隔与编码。
+- [x] `requires: 实测` —— **已消解（2026-11-25）**：Linux Debian 6.6 + pwsh 7.4.6 对 HEAD `7d9a958` 快照实跑 11/11 OK；CI runner 为 `ubuntu-latest` + `pwsh`（`gate.yml:110`），路径分隔（脚本按 L-7 分段 `Join-Path`）与 UTF-8 均正常。真实 GitHub Actions 仍待本地 5 个提交推送后触发（未推送 ≠ 兼容性未验证）。
 - [x] `requires: 用户拍板` —— 已核实 `pre-commit.ps1` 检查 9 调用 `check-harness.ps1`，[11] 随该门禁执行，无需另接入；旧标签「10 检项」已改「11 检项」。
 
 ## 四、怎么回滚
