@@ -59,6 +59,7 @@ func TestGuardrailCalibrationEndToEnd(t *testing.T) {
 	var ev struct {
 		PromptTokens     int64 `json:"prompt_tokens"`
 		EstPromptTokens  int64 `json:"est_prompt_tokens"`
+		EstShadowTokens  int64 `json:"est_shadow_tokens"`
 		CompletionTokens int64 `json:"completion_tokens"`
 	}
 	if err := json.Unmarshal([]byte(line), &ev); err != nil {
@@ -69,6 +70,11 @@ func TestGuardrailCalibrationEndToEnd(t *testing.T) {
 	}
 	if ev.PromptTokens != 1000 {
 		t.Fatalf("prompt_tokens = %d，want 1000（上游 usage 未入账）；行=%s", ev.PromptTokens, line)
+	}
+	// 影子口径必须同行落档（不参与护栏，但不能因为「不影响判定」就悄悄不写）：
+	// 400 个 CJK ≈ 1200 字节 → 1200/3.4 ≈ 353，与主口径 400 同量级但不等。
+	if ev.EstShadowTokens <= 0 {
+		t.Fatalf("归档行缺 est_shadow_tokens（影子口径没落档）；行=%s", line)
 	}
 
 	// ② /status：有样本、零命中，仍须透出 est_vs_upstream。
