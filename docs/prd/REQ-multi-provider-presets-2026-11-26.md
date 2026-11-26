@@ -27,7 +27,11 @@
    `NeedsRefresh`；API Key provider 直接出站。
 4. **路由不串池**：provider 模型仍按 `models[]` 白名单路由；未命中走 CodeBuddy；
    provider 失败只换该 provider 的账号，不泄漏到 credits 池。
-5. **零回归**：`providers` 为空、旧 auths provider 账号、Ark 路径行为不变。
+5. **provider 失败语义**：非 2xx 保留最后一次上游状态码/body 到 `run.lastErr`，
+   新增 `ErrProvider`：5xx 映射 503、4xx 映射 502，业务码 `upstream_error` 并透传
+   可读原文；客户端取消（`r.Context().Err()!=nil`）记 499/interrupted，不
+   `NoteError`/不罚 provider 账号、不再轮转。
+6. **零回归**：`providers` 为空、旧 auths provider 账号、Ark 路径行为不变。
 
 ## Given-When-Then
 
@@ -35,6 +39,8 @@
   请求命中后出站到 `https://api.cerebras.ai/v1/chat/completions`，Bearer 使用该 key。
 - When provider 已有 auths 账号，Then 不再创建虚拟账号，账号级 key 优先。
 - When provider 账号无 OAuth token，Then 不尝试 refresh，不产生每请求 503。
+- When provider 上游返回 5xx，Then 末端不再只有 no_healthy_account，原文/requestId
+  可读；客户端已断开时则记 499/interrupted 且不罚号。
 - When 模型未命中任何 provider 白名单，Then 仍走 CodeBuddy credits 池。
 
 ## 非目标

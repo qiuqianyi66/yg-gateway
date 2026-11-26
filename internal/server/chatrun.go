@@ -268,6 +268,18 @@ func (run *chatRun) rotateAndServe(w http.ResponseWriter, r *http.Request, chatM
 			if run.serveProviderCompat(w, r, acct, ep, attemptStarted) {
 				return true
 			}
+			// provider 出站与 codebuddy 同一条客户端取消语义：请求 ctx 已取消时
+			// 客户端已经走了，不罚 provider 账号、不写 503、不再轮转。此前漏在
+			// 这条分支，导致多厂商路径每次取消都被 NoteError 记成账号故障。
+			if r.Context().Err() != nil {
+				run.st.status = statusClientClosedRequest
+				run.st.outcome = reqlog.OutcomeInterrupted
+				run.lastErr = r.Context().Err()
+				log.Printf("INFO: [server] client canceled provider=%s acct=%s (not an upstream failure; account not penalized)",
+					acct.ProviderID(), logfmt.Label(acct.UID, acct.Nickname))
+				run.fail(acct.UID)
+				return true
+			}
 			h.cfg.Pool.NoteError(acct.UID)
 			run.fail(acct.UID)
 			if !rotateBackoff(i, r.Context()) {

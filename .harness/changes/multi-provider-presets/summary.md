@@ -12,9 +12,17 @@
   账号不覆盖。
 - `internal/server/chatrun.go`：只有 codebuddy 账号走 `NeedsRefresh`；API Key
   provider 不再误走 OAuth refresh。
+- `internal/server/handler_provider.go`：provider 出站失败时写入 `run.lastErr`，
+  末端不再退化成 `no_healthy_account`；客户端取消走 499/interrupted，不罚 provider
+  账号。
+- `internal/upstream/errors.go` + `internal/server/chatflow.go`：新增 `ErrProvider`，
+  provider 5xx 映射 503、4xx 映射 502，统一 `upstream_error` 并透传原文。
+- `internal/server/chatflow.go`：OpenAI 风格 error 内层的 requestId 也进入可读
+  message。
 - `config.example.json` / `README.md`：补 Cerebras preset 示例与免费额度限制说明。
 - 测试：preset 解析/覆盖/未知 preset、虚拟账号数量/不重复、仅配置 provider 的
-  入站→出站端到端（Bearers + model）。
+  入站→出站端到端（Bearer + model）、provider 5xx 原文透传、provider 客户端
+  取消不罚号。
 
 ## 怎么验证
 

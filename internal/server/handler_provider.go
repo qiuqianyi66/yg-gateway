@@ -59,6 +59,15 @@ func (run *chatRun) serveProviderCompat(w http.ResponseWriter, r *http.Request, 
 	if err != nil {
 		log.Printf("[provider] 出站失败 provider=%s acct=%s model=%s err=%v",
 			pid, logfmt.Label(acct.UID, acct.Nickname), bareModel, err)
+		// 客户端取消由调用方在 r.Context() 上优先判定；其余传输失败保留为末端
+		// upstream_error，不能退化成“池里没有可用号”（排障方向完全不同）。
+		if r.Context().Err() == nil {
+			run.lastErr = &upstream.Error{
+				Kind:   upstream.ErrProvider,
+				Status: http.StatusBadGateway,
+				Msg:    "provider outbound request failed",
+			}
+		}
 		return false
 	}
 	defer resp.Body.Close()
@@ -70,6 +79,13 @@ func (run *chatRun) serveProviderCompat(w http.ResponseWriter, r *http.Request, 
 		log.Printf("[provider] 上游错误 provider=%s acct=%s model=%s status=%d body=%s",
 			pid, logfmt.Label(acct.UID, acct.Nickname), bareModel, resp.StatusCode,
 			logfmt.Truncate(string(b), 200))
+		// 与 codebuddy 路径同语义：保留最后一次 provider 上游错误，末端 finalErrorOf
+		// 才能透传原文/requestId；否则多 provider 的 5xx 全部变成 no_healthy_account。
+		run.lastErr = &upstream.Error{
+			Kind:   upstream.ErrProvider,
+			Status: resp.StatusCode,
+			Msg:    string(b),
+		}
 		return false
 	}
 

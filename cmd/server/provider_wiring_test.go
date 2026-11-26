@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -78,6 +79,96 @@ func TestConfigOnlyProviderRequest(t *testing.T) {
 	}
 	if !strings.Contains(gotBody, `"model":"gpt-oss-120b"`) {
 		t.Errorf("出站 body 模型错误: %s", gotBody)
+	}
+}
+
+// provider 上游 5xx 不能被末端退化成 no_healthy_account；原文应可读。
+func TestProviderUpstreamErrorPassthrough(t *testing.T) {
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = w.Write([]byte(`{"error":{"message":"provider overloaded","requestId":"prov-503"}}`))
+	}))
+	defer up.Close()
+
+	raw := fmt.Sprintf(`{"providers":[{"preset":"cerebras","base_url":%q,"api_key":"sk-c","enabled":true}]}`, up.URL)
+	cfg, err := ParseConfig([]byte(raw))
+	if err != nil {
+		t.Fatalf("parse config: %v", err)
+	}
+	p := pool.New("")
+	h := server.NewHandler(server.Config{Pool: p, Upstream: upstream.New(), Providers: buildProviderRouting(cfg, p)})
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions",
+		strings.NewReader(`{"model":"gpt-oss-120b","messages":[{"role":"user","content":"hi"}]}`))
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("code=%d body=%s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "provider overloaded") || !strings.Contains(body, "prov-503") {
+		t.Fatalf("provider 5xx 原文丢失: %s", body)
+	}
+	if strings.Contains(body, "no_healthy_account") {
+		t.Fatalf("provider 5xx 被误报成本地无号: %s", body)
+	}
+}
+
+// provider 401 不能被伪装成“网关没号”或客户端 key 失效：502 + upstream_error。
+func TestProviderUpstream401IsBadGateway(t *testing.T) {
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"error":{"message":"invalid provider key","code":"invalid_api_key"}}`))
+	}))
+	defer up.Close()
+
+	raw := fmt.Sprintf(`{"providers":[{"preset":"cerebras","base_url":%q,"api_key":"sk-c","enabled":true}]}`, up.URL)
+	cfg, err := ParseConfig([]byte(raw))
+	if err != nil {
+		t.Fatalf("parse config: %v", err)
+	}
+	p := pool.New("")
+	h := server.NewHandler(server.Config{Pool: p, Upstream: upstream.New(), Providers: buildProviderRouting(cfg, p)})
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions",
+		strings.NewReader(`{"model":"gpt-oss-120b","messages":[{"role":"user","content":"hi"}]}`))
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("code=%d want 502, body=%s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "invalid provider key") || !strings.Contains(body, "upstream_error") {
+		t.Fatalf("provider 401 语义不完整: %s", body)
+	}
+}
+
+// provider 出站遇到客户端取消时不能罚号/写 503（与 codebuddy 路径同语义）。
+func TestProviderClientCancelNotPenalized(t *testing.T) {
+	raw := `{"providers":[{"preset":"cerebras","base_url":"http://127.0.0.1:1","api_key":"sk-c","enabled":true}]}`
+	cfg, err := ParseConfig([]byte(raw))
+	if err != nil {
+		t.Fatalf("parse config: %v", err)
+	}
+	p := pool.New("")
+	h := server.NewHandler(server.Config{Pool: p, Upstream: upstream.New(), Providers: buildProviderRouting(cfg, p)})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions",
+		strings.NewReader(`{"model":"gpt-oss-120b","messages":[{"role":"user","content":"hi"}]}`)).WithContext(ctx)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code == http.StatusServiceUnavailable || strings.Contains(rec.Body.String(), "no_healthy_account") {
+		t.Fatalf("客户端取消被写成 503: code=%d body=%s", rec.Code, rec.Body.String())
+	}
+	for _, st := range p.List() {
+		if st.Provider == "cerebras" && (st.ConsecutiveFails != 0 || st.ErrTotal != 0) {
+			t.Fatalf("provider 客户端取消被罚号: fails=%d err_total=%d", st.ConsecutiveFails, st.ErrTotal)
+		}
 	}
 }
 

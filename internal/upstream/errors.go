@@ -70,6 +70,7 @@ const (
 	ErrPromptTooLong                 // 11115「prompt is too long」→ 请求级错误（上下文超限是请求的问题非账号的问题）：不罚号、不轮转，末端透传原文
 	ErrImageInvalid                  // 图片请求格式/数据无效 → 请求级错误：不罚号、不轮转，末端透传原文
 	ErrClient                        // 其他 4xx / 业务错误
+	ErrProvider                      // 非 codebuddy provider 的显式错误（有独立端点与状态码，不代表池内账号不可用）
 )
 
 func (k ErrKind) String() string {
@@ -100,6 +101,8 @@ func (k ErrKind) String() string {
 		return "account_fault"
 	case ErrClient:
 		return "client"
+	case ErrProvider:
+		return "provider"
 	default:
 		return "none"
 	}
@@ -770,6 +773,9 @@ func inferEvidenceLevel(kind ErrKind, status int, body string) EvidenceLevel {
 	case ErrClient:
 		// 兜底 = 低证据/推断
 		return EvidenceLow
+	case ErrProvider:
+		// provider 的 HTTP 状态码本身就是权威信号（401/429/5xx）。
+		return EvidenceHigh
 	default:
 		return EvidenceNone
 	}

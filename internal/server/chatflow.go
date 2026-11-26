@@ -203,7 +203,12 @@ func upstreamMessageText(raw string) string {
 		if m, ok := e["message"].(string); ok && strings.TrimSpace(m) != "" {
 			m = strings.TrimSpace(m)
 			if c, ok := e["code"].(string); ok && strings.TrimSpace(c) != "" {
-				return strings.TrimSpace(c) + ": " + m
+				m = strings.TrimSpace(c) + ": " + m
+			}
+			// OpenAI 风格上游常把 requestId 放在 error 内层；不能丢，否则用户
+			// 拿着错误文案也找上游客服对不上账。
+			if rid, _ := e["requestId"].(string); strings.TrimSpace(rid) != "" {
+				m += " (requestId " + strings.TrimSpace(rid) + ")"
 			}
 			return m
 		}
@@ -276,6 +281,16 @@ func (h *Handler) finalErrorOf(
 	var ue *upstream.Error
 	if errors.As(lastErr, &ue) {
 		hint = h.hintOf(ue.Kind, ue.Msg, bareModel, hasImage, ue)
+		// 非 codebuddy provider 错误：状态码是端点给的，不是池内账号健康度；
+		// 5xx 保留 503 可重试，4xx 用 502（不要把 provider 的 401 伪装成
+		// “网关 key 失效”或“池里没号”）。原文仍由下方统一透传。
+		if ue.Kind == upstream.ErrProvider {
+			code = "upstream_error"
+			status = http.StatusBadGateway
+			if ue.Status >= 500 {
+				status = http.StatusServiceUnavailable
+			}
+		}
 		switch ue.Kind {
 		case upstream.ErrSoftRate:
 			status = http.StatusTooManyRequests
