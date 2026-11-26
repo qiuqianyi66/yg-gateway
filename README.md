@@ -77,11 +77,11 @@
 | 适合 | 不适合 |
 |---|---|
 | 手里有多个 CodeBuddy 账号、想统一用 OpenAI SDK 调 | 想做对外计费、多租户分发、兑换码 |
-| 想让 Codex / Cursor / Claude Code 走 CodeBuddy 池 | 想接除 CodeBuddy 外的大量第三方 provider |
+| 想让 Codex / Cursor / Claude Code 走 CodeBuddy 池 | 想接几十个 provider + 做对外计费 / 多租户分发 |
 | 想让账号自动签到、活跃、做任务保积分 | 想要 SaaS 托管（这是自跑二进制） |
 | 单机部署、不想装 Node / Python / Docker | 需要 Kubernetes 级水平伸缩 |
 
-**明确不是什么**：不是多租户计费平台，不是通用 LLM 路由（上游就是 CodeBuddy + 可选的备用源 / 少量 provider），不是一次性分析脚本。
+**明确不是什么**：不是多租户计费平台，也不是几十个 provider 的通用计费路由（上游以 CodeBuddy 池为主，支持多个 OpenAI 兼容 provider 的模型级路由），不是一次性分析脚本。
 
 ### 什么时候选 YG Gateway，而不是 one-api / new-api
 
@@ -340,7 +340,7 @@ YG Gateway 把 CodeBuddy 账号池包装成一个 OpenAI / Anthropic 兼容端�
 
 ### 多 provider 账号网关 `providers`
 
-在保留 CodeBuddy 养号池的同时，把**另一个 OpenAI 兼容上游**（示例是火山方舟 Ark）作为独立 provider 纳入同一池，按模型归属路由。CodeBuddy 的 credits 选号路径一行不变，未命中的模型仍走原池。
+在保留 CodeBuddy 养号池的同时，把**多个 OpenAI 兼容上游**作为独立 provider 纳入同一池，按模型归属路由。CodeBuddy 的 credits 选号路径一行不变，未命中的模型仍走原池。
 
 ```json
 "providers": [
@@ -352,13 +352,19 @@ YG Gateway 把 CodeBuddy 账号池包装成一个 OpenAI / Anthropic 兼容端�
     "api_key": "sk-xxx",
     "models": ["doubao-pro-32k"],
     "enabled": true
+  },
+  {
+    "preset": "cerebras",
+    "api_key": "csk-xxx",
+    "enabled": true
   }
 ]
 ```
 
 - **模型归属**：`models[]` 是显式白名单（裸模型名，匹配前剥掉 `cn:` / `global:` 前缀）。请求模型命中某 provider 名单 → 只在该 provider 账号里选号；未命中 → 照旧走 CodeBuddy credits 池。
-- **provider 账号怎么进池**：往 `auths/` 放一个账号文件，如 `auths/ark-1.json`：`{"provider":"ark","api_key":"sk-xxx","account":{"uid":"ark-1"}}`。API Key 认证，**不需要 OAuth 登录**（无 accessToken 也可解析）。
+- **provider 账号怎么进池**：两种形态。① 只配 `providers[].api_key`：启动时自动建一个内存账号（`provider:<id>`），无需 `auths/` 文件；② 多 key / 多账号：往 `auths/` 放账号文件，如 `auths/ark-1.json`：`{"provider":"ark","api_key":"sk-xxx","account":{"uid":"ark-1"}}`。API Key 认证，**不需要 OAuth 登录**（无 accessToken 也可解析）。
 - **凭证优先级**：账号文件里的 `api_key` 优先；没写才回退 `config.providers[].api_key`（一个 key 供多号共享的简化形态）。
+- **预设**：`preset: "cerebras"` 会填 `id/kind/quota/base_url/models`，显式字段仍可覆盖。Cerebras 有 Free Trial / 免费额度，但**不是无限免费**：官方 rate limits 按模型限制 RPM/TPM（如 `gpt-oss-120b` 5 RPM / 30K TPM），模型名和额度会变，启用前用 `/v1/models` 或官方文档核对。
 - **不会串池**：provider 账号不进 credits 加权；CodeBuddy 账号也不会被误派到 provider 端点。
 - **面板**：账号卡显示 provider 徽标，顶部汇总条给出每个 provider 的账号数与启用状态。
 

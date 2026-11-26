@@ -476,8 +476,12 @@ type Config struct {
 // ProviderConfig 一个多 provider 的配置（ADR-026 装配层）。
 // 与 provider.Descriptor（静态形状）对应，多出装配所需：凭证、base、静态额度、启停。
 type ProviderConfig struct {
-	// ID provider 标识（对应 provider.Descriptor.ID），如 "ark"。
+	// ID provider 标识（对应 provider.Descriptor.ID），如 "ark"；使用 preset 时
+	// 留空则由 preset 的 ID 填充。
 	ID string `json:"id"`
+	// Preset 厂商预设（如 "cerebras"）：填充未显式给出的 kind/quota/base_url/models。
+	// 显式字段优先；凭证永远不从 preset 读取。
+	Preset string `json:"preset,omitempty"`
 	// Kind 协议族："openai_compat" / "ark"。CodeBuddy 不在此配置（内置默认）。
 	Kind string `json:"kind"`
 	// Quota 额度语义："metered" / "window"。credits 是 CodeBuddy 专属，禁用。
@@ -504,6 +508,29 @@ func (c *Config) normalizeProviders() error {
 	seen := map[string]bool{}
 	for i := range c.Providers {
 		p := &c.Providers[i]
+		// preset 先展开：只填未显式给出的静态字段，凭证绝不从 preset 取。
+		// 未知 preset 即使 enabled=false 也 fail fast（防止配置看起来有位、实际打不通）。
+		if p.Preset != "" {
+			preset, ok := provider.LookupPreset(p.Preset)
+			if !ok {
+				return fmt.Errorf("providers[%d].preset: 未知 %q", i, p.Preset)
+			}
+			if p.ID == "" {
+				p.ID = preset.ID
+			}
+			if p.Kind == "" {
+				p.Kind = string(preset.Kind)
+			}
+			if p.Quota == "" {
+				p.Quota = string(preset.Quota)
+			}
+			if strings.TrimSpace(p.BaseURL) == "" {
+				p.BaseURL = preset.BaseURL
+			}
+			if len(p.Models) == 0 {
+				p.Models = preset.Models
+			}
+		}
 		if p.ID == "" {
 			return fmt.Errorf("providers[%d].id: 必须非空", i)
 		}

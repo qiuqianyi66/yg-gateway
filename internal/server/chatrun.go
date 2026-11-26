@@ -403,7 +403,9 @@ func (run *chatRun) selectAccount(i int, r *http.Request) (*auth.Auth, selectOut
 
 	// token 临近过期 → 先 refresh（失败冷却换号）
 	// 继承请求 ctx（F-708）：客户端断开/停机时刷新随之取消，不再占满 30s。
-	if acct.NeedsRefresh(h.cfg.RefreshSkew) {
+	// 非 codebuddy provider 用 API Key 认证，没有 OAuth token 可刷（ExpiresAt 恒 0，
+	// 若误走 NeedsRefresh 会每请求都 refresh 失败 → provider 明明有 key 却 503）。
+	if acct.ProviderID() == "codebuddy" && acct.NeedsRefresh(h.cfg.RefreshSkew) {
 		if err := h.cfg.Upstream.RefreshTokenContext(r.Context(), acct); err != nil {
 			run.lastErr = err
 			var ue *upstream.Error

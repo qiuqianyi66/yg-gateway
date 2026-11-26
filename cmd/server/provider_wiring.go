@@ -1,6 +1,9 @@
 package main
 
 import (
+	"strings"
+
+	"yg-gateway/internal/auth"
 	"yg-gateway/internal/pool"
 	"yg-gateway/internal/server"
 )
@@ -14,6 +17,7 @@ import (
 // "global:xxx" 也能正确路由。未启用条目跳过（不参与流量，零回归）。从 main.go 拆出
 // 是为控制 main.go 体量（check-depth 棘轮，非逻辑变更）。
 func buildProviderRouting(cfg *Config, p *pool.Pool) map[string]server.ProviderEndpoint {
+	ensureProviderAccounts(cfg, p)
 	modelProvider := map[string]string{}
 	providerEndpoints := map[string]server.ProviderEndpoint{}
 	for _, pc := range cfg.Providers {
@@ -40,6 +44,40 @@ func buildProviderRouting(cfg *Config, p *pool.Pool) map[string]server.ProviderE
 		})
 	}
 	return providerEndpoints
+}
+
+// ensureProviderAccounts 让“provider 级 api_key”无需再手写 auths 文件即可用。
+//
+// 背景：providers[].api_key 本来就是共享 key 形态（README 已声明回退优先级），但
+// 选号仍要求池里存在该 provider 的账号；用户只配一个 provider 时容易得到
+// “配置看起来完整、请求却 no_healthy_account”。这里仅在该 provider 尚无任何账号时
+// 建一个内存账号（不进 auths、不写盘）：UID 固定 provider:<id>，Provider=id，
+// APIKey 来自 provider 配置。已有 auths 账号（可多 key）时一律不建，零回归。
+//
+// 非 codebuddy provider 的 APIKey 不走 OAuth；scheduler 已按 ProviderID 跳过它们
+// （见 internal/scheduler），不会对虚拟账号发 refresh/签到请求。
+func ensureProviderAccounts(cfg *Config, p *pool.Pool) {
+	if cfg == nil || p == nil {
+		return
+	}
+	existing := map[string]bool{}
+	for _, st := range p.List() {
+		if st.Provider != "" {
+			existing[st.Provider] = true
+		}
+	}
+	for _, pc := range cfg.Providers {
+		if !pc.Enabled || strings.TrimSpace(pc.APIKey) == "" || existing[pc.ID] {
+			continue
+		}
+		p.Add(&auth.Auth{
+			UID:      "provider:" + pc.ID,
+			Provider: pc.ID,
+			APIKey:   pc.APIKey,
+			Nickname: pc.ID + " (config)",
+		})
+		existing[pc.ID] = true
+	}
 }
 
 // providerSummaryView 构造 panel 用的多 provider 汇总（F7）：注册表元数据 + 各

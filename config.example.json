@@ -44,6 +44,11 @@
       "api_key": "",
       "models": ["doubao-pro-32k", "doubao-lite-32k"],
       "enabled": false
+    },
+    {
+      "preset": "cerebras",
+      "api_key": "",
+      "enabled": false
     }
   ],
   "auth_dir": "./auths",

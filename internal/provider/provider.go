@@ -39,3 +39,45 @@ const (
 	// QuotaWindow 滚动窗口：5 小时 / 每周重置（订阅型账号）。
 	QuotaWindow QuotaKind = "window"
 )
+
+// Preset 常见 OpenAI 兼容厂商的静态接入参数。
+//
+// 只收敛「容易写错且相对稳定」的 base_url / kind / quota / 默认模型；凭证永不进
+// preset（必须由配置或 auths 提供）。preset 只是配置糖：显式字段优先，厂商改版时
+// 仍可在 config 覆盖。新增 preset 必须在 README 写明实测日期与限制，禁止把未验证
+// 的模型当成可用承诺。
+type Preset struct {
+	ID      string
+	Kind    Kind
+	Quota   QuotaKind
+	BaseURL string
+	Models  []string
+	// Notes 面向运维的限制说明（免费额度/速率/上下文），不参与出站。
+	Notes string
+}
+
+// Presets 已登记的厂商预设（当前只登记有公开 OpenAI 兼容文档的 Cerebras）。
+//
+// Cerebras 免费层不是“无限免费”：官方 rate-limit 文档给出 Free Trial $5 额度与
+// 分模型 RPM/TPM 上限（gpt-oss-120b 5 RPM / 30K TPM，qwen-3.8-27b 300 RPM /
+// 150K TPM）；额度/模型会变，config 仍应显式覆盖 models。
+var Presets = map[string]Preset{
+	"cerebras": {
+		ID:      "cerebras",
+		Kind:    KindOpenAICompat,
+		Quota:   QuotaMetered,
+		BaseURL: "https://api.cerebras.ai/v1",
+		Models:  []string{"gpt-oss-120b", "qwen-3.8-27b"},
+		Notes:   "Free Trial $5 / rate-limited; verify model IDs before enabling",
+	},
+}
+
+// LookupPreset 返回预设副本（Models 切片复制，调用方可安全覆盖）。
+func LookupPreset(id string) (Preset, bool) {
+	p, ok := Presets[id]
+	if !ok {
+		return Preset{}, false
+	}
+	p.Models = append([]string(nil), p.Models...)
+	return p, true
+}

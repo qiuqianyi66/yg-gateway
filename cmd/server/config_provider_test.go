@@ -60,3 +60,33 @@ func TestNormalizeProvidersMissingBaseURL(t *testing.T) {
 		t.Error("启用条目缺 base_url 应报错")
 	}
 }
+
+func TestNormalizeProvidersPresetCerebras(t *testing.T) {
+	raw := `{"providers":[{"preset":"cerebras","api_key":"sk-test","enabled":true}]}`
+	c, err := ParseConfig([]byte(raw))
+	if err != nil {
+		t.Fatalf("cerebras preset 应通过：%v", err)
+	}
+	p := c.Providers[0]
+	if p.ID != "cerebras" || p.Kind != "openai_compat" || p.Quota != "metered" {
+		t.Fatalf("preset 字段未展开: %+v", p)
+	}
+	if p.BaseURL != "https://api.cerebras.ai/v1" || len(p.Models) != 2 {
+		t.Fatalf("preset base/models 未展开: %+v", p)
+	}
+	// 显式覆盖优先于 preset。
+	c2, err := ParseConfig([]byte(`{"providers":[{"preset":"cerebras","base_url":"https://proxy.local/v1","models":["custom"],"enabled":true}]}`))
+	if err != nil {
+		t.Fatalf("preset 覆盖应通过：%v", err)
+	}
+	if c2.Providers[0].BaseURL != "https://proxy.local/v1" || len(c2.Providers[0].Models) != 1 {
+		t.Errorf("显式字段应覆盖 preset: %+v", c2.Providers[0])
+	}
+}
+
+func TestNormalizeProvidersUnknownPreset(t *testing.T) {
+	raw := `{"providers":[{"preset":"nope","enabled":false}]}`
+	if _, err := ParseConfig([]byte(raw)); err == nil {
+		t.Error("未知 preset 应 fail fast（即使未启用）")
+	}
+}
