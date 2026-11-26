@@ -77,6 +77,9 @@ type estBreakdown struct {
 func (b *estBreakdown) addString(s string) {
 	if isImageDataURL(s) {
 		b.Images++
+		// 图片 data URL 也计入「已计字节」，否则它的 base64 会全部落进
+		// StructBytes，让结构字节被几 MB 的假数据污染（2026-11-26 实测踩到）。
+		b.Bytes += len(s)
 		return
 	}
 	b.Bytes += len(s)
