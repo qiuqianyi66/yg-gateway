@@ -4,7 +4,9 @@
 // 实现口径：不引分词依赖——三段解析为通用值后**只对字符串叶子估**：CJK 全角
 // （≥0x2E80，覆盖 Han/假名/谚文）计 1、其余字符计 1/4（向上取整）。结构与数值
 // 字段不计——它们不是模型看到的内容主体（第一版「整串估」实测被 role/model
-// 信封高估 8%，弃）。权重是 derivation（真机 prompt_tokens 校准后可调）。
+// 信封高估 8%，弃）。图片载荷（data:image/ URL、base64 source）按固定视觉
+// 成本计，不按字符（2026-11-26，防截图会话假性击穿护栏）。权重是 derivation
+// （真机 prompt_tokens 校准后可调）。
 //
 // 诚实口径：响应在 Anthropic 原形状（input_tokens）之上加 "estimated": true——
 // 多余字段对客户端无害，且不伪装成上游精确值（四态纪律）。
@@ -17,7 +19,21 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strings"
 )
+
+// imageTokenCost 单张图片的固定视觉成本估算（derivation，非上游精确值）。
+// 为什么需要：base64 图片载荷不是模型按字符计费的文本——上游按视觉块计
+// （千级 token/图），而字符串叶子启发式会把 474KB 截图的 ~63 万 base64 字符
+// 估成 ~16 万 token，6-7 张图即假性击穿 1M 护栏（2026-11-26 DSH 考试会话
+// 实弹：估算 107 万 vs 上游实际 usage 5-8 万）。图片一律按固定成本计，
+// 真实偏差由 /status calibration 样本持续校准。
+const imageTokenCost = 2000
+
+// isImageDataURL 识别 OpenAI 形状的内联图片（data:image/...;base64,...）。
+func isImageDataURL(s string) bool {
+	return strings.HasPrefix(s, "data:image/")
+}
 
 // estimateTokens 启发式：CJK 全角计 1、其余计 1/4 向上取整。
 func estimateTokens(s string) int {
@@ -33,9 +49,14 @@ func estimateTokens(s string) int {
 }
 
 // estimateTokensValue 递归累加通用值里全部字符串叶子的估算；数值/布尔不计。
+// 图片载荷例外：OpenAI 的 data:image/ URL 与 Anthropic 的 base64 source 都按
+// 固定 imageTokenCost 计，不把 base64 字符当文本（见 imageTokenCost 注释）。
 func estimateTokensValue(v any) int {
 	switch t := v.(type) {
 	case string:
+		if isImageDataURL(t) {
+			return imageTokenCost
+		}
 		return estimateTokens(t)
 	case []any:
 		n := 0
@@ -44,6 +65,13 @@ func estimateTokensValue(v any) int {
 		}
 		return n
 	case map[string]any:
+		// Anthropic 图片源 {"type":"base64","media_type":"image/...","data":"<raw b64>"}：
+		// 载荷是无 data: 前缀的裸 base64，字符串层认不出，这里按整块固定成本计。
+		if t["type"] == "base64" {
+			if data, ok := t["data"].(string); ok && len(data) > 0 {
+				return imageTokenCost
+			}
+		}
 		n := 0
 		for _, e := range t {
 			n += estimateTokensValue(e)

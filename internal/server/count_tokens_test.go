@@ -104,3 +104,73 @@ func TestCountTokensBodyLimit(t *testing.T) {
 		t.Fatalf("超限应 413，got %d", rec.Code)
 	}
 }
+
+// 图片载荷按固定视觉成本计，不按 base64 字符（2026-11-26 实弹回归：
+// DSH 考试会话 6-7 张截图被估成 107 万 token 假性击穿 1M 护栏，
+// 上游实际 usage 仅 5-8 万）。
+
+func countInput(t *testing.T, h *Handler, body string) int {
+	t.Helper()
+	rec := doCountTokens(t, h, body)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("code=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var out struct {
+		InputTokens int `json:"input_tokens"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	return out.InputTokens
+}
+
+func TestCountTokensOpenAIImageDataURL(t *testing.T) {
+	h := NewHandler(Config{})
+	// 60 万 base64 字符 ≈ 450KB 截图；按字符估会是 15 万 token，按图片应 ~2000。
+	b64 := strings.Repeat("QUJD", 150000)
+	body := `{"model":"m","messages":[{"role":"user","content":[{"type":"text","text":"hi"},{"type":"image_url","image_url":{"url":"data:image/png;base64,` + b64 + `"}}]}]}`
+	n := countInput(t, h, body)
+	if n > imageTokenCost+100 {
+		t.Fatalf("data:image/ 载荷应按固定成本计，got %d（want ≤ %d）", n, imageTokenCost+100)
+	}
+	if n < imageTokenCost {
+		t.Fatalf("图片成本不应低于固定值：%d", n)
+	}
+}
+
+func TestCountTokensAnthropicBase64Source(t *testing.T) {
+	h := NewHandler(Config{})
+	b64 := strings.Repeat("QUJD", 150000)
+	body := `{"model":"m","messages":[{"role":"user","content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"` + b64 + `"}}]}]}`
+	n := countInput(t, h, body)
+	if n > imageTokenCost+100 {
+		t.Fatalf("base64 source 应按固定成本计，got %d", n)
+	}
+}
+
+func TestCountTokensSevenScreenshotsUnderGuardrail(t *testing.T) {
+	h := NewHandler(Config{})
+	// 事故形状：7 张 474KB 级截图 + 少量文本。修复前估算 >1M，修复后应远低于护栏。
+	var blocks []string
+	for i := 0; i < 7; i++ {
+		blocks = append(blocks, `{"type":"image_url","image_url":{"url":"data:image/png;base64,`+strings.Repeat("QUJD", 158000)+`"}}`)
+	}
+	body := `{"model":"m","messages":[{"role":"user","content":[` + strings.Join(blocks, ",") + `]}]}`
+	n := countInput(t, h, body)
+	if n >= 1000000 {
+		t.Fatalf("7 张截图估算 %d 仍击穿 1M 护栏（事故回归）", n)
+	}
+	if n > 7*imageTokenCost+1000 {
+		t.Fatalf("估算 %d 超出 7×固定成本+余量", n)
+	}
+}
+
+func TestCountTokensHTTPImageURLStillText(t *testing.T) {
+	h := NewHandler(Config{})
+	// 非内联图片（http URL）是短字符串，照旧按文本计，不受图片规则影响。
+	body := `{"model":"m","messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"https://example.com/a.png"}}]}]}`
+	n := countInput(t, h, body)
+	if n >= imageTokenCost {
+		t.Fatalf("http URL 不应按整图成本计：%d", n)
+	}
+}
