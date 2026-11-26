@@ -1,0 +1,101 @@
+#!/usr/bin/env python3
+"""check-est-drift.py —— 护栏估算 vs 上游实际的漂移守卫。
+
+为什么需要（2026-11-26 第五/六轮）：估算器是启发式（CJK 计 1、其余 1/4、图片固定
+成本），它的正确性靠「归档行里 est_prompt_tokens 与 prompt_tokens 成对」来持续核对。
+/status 的 est_vs_upstream 只保留最近 20 条环形样本，跨天趋势只能从这里看。
+
+判据（预登记，改动前先改这里）：
+  样本 >= 20 才裁决；中位比率必须落在 [0.90, 1.10]，p90 不得超过 1.60。
+  中位低于 0.90 = 系统性低估（会漏拦，上游真 413 风险）；高于 1.10 = 系统性保守
+  （假性 413、压缩提前）；p90 超 1.60 = 尾部图多请求偏差过大。
+
+退出码（四态）：
+  0 = 在带内        1 = 漂移（需要重拟合）        2 = 样本不足（未知，不裁决）
+  3 = 没有归档文件
+"""
+import glob
+import json
+import os
+import statistics
+import sys
+
+BAND_MEDIAN = (0.90, 1.10)
+BAND_P90 = 1.60
+MIN_SAMPLES = 20
+
+
+def load_pairs(days):
+    """返回 [(model, est, upstream)]，只取两值都已知的行（unknown 不冒充 0）。"""
+    pairs = []
+    files = []
+    for pat in days:
+        files.extend(glob.glob(pat))
+    for path in sorted(set(files)):
+        with open(path, encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    ev = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                est = ev.get("est_prompt_tokens") or 0
+                up = ev.get("prompt_tokens") or 0
+                if est > 0 and up > 0:
+                    pairs.append((ev.get("model") or "-", est, up))
+    return pairs
+
+
+def summarize(pairs):
+    ratios = sorted(est / up for _, est, up in pairs)
+    p90 = ratios[int(len(ratios) * 0.9)] if len(ratios) > 1 else ratios[0]
+    return {
+        "n": len(ratios),
+        "median": statistics.median(ratios),
+        "min": ratios[0],
+        "p90": p90,
+        "max": ratios[-1],
+    }
+
+
+def verdict(s):
+    if s["median"] < BAND_MEDIAN[0]:
+        return "UNDER (系统性低估，漏拦风险)"
+    if s["median"] > BAND_MEDIAN[1]:
+        return "OVER (系统性保守，假性 413 风险)"
+    if s["p90"] > BAND_P90:
+        return "TAIL (p90 超带，图多/长文步骤偏差过大)"
+    return "OK"
+
+
+def main():
+    log_dir = sys.argv[1] if len(sys.argv) > 1 else r"D:\yg-gateway\data\request-logs"
+    if not os.path.isdir(log_dir):
+        print(f"no archive dir: {log_dir}")
+        return 3
+    days = [os.path.join(log_dir, "requests-*.jsonl")]
+    pairs = load_pairs(days)
+    if not pairs:
+        print("insufficient samples: 0 pairs（归档里还没有带 est_prompt_tokens 的行）")
+        return 2
+    s = summarize(pairs)
+    print("samples=%d  median=%.2f  min=%.2f  p90=%.2f  max=%.2f"
+          % (s["n"], s["median"], s["min"], s["p90"], s["max"]))
+    by_model = {}
+    for model, est, up in pairs:
+        by_model.setdefault(model, []).append((model, est, up))
+    for model, rows in sorted(by_model.items()):
+        ms = summarize(rows)
+        print("  %-28s n=%-4d median=%.2f p90=%.2f" % (model, ms["n"], ms["median"], ms["p90"]))
+    if s["n"] < MIN_SAMPLES:
+        print("insufficient samples: %d < %d，不裁决" % (s["n"], MIN_SAMPLES))
+        return 2
+    v = verdict(s)
+    print(f"verdict: {v}")
+    return 0 if v == "OK" else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
