@@ -67,9 +67,11 @@ func estimateTokens(s string) int {
 // 小请求 p90 1.86、大请求 0.92，无法判断是图片固定成本还是文本密度）。
 // 归档按请求落这三项，才能按构成分组拟合权重，而不是拿一个平均数硬调。
 type estBreakdown struct {
-	Wide   int // CJK 全角字符数（≥0x2E80）
-	Other  int // 其余字符数
-	Images int // 图片块数（按固定视觉成本计）
+	Wide        int // CJK 全角字符数（≥0x2E80）
+	Other       int // 其余字符数
+	Images      int // 图片块数（按固定视觉成本计）
+	Bytes       int // 已计入的字符串字节数（用于反推结构字节）
+	StructBytes int // JSON 结构字节（键名/括号/逗号/数字等未按字符计的部分）
 }
 
 func (b *estBreakdown) addString(s string) {
@@ -77,6 +79,7 @@ func (b *estBreakdown) addString(s string) {
 		b.Images++
 		return
 	}
+	b.Bytes += len(s)
 	for _, r := range s {
 		if r >= 0x2E80 {
 			b.Wide++
@@ -90,6 +93,8 @@ func (b *estBreakdown) merge(o estBreakdown) {
 	b.Wide += o.Wide
 	b.Other += o.Other
 	b.Images += o.Images
+	b.Bytes += o.Bytes
+	b.StructBytes += o.StructBytes
 }
 
 func (b estBreakdown) tokens() int {
@@ -140,6 +145,9 @@ func estimateBreakdownJSON(raw json.RawMessage) estBreakdown {
 		return b
 	}
 	walkEst(v, &b)
+	if rest := len(raw) - b.Bytes; rest > 0 {
+		b.StructBytes = rest // 键名 + 标点 + 数字 + 空白，当前不计 token，只做记录
+	}
 	return b
 }
 

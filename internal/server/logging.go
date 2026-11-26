@@ -67,6 +67,7 @@ type chatStat struct {
 	estImages        int
 	estWideChars     int
 	estOtherChars    int
+	estStructBytes   int
 	completionTokens int64
 	totalTokens      int64
 	// 缓存命中观测（usage.prompt_cache_hit_tokens / miss）：上游给到才有效。
@@ -423,6 +424,7 @@ func (t *requestTrace) event(status int) reqlog.Event {
 		e.EstImages = s.estImages
 		e.EstWideChars = s.estWideChars
 		e.EstOtherChars = s.estOtherChars
+		e.EstStructBytes = s.estStructBytes
 		e.CompletionTokens = s.completionTokens
 		e.TotalTokens = s.totalTokens
 		e.Credit = s.credit

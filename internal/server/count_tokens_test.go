@@ -110,6 +110,10 @@ func TestEstimateBreakdownParts(t *testing.T) {
 	if got, want := b.tokens(), 2+5+imageTokenCost; got != want {
 		t.Fatalf("tokens=%d want=%d（总数必须由三者重建）", got, want)
 	}
+	// 结构字节 = 原始 JSON 长度 - 已计字符串字节（图片 base64 不计入，避免虚高）。
+	if b.StructBytes != len(raw)-b.Bytes || b.StructBytes <= 0 {
+		t.Fatalf("struct_bytes=%d bytes=%d raw=%d（want raw-bytes>0，用于归因常数级偏差）", b.StructBytes, b.Bytes, len(raw))
+	}
 	// Anthropic base64 源整块计一张图，块内字符串（含 media_type）不再按字符计；
 	// 外层 content 块类型 "image" 仍按文本计（other 5）。
 	raw2 := []byte(`{"messages":[{"content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"QUJDQUJD"}}]}]}`)

@@ -100,6 +100,7 @@ type Event struct {
 	EstImages        int     `json:"est_images,omitempty"`
 	EstWideChars     int     `json:"est_wide_chars,omitempty"`
 	EstOtherChars    int     `json:"est_other_chars,omitempty"`
+	EstStructBytes   int     `json:"est_struct_bytes,omitempty"`
 	CompletionTokens int64   `json:"completion_tokens,omitempty"`
 	TotalTokens      int64   `json:"total_tokens,omitempty"`
 	Credit           float64 `json:"credit,omitempty"`

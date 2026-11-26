@@ -302,6 +302,9 @@ func (h *Handler) applyGuardrail(w http.ResponseWriter, r *http.Request, sessKey
 			run.st.estImages = bd.Images
 			run.st.estWideChars = bd.Wide
 			run.st.estOtherChars = bd.Other
+			// 结构字节：JSON 键名/标点/数字。真实样本里两簇的偏差是「常数级」的，
+			// 只靠文本密度解释不了——先把它落档，下一轮才能判断是否要计入 token。
+			run.st.estStructBytes = bd.StructBytes
 		}
 	}
 	switch {
