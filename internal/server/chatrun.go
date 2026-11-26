@@ -245,8 +245,6 @@ func (run *chatRun) rotateAndServe(w http.ResponseWriter, r *http.Request, chatM
 	h := run.h
 	clientIP := run.clientIP
 	peekStream := run.peekStream
-	modelBlock, groupFilteredOut := run.modelBlock, run.groupFilteredOut
-	lastErr := run.lastErr
 	for i := 0; i < h.cfg.MaxRotate; i++ {
 		// 选号 + 占租约 + token 就绪（含 continue/break 的三态控制流）已抽到
 		// chatrun.go 的 selectAccount。
@@ -305,9 +303,10 @@ func (run *chatRun) rotateAndServe(w http.ResponseWriter, r *http.Request, chatM
 		}
 		return run.serveNonStream(w, acct, rc, attemptStarted)
 	}
-	// 回写阶段⑤ 的输入。body/degradedApplied 已直接写在 run 上（handleErrorPath
-	// 里的降级改写就地更新 run.body），无需在此回写。
-	run.lastErr, run.modelBlock, run.groupFilteredOut = lastErr, modelBlock, groupFilteredOut
+	// 回写阶段⑤ 的输入：body/degradedApplied 已就地在 run 上更新；错误/阻塞/组过滤
+	// 状态由 handleErrorPath/selectAccount 写在 run 上，这里**不能**用循环前的快照
+	// 覆盖——否则最后一条上游错误会被抹成 nil，末端退化成 no_healthy_account 503，
+	// 上游原文（含 requestId）全部丢失。
 	return false
 }
 
@@ -433,7 +432,7 @@ func (run *chatRun) selectAccount(i int, r *http.Request) (*auth.Auth, selectOut
 //
 //	errRetry  只放弃本轮，continue 下一轮；
 //	errAbort  终止整轮轮转，break 出去走末端错误构造；
-//	errHandled 响应已经写完（请求级错误就地 400），调用方必须立即 return true。
+//	errHandled 响应已经写完（请求级错误就地 400），或客户端已断连无需写响应；调用方必须立即 return true。
 //
 // 合并任意两态都会让行为静默改变（errHandled 被当成 errAbort 会导致重复写响应）。
 type errOutcome int
@@ -442,8 +441,13 @@ const (
 	errProceed errOutcome = iota // status < 400：继续处理响应（流式/非流式分派）
 	errRetry                     // continue 下一轮
 	errAbort                     // break 退出轮转
-	errHandled                   // 响应已写完，调用方 return true
+	errHandled                   // 响应已写完，或客户端断连无需写响应；调用方 return true
 )
+
+// statusClientClosedRequest 客户端主动取消/断连的内部审计状态（nginx 惯例 499）。
+// 它不是上游返回码，也不写回 wire（客户端已经走了）；只用于把请求归档从
+// “503 上游故障”中分离出来，避免把客户端取消计成账号失败。
+const statusClientClosedRequest = 499
 
 // handleTransportError 传输层错误（非 *upstream.Error）的两分支处置：上游超时/停滞
 // 直接止损（不换号、不罚号），网络层抖动换号但不喂熔断。
@@ -454,6 +458,20 @@ const (
 func (run *chatRun) handleTransportError(r *http.Request, acct *auth.Auth, terr error, i int, attemptStarted time.Time) errOutcome {
 	h := run.h
 	st := run.st
+	// 客户端主动取消/断连：上游收到的是同一个 ctx 取消，不是上游故障。
+	// 绝不能走下面的 NoteFailures/fail 惩罚路径——否则 DSH 每次取消/重试都会
+	// 给健康号累积连败，最终把可用池打成 no_healthy_account 503（本日 5 条
+	// “503”里 4 条就是这种伪故障）。也不写响应：客户端已经不在。
+	if r.Context().Err() != nil {
+		run.recordAttempt(acct.UID, pool.TokenUsageDelta{}, 0, false, attemptStarted, 0)
+		st.status = statusClientClosedRequest
+		st.outcome = reqlog.OutcomeInterrupted
+		run.lastErr = terr
+		log.Printf("INFO: [server] client canceled acct=%s: %v (not an upstream failure; account not penalized)",
+			logfmt.Label(acct.UID, acct.Nickname), terr)
+		run.fail(acct.UID)
+		return errHandled
+	}
 	// 上游超时 / 停滞：**不换号、不罚号**。
 	//
 	// 超时不是账号的问题：同一份请求换到别的号，撞上的是同一个慢上游，

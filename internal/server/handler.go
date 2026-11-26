@@ -688,7 +688,7 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 
 	// 阶段④：轮转主循环（415 行）已抽到 chatrun.go 的 rotateAndServe。
 	// 循环内的读写状态都在 run 上：tried/modelBlock/groupFilteredOut/lastErr/body
-	// 由该方法的收尾回写，故此处无需再接这些值。
+	// 由 rotateAndServe 内就地更新（不再用循环前快照回写），故此处无需再接这些值。
 	//
 	// **返回值必须看**：循环体里有 7 处 `return`（成功透传、请求级错误透传等），
 	// 它们在原实现里退出的是 chatCompletions 本身；搬进方法后只退出该方法。若不

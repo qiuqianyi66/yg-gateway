@@ -182,6 +182,53 @@ func (h *Handler) prepareChatRequest(w http.ResponseWriter, r *http.Request) (*c
 	return p, true
 }
 
+// upstreamMessageText 把上游错误 body 压成一句可读文本。
+//
+// 输入是 CodeBuddy 的 `{"code":11133,"msg":"...","requestId":"..."}` 或
+// OpenAI 风格的 `{"error":{"message":"...","code":"..."}}`。不返回原始 JSON：
+// error.message 是要给客户端直接展示的，嵌入 JSON 会让 OpenAI 客户端二次解析，
+// 也会让 Anthropic SSE 的 error 事件变成转义后的嵌套 JSON。
+// 解析失败（非 JSON / 空体）时退回原文，保证排障信息不丢。
+func upstreamMessageText(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return raw
+	}
+	var obj map[string]any
+	if err := json.Unmarshal([]byte(raw), &obj); err != nil {
+		return raw
+	}
+	// OpenAI 风格：{"error":{"message":"...","code":"..."}}。
+	if e, ok := obj["error"].(map[string]any); ok {
+		if m, ok := e["message"].(string); ok && strings.TrimSpace(m) != "" {
+			m = strings.TrimSpace(m)
+			if c, ok := e["code"].(string); ok && strings.TrimSpace(c) != "" {
+				return strings.TrimSpace(c) + ": " + m
+			}
+			return m
+		}
+	}
+	// CodeBuddy 风格：{"code":11133,"msg":"...","requestId":"..."}。
+	msg, _ := obj["msg"].(string)
+	if strings.TrimSpace(msg) == "" {
+		msg, _ = obj["message"].(string)
+	}
+	if strings.TrimSpace(msg) == "" {
+		return raw
+	}
+	msg = strings.TrimSpace(msg)
+	out := msg
+	if v, ok := obj["code"]; ok {
+		if c := strings.TrimSpace(fmt.Sprintf("%v", v)); c != "" {
+			out = c + ": " + out
+		}
+	}
+	if rid, _ := obj["requestId"].(string); strings.TrimSpace(rid) != "" {
+		out += " (requestId " + strings.TrimSpace(rid) + ")"
+	}
+	return out
+}
+
 // finalErrorOf 把末端错误映射成 (status, code, msg, gateway_hint)。
 //
 // 这是 chatCompletions 阶段 ⑤「末端错误构造」的**纯计算部分**：不写响应、不改
@@ -251,9 +298,16 @@ func (h *Handler) finalErrorOf(
 			status = http.StatusBadRequest
 		}
 		if s := strings.TrimSpace(ue.Msg); s != "" {
-			// 上游原文优先：透传 code/msg/requestId，不拼接本地前缀。
-			msg = s
+			// 上游原文优先：透传 code/msg/requestId，不拼接本地前缀；但必须压成
+			// 一句可读文本——把上游 JSON 原样塞进 error.message 会让 OpenAI 客户端
+			// 二次解析，也会让 Anthropic 流错误变成转义后的嵌套 JSON。
+			msg = upstreamMessageText(s)
 			upstreamMsgPassed = true
+		}
+		// 上游 5xx 不是“池里没有可用账号”：保留 503 的可重试语义，但把业务码
+		// 改成 upstream_error，避免客户端/面板把上游过载读成本地调度失败。
+		if ue.Kind == upstream.ErrServer {
+			code = "upstream_error"
 		}
 	}
 
