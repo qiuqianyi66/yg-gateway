@@ -20,7 +20,7 @@ func doCountTokens(t *testing.T, h *Handler, body string) *httptest.ResponseReco
 
 func TestCountTokensASCII(t *testing.T) {
 	h := NewHandler(Config{})
-	ascii := strings.Repeat("abcd", 100) // 400 字符 → 100 token（1/4 向上取整）
+	ascii := strings.Repeat("abcd", 100) // 400 字符 → 152 token（0.38/字符，2026-11-26 真机校准）
 	rec := doCountTokens(t, h, `{"model":"m","messages":[{"role":"user","content":"`+ascii+`"}]}`)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("code=%d body=%s", rec.Code, rec.Body.String())
@@ -32,8 +32,8 @@ func TestCountTokensASCII(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
 		t.Fatal(err)
 	}
-	if out.InputTokens != 101 {
-		t.Fatalf("input_tokens = %d, want 101（内容 400 ASCII → 100，加 role 值 \"user\" 4 字符 → 1；role 计入=计费口径）", out.InputTokens)
+	if out.InputTokens != 154 {
+		t.Fatalf("input_tokens = %d, want 154（内容 400 ASCII → 152，加 role 值 \"user\" 4 字符 → 2；role 计入=计费口径）", out.InputTokens)
 	}
 	if !out.Estimated {
 		t.Fatal("必须带 estimated=true（诚实口径：这是启发式不是上游精确值）")
@@ -50,8 +50,8 @@ func TestCountTokensCJK(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
 		t.Fatal(err)
 	}
-	if out.InputTokens != 11 {
-		t.Fatalf("input_tokens = %d, want 11（CJK 计 1 ×10，加 role 值 \"user\" → 1）", out.InputTokens)
+	if out.InputTokens != 12 {
+		t.Fatalf("input_tokens = %d, want 12（CJK 计 1 ×10，加 role 值 \"user\" 4 字符 → 2）", out.InputTokens)
 	}
 }
 

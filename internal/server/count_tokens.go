@@ -2,7 +2,8 @@
 //
 // 为什么需要：Claude Code 原生调用它做上下文核算；未实现时客户端退化估算。
 // 实现口径：不引分词依赖——三段解析为通用值后**只对字符串叶子估**：CJK 全角
-// （≥0x2E80，覆盖 Han/假名/谚文）计 1、其余字符计 1/4（向上取整）。结构与数值
+// （≥0x2E80，覆盖 Han/假名/谚文）计 1、其余字符计 0.38（向上取整，2026-11-26
+// 真机校准前为 1/4）。结构与数值
 // 字段不计——它们不是模型看到的内容主体（第一版「整串估」实测被 role/model
 // 信封高估 8%，弃）。图片载荷（data:image/ URL、base64 source）按固定视觉
 // 成本计，不按字符（2026-11-26，防截图会话假性击穿护栏）。权重是 derivation
@@ -40,7 +41,15 @@ func isImageDataURL(s string) bool {
 	return strings.HasPrefix(s, "data:image/")
 }
 
-// estimateTokens 启发式：CJK 全角计 1、其余计 1/4 向上取整。
+// textTokenPermille 非 CJK 字符的千字符 token 成本（0.38 token/字符）。
+// 取值来源（2026-11-26 真实流量校准）：DSH 长会话 6 条配对样本，估算/上游
+// 比值稳定在 0.655–0.660（1/4 字符口径在 JSON/代码/路径为主的载荷上系统性
+// 低估 34%）。按「全靠 ASCII」反解，上游真实密度 ≈ 0.382 token/字符；取 0.38
+// 使比值回到 1.0 附近。低估方向危险（实际 100 万时估算只报 66 万，护栏会晚
+// 一步），宁可在纯英文散文上略保守。CJK 计 1 不变。
+const textTokenPermille = 380
+
+// estimateTokens 启发式：CJK 全角计 1、其余按 0.38/字符向上取整。
 func estimateTokens(s string) int {
 	wide, other := 0, 0
 	for _, r := range s {
@@ -50,7 +59,7 @@ func estimateTokens(s string) int {
 			other++
 		}
 	}
-	return wide + (other+3)/4
+	return wide + (other*textTokenPermille+999)/1000
 }
 
 // estimateTokensValue 递归累加通用值里全部字符串叶子的估算；数值/布尔不计。
