@@ -313,6 +313,9 @@ func (h *Handler) applyGuardrail(w http.ResponseWriter, r *http.Request, sessKey
 			// 结构字节：JSON 键名/标点/数字。真实样本里两簇的偏差是「常数级」的，
 			// 只靠文本密度解释不了——先把它落档，下一轮才能判断是否要计入 token。
 			run.st.estStructBytes = bd.StructBytes
+			// 影子口径并行落档（不参与判定）：单批数据无法同时解出「文本密度」与
+			// 「图片单价」，只能让两套假设同时留痕，等结构性新样本出现再裁决。
+			run.st.estShadow = int64(bd.shadowTokens())
 		}
 	}
 	switch {

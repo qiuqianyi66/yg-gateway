@@ -123,6 +123,23 @@ func TestEstimateBreakdownParts(t *testing.T) {
 	}
 }
 
+// TestEstimateShadowTokens 影子口径只做落档：总字节/3.4 + 350/图，必须与主口径分开算。
+// 退化场景（纯 ASCII 400 字符、0 图）应≈主口径量级（0.38 vs 0.294/字符，不要求相等）。
+func TestEstimateShadowTokens(t *testing.T) {
+	var b estBreakdown
+	b.Wide = 2   // 6 字节
+	b.Other = 11 // 11 字节
+	b.StructBytes = 7
+	b.Images = 1
+	// 24 字节 → ceil(24*10/34)=8，+ 350 = 358
+	if got, want := b.shadowTokens(), 358; got != want {
+		t.Fatalf("shadowTokens=%d want=%d（字节口径 + 350/图）", got, want)
+	}
+	if b.tokens() == b.shadowTokens() {
+		t.Fatal("主口径与影子口径不应恒等（否则并行落档没有裁决价值）")
+	}
+}
+
 func TestCountTokensBodyLimit(t *testing.T) {
 	h := NewHandler(Config{MaxBodyBytes: 16})
 	rec := doCountTokens(t, h, `{"messages":["`+strings.Repeat("x", 64)+`"]}`)

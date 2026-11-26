@@ -97,10 +97,13 @@ type Event struct {
 	EstPromptTokens int64 `json:"est_prompt_tokens,omitempty"`
 	// 估算构成（2026-11-26 起）：图片块数 / 宽字符数 / 其余字符数。与
 	// est_prompt_tokens 同行，供按构成分组拟合权重；纯增量字段，历史行形态不变。
-	EstImages        int     `json:"est_images,omitempty"`
-	EstWideChars     int     `json:"est_wide_chars,omitempty"`
-	EstOtherChars    int     `json:"est_other_chars,omitempty"`
-	EstStructBytes   int     `json:"est_struct_bytes,omitempty"`
+	EstImages      int `json:"est_images,omitempty"`
+	EstWideChars   int `json:"est_wide_chars,omitempty"`
+	EstOtherChars  int `json:"est_other_chars,omitempty"`
+	EstStructBytes int `json:"est_struct_bytes,omitempty"`
+	// 影子估算：备选口径（总字节/3.4 + 350/图），只落档不参与护栏；
+	// 用于在「图片少、文本多」的未来样本上裁决图片单价（2026-11-26）。
+	EstShadowTokens  int64   `json:"est_shadow_tokens,omitempty"`
 	CompletionTokens int64   `json:"completion_tokens,omitempty"`
 	TotalTokens      int64   `json:"total_tokens,omitempty"`
 	Credit           float64 `json:"credit,omitempty"`

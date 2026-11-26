@@ -113,6 +113,18 @@ func (b estBreakdown) tokens() int {
 		(b.StructBytes*structTokenPermille+999)/1000 + b.Images*imageTokenCost
 }
 
+// shadowTokens 备选口径（影子估算，只落档不参与护栏）：总字节 / 3.4 + 350/图。
+// 为什么并存：真实流量里「文本字节」与「图片张数」强共线，现口径（CJK 1 / ASCII 0.38
+// / 结构 0.10 / 图 1450）在图片密集的会话里拟合到 1.00，但换到中等篇幅散文请求会
+// 高估 22%（ASCII 实际密度 ~0.28）。两种模型都不能用单批数据裁决，所以让它们并行
+// 落档，等后续出现「图片少、文本多」的样本时再用残差分账。
+// 字节换算：CJK 约 3 字节/字、其余按 1 字节/字符、结构字节原样；3.4 来自 78 条真实行
+// 的 bytes/token 中位（p10 3.25 / p90 3.51）。
+func (b estBreakdown) shadowTokens() int {
+	bytes := b.Wide*3 + b.Other + b.StructBytes
+	return (bytes*10+33)/34 + 350*b.Images
+}
+
 func walkEst(v any, b *estBreakdown) {
 	switch t := v.(type) {
 	case string:
