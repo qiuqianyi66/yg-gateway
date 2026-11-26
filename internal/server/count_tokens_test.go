@@ -32,8 +32,8 @@ func TestCountTokensASCII(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
 		t.Fatal(err)
 	}
-	if out.InputTokens != 154 {
-		t.Fatalf("input_tokens = %d, want 154（内容 400 ASCII → 152，加 role 值 \"user\" 4 字符 → 2；role 计入=计费口径）", out.InputTokens)
+	if out.InputTokens != 157 {
+		t.Fatalf("input_tokens = %d, want 157（400 ASCII → 152 + role \"user\" 2 + 信封/结构字节 3，结构按 0.1/字节计）", out.InputTokens)
 	}
 	if !out.Estimated {
 		t.Fatal("必须带 estimated=true（诚实口径：这是启发式不是上游精确值）")
@@ -50,8 +50,8 @@ func TestCountTokensCJK(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
 		t.Fatal(err)
 	}
-	if out.InputTokens != 12 {
-		t.Fatalf("input_tokens = %d, want 12（CJK 计 1 ×10，加 role 值 \"user\" 4 字符 → 2）", out.InputTokens)
+	if out.InputTokens != 15 {
+		t.Fatalf("input_tokens = %d, want 15（CJK ×10 + role 2 + 结构字节 3）", out.InputTokens)
 	}
 }
 
@@ -107,8 +107,8 @@ func TestEstimateBreakdownParts(t *testing.T) {
 	if b.Wide != 2 || b.Other != 11 || b.Images != 1 {
 		t.Fatalf("构成错误: %+v（want wide=2 other=11 images=1）", b)
 	}
-	if got, want := b.tokens(), 2+5+imageTokenCost; got != want {
-		t.Fatalf("tokens=%d want=%d（总数必须由三者重建）", got, want)
+	if got, want := b.tokens(), 2+5+8+imageTokenCost; got != want {
+		t.Fatalf("tokens=%d want=%d（总数必须由三者 + 结构字节重建）", got, want)
 	}
 	// 结构字节 = 原始 JSON 长度 - 已计字符串字节（图片 base64 不计入，避免虚高）。
 	if b.StructBytes != len(raw)-b.Bytes || b.StructBytes <= 0 {

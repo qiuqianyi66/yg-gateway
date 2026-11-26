@@ -49,6 +49,14 @@ func isImageDataURL(s string) bool {
 // 一步），宁可在纯英文散文上略保守。CJK 计 1 不变。
 const textTokenPermille = 380
 
+// structTokenPermille JSON 结构字节（键名/括号/逗号/数字/空白）的千字节成本。
+// 取值来源（2026-11-26 真实流量）：把「上游实测 - 文本/图片估算」的残差对
+// est_struct_bytes 回归，两簇请求分别落在 0.09–0.12，且残差随结构字节近线性
+// 变化（图片组残差 60–65k / 结构 540k；文本组 49–50k / 结构 577k）。此前这部分
+// 完全不计 token，是 0.80–0.89 低估的主因（比文本密度偏保守更结构性）。
+// 取 0.10/字节；JSON 越膨胀（工具 schema、多轮 messages 包装）影响越大。
+const structTokenPermille = 100
+
 // estimateTokens 启发式：CJK 全角计 1、其余按 0.38/字符向上取整。
 func estimateTokens(s string) int {
 	wide, other := 0, 0
@@ -101,7 +109,8 @@ func (b *estBreakdown) merge(o estBreakdown) {
 }
 
 func (b estBreakdown) tokens() int {
-	return b.Wide + (b.Other*textTokenPermille+999)/1000 + b.Images*imageTokenCost
+	return b.Wide + (b.Other*textTokenPermille+999)/1000 +
+		(b.StructBytes*structTokenPermille+999)/1000 + b.Images*imageTokenCost
 }
 
 func walkEst(v any, b *estBreakdown) {
@@ -118,6 +127,9 @@ func walkEst(v any, b *estBreakdown) {
 		if t["type"] == "base64" {
 			if data, ok := t["data"].(string); ok && len(data) > 0 {
 				b.Images++
+				// 裸 base64 同样要计入已计字节，否则会整段落进 StructBytes 被按
+				// 结构密度重复计入（2026-11-26 测试实测 61k 假象）。
+				b.Bytes += len(data)
 				return
 			}
 		}

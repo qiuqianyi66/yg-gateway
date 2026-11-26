@@ -344,9 +344,9 @@ func TestApplyGuardrailWarnHeader(t *testing.T) {
 	if tr.guardrailHit != "warn" {
 		t.Fatalf("事件标记 = %q，want warn", tr.guardrailHit)
 	}
-	// 估算 = 150 个 CJK（计 1）+ role 值 "user"（4 字符 other → 0.38*4 向上取整 = 2）= 152。
-	if run.guardrailEst != 152 {
-		t.Fatalf("run.guardrailEst = %d，want 152（150 CJK + user 信封 2）", run.guardrailEst)
+	// 估算 = 150 个 CJK（计 1）+ role 值 "user"（other → 2）+ 信封结构字节 3 = 155。
+	if run.guardrailEst != 155 {
+		t.Fatalf("run.guardrailEst = %d，want 155（150 CJK + user 2 + 结构 3）", run.guardrailEst)
 	}
 }
 
