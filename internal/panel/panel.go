@@ -76,9 +76,12 @@ type Config struct {
 	// nil = 未接线（overview 省略 providers 键 = 仅 codebuddy，零回归）。
 	ProviderSummary func() any
 
-	// OpsAgent 运维 agent 实例（REQ-opsagent 阶段 2）：nil = 未启用，
+	// OpsAgent 运维 agent 规则引擎实例（REQ-opsagent 阶段 2）：nil = 未启用，
 	// /panel/api/opsagent/status 返回 {"enabled":false}（前端有引导态）。
 	OpsAgent *opsagent.Agent
+	// OpsRuntime 运维 agent runtime（ADR-029）：nil = 未启用；与 OpsAgent 并行，
+	// 面板只读展示最近会话/轮次结果。
+	OpsRuntime *opsagent.Runtime
 
 	// Usage 逐请求用量记录器（nil = 用量接口返回 501）。
 	Usage *usage.Recorder

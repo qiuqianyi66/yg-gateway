@@ -209,7 +209,6 @@ func main() {
 	// buildOpsAgent 返回 nil、startOpsAgent no-op（零回归）。
 	alertNotifier := newAlertNotifier(cfg)
 	opsAg := buildOpsAgent(cfg.OpsAgent, p, obs.unknown, alertNotifier)
-
 	// 请求指标始终启用；JSONL 归档只写脱敏元数据，写盘失败不影响聊天请求。
 	requestLog := reqlog.New(reqlog.Config{
 		Dir:           stateSibling(cfg.StateFile, "request-logs"),
@@ -226,11 +225,22 @@ func main() {
 		log.Printf("[reqlog] 请求指标已启用；JSONL 归档已关闭")
 	}
 
+	// 运维 agent runtime（ADR-029）：requestLog 必须先构造，工具要读归档。
+	// 失败只记日志、不阻断网关启动（旁路诊断不应成为主链路单点）。
+	opsRT, rtErr := buildOpsRuntime(cfg, p, requestLog)
+	if rtErr != nil {
+		log.Printf("[opsagent-runtime] 装配失败，跳过: %v", rtErr)
+		opsRT = nil
+	}
+	if opsRT != nil {
+		defer func() { _ = opsRT.Close() }()
+	}
+
 	// 管理面板 + HTTP handler + 协议漂移观测器，见 main_http_runtime.go。
 	h, driftMon := buildHTTPRuntime(httpRuntimeDeps{
 		cfg: cfg, cfgPath: *cfgPath,
 		p: p, up: up, sch: sch, rec: rec, live: live,
-		requestLog: requestLog, opsAg: opsAg, alert: alertNotifier, obs: obs,
+		requestLog: requestLog, opsAg: opsAg, opsRuntime: opsRT, alert: alertNotifier, obs: obs,
 		redisMode: redisMode, sessRouter: sessRouter,
 		sessCount: sessCount, sessSnap: sessSnapshot, providers: providerEndpoints,
 	})
@@ -241,6 +251,7 @@ func main() {
 	sch.StartBalanceRefresh(ctx, cfg.BalanceRefreshInterval)
 	// 运维 agent（REQ-opsagent-2026-10-24 / ADR-017）：enabled=false 时 no-op。
 	startOpsAgent(opsAg, ctx)
+	startOpsRuntime(opsRT, ctx)
 	startKeyUsageAlerts(cfg.APIKeys, rec, alertNotifier, ctx) // key 用量告警（V3-2，无配置项零回归）
 
 	// 启动即预热模型积分倍率表：倍率只在 FetchModels/FetchGlobalModelInfos 成功时填充

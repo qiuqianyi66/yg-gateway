@@ -59,6 +59,32 @@
     }).join('');
   }
 
+  function renderRuntime(rt, sessions) {
+    if (!rt) {
+      return '<div class="us-empty">runtime 未启用（规则引擎照常跑）。在 config.json 的 ' +
+        '<code>opsagent.agent</code> 里置 <code>enabled=true</code> 并配置免费模型后重启。</div>';
+    }
+    var head =
+      '<div class="note">model=' + esc(rt.model || '') +
+      ' · session=' + esc(String(rt.session_id || '').slice(0, 24)) +
+      ' · 最近 turn=' + esc(rt.last_turn || 0) +
+      ' · outcome=' + esc(rt.last_outcome || 'none') +
+      ' · steps=' + esc(rt.last_steps || 0) +
+      ' · tools=' + esc(rt.last_tool_calls || 0) +
+      ' · 会话数=' + esc(rt.sessions || 0) + '</div>';
+    if (!sessions || !sessions.length) return head + '<div class="us-empty">暂无 session。</div>';
+    var rows = sessions.slice(0, 8).map(function (s) {
+      return '<tr><td class="mono">' + esc(String(s.id || '').slice(0, 24)) + '</td>' +
+        '<td class="num">' + esc(s.turns || 0) + '</td>' +
+        '<td class="num">' + esc(s.events || 0) + '</td>' +
+        '<td>' + esc(s.last_outcome || '') + '</td>' +
+        '<td class="note">' + esc(fmtTime(s.updated_at)) + '</td></tr>';
+    }).join('');
+    return head + '<div class="tbl-wrap"><table class="acc"><thead><tr><th>session</th>' +
+      '<th>turns</th><th>events</th><th>last</th><th>updated</th></tr></thead><tbody>' +
+      rows + '</tbody></table></div>';
+  }
+
   function load() {
     var body = document.getElementById('opsagentBody');
     if (!body) return;
@@ -78,6 +104,8 @@
         return;
       }
       body.innerHTML =
+        '<h4 class="ops-h">运维 agent runtime（只读诊断，不自动执行）</h4>' +
+        renderRuntime(d.runtime, d.runtime_sessions) +
         '<h4 class="ops-h">未消解 unknown（全量，含成本口径与 agent 登记）</h4>' +
         renderUnknowns(d.unknowns_open) +
         '<h4 class="ops-h">最近审计轮（新→旧，观察-建议模式：不自动执行动作）</h4>' +

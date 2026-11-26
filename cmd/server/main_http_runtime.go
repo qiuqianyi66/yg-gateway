@@ -34,6 +34,7 @@ type httpRuntimeDeps struct {
 	live       *livecfg.Holder
 	requestLog *reqlog.Recorder
 	opsAg      *opsagent.Agent
+	opsRuntime *opsagent.Runtime
 	alert      *alerting.Notifier
 	obs        *observability
 	redisMode  string
@@ -62,6 +63,7 @@ func buildHTTPRuntime(d httpRuntimeDeps) (*server.Handler, *upstream.DriftMonito
 		Upstream:        d.up,
 		Scheduler:       d.sch,
 		OpsAgent:        d.opsAg,
+		OpsRuntime:      d.opsRuntime,
 		AuthDir:         d.cfg.AuthDir,
 		APIKey:          d.cfg.APIKey,
 		RedisMode:       d.redisMode,

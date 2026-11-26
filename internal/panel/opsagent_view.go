@@ -17,11 +17,13 @@ import (
 const maxStatusRounds = 10
 
 type opsAgentStatusResp struct {
-	Enabled      bool             `json:"enabled"`
-	IntervalSec  int              `json:"interval_sec,omitempty"`
-	HealthyFrac  float64          `json:"healthy_frac,omitempty"`
-	UnknownsOpen []unknown.Item   `json:"unknowns_open,omitempty"`
-	Rounds       []opsagent.Round `json:"rounds,omitempty"`
+	Enabled         bool                             `json:"enabled"`
+	IntervalSec     int                              `json:"interval_sec,omitempty"`
+	HealthyFrac     float64                          `json:"healthy_frac,omitempty"`
+	UnknownsOpen    []unknown.Item                   `json:"unknowns_open,omitempty"`
+	Rounds          []opsagent.Round                 `json:"rounds,omitempty"`
+	Runtime         *opsagent.RuntimeStatus          `json:"runtime,omitempty"`
+	RuntimeSessions []opsagent.RuntimeSessionSummary `json:"runtime_sessions,omitempty"`
 }
 
 // opsAgentStatus 只读端点：agent 未启用 ≠ 错误（200 + enabled=false，前端有引导态）。
@@ -45,5 +47,12 @@ func (p *Panel) opsAgentStatus(w http.ResponseWriter, r *http.Request) {
 		hist = hist[len(hist)-maxStatusRounds:]
 	}
 	resp.Rounds = hist
+	if rt := p.cfg.OpsRuntime; rt != nil {
+		sts := rt.Status()
+		resp.Runtime = &sts
+		if sess, err := rt.Sessions(10); err == nil {
+			resp.RuntimeSessions = sess
+		}
+	}
 	writeJSON(w, http.StatusOK, resp)
 }
