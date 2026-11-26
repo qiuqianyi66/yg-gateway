@@ -364,7 +364,7 @@ YG Gateway 把 CodeBuddy 账号池包装成一个 OpenAI / Anthropic 兼容端�
 - **模型归属**：`models[]` 是显式白名单（裸模型名，匹配前剥掉 `cn:` / `global:` 前缀）。请求模型命中某 provider 名单 → 只在该 provider 账号里选号；未命中 → 照旧走 CodeBuddy credits 池。
 - **provider 账号怎么进池**：两种形态。① 只配 `providers[].api_key`：启动时自动建一个内存账号（`provider:<id>`），无需 `auths/` 文件；② 多 key / 多账号：往 `auths/` 放账号文件，如 `auths/ark-1.json`：`{"provider":"ark","api_key":"sk-xxx","account":{"uid":"ark-1"}}`。API Key 认证，**不需要 OAuth 登录**（无 accessToken 也可解析）。
 - **凭证优先级**：账号文件里的 `api_key` 优先；没写才回退 `config.providers[].api_key`（一个 key 供多号共享的简化形态）。
-- **预设**：`preset: "cerebras"` 会填 `id/kind/quota/base_url/models`，显式字段仍可覆盖。Cerebras 有 Free Trial / 免费额度，但**不是无限免费**：官方 rate limits 按模型限制 RPM/TPM（如 `gpt-oss-120b` 5 RPM / 30K TPM），模型名和额度会变，启用前用 `/v1/models` 或官方文档核对。
+- **预设**：`preset: "cerebras"` 会填 `id/kind/quota/base_url/models`，显式字段仍可覆盖。Cerebras 有 Free Trial / 免费额度，但**不是无限免费**：官方 rate limits 按模型限制 RPM/TPM（如 `gpt-oss-120b` 5 RPM / 30K TPM），模型名和额度会变，启用前用 `/v1/models` 或[官方 rate limits](https://inference-docs.cerebras.ai/support/rate-limits)（2026-11-26 核对）确认。
 - **不会串池**：provider 账号不进 credits 加权；CodeBuddy 账号也不会被误派到 provider 端点。
 - **面板**：账号卡显示 provider 徽标，顶部汇总条给出每个 provider 的账号数与启用状态。
 
