@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"yg-gateway/internal/pool"
@@ -26,11 +27,11 @@ func TestStatusGuardrailBlockAlwaysVisible(t *testing.T) {
 	}
 	var body struct {
 		Guardrail *struct {
-			Samples       int     `json:"samples"`
-			WarnTokens    int64   `json:"warn_tokens"`
-			MaxTokens     int64   `json:"max_tokens"`
-			SessionRPM    int     `json:"session_rpm"`
-			WarnHits      int64   `json:"warn_hits"`
+			Samples       int   `json:"samples"`
+			WarnTokens    int64 `json:"warn_tokens"`
+			MaxTokens     int64 `json:"max_tokens"`
+			SessionRPM    int   `json:"session_rpm"`
+			WarnHits      int64 `json:"warn_hits"`
 			EstVsUpstream *struct {
 				N      int     `json:"n"`
 				Median float64 `json:"median"`
@@ -48,6 +49,9 @@ func TestStatusGuardrailBlockAlwaysVisible(t *testing.T) {
 	}
 	if body.Guardrail.WarnTokens != 500000 || body.Guardrail.MaxTokens != 1000000 || body.Guardrail.SessionRPM != 20 {
 		t.Errorf("阈值透出错误: %+v", body.Guardrail)
+	}
+	if strings.Contains(rec.Body.String(), "last_hit_at") {
+		t.Errorf("零命中时不应出现 last_hit_at（零值时间不许冒充观测）")
 	}
 
 	// 落一条对照样本后，同一块内 samples 与 est_vs_upstream 应同时出现。

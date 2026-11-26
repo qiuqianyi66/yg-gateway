@@ -80,7 +80,7 @@ func TestGuardrailWarnNotBlocking(t *testing.T) {
 	if gs.WarnHits != 1 || gs.BlockedHits != 0 {
 		t.Fatalf("命中统计 = %+v，want warn=1 blocked=0", gs)
 	}
-	if gs.LastHitAt.IsZero() {
+	if gs.LastHitAt == nil || gs.LastHitAt.IsZero() {
 		t.Fatalf("LastHitAt 未记录")
 	}
 }

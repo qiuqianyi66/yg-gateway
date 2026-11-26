@@ -77,7 +77,7 @@ type GuardrailStats struct {
 	WarnHits       int64             `json:"warn_hits,omitempty"`
 	BlockedHits    int64             `json:"blocked_hits,omitempty"`
 	SessionRPMHits int64             `json:"session_rpm_hits,omitempty"`
-	LastHitAt      time.Time         `json:"last_hit_at,omitempty"`
+	LastHitAt      *time.Time        `json:"last_hit_at,omitempty"`
 	Calibration    []GuardrailSample `json:"calibration_samples,omitempty"`
 	EstVsUpstream  *GuardrailRatio   `json:"est_vs_upstream,omitempty"`
 
@@ -171,10 +171,12 @@ func (g *Guardrail) Check(sessKey string, est int64) GuardrailDecision {
 	switch d.Result {
 	case GuardrailWarn:
 		g.stats.WarnHits++
-		g.stats.LastHitAt = now
+		hit := now
+		g.stats.LastHitAt = &hit
 	case GuardrailBlocked:
 		g.stats.BlockedHits++
-		g.stats.LastHitAt = now
+		hit := now
+		g.stats.LastHitAt = &hit
 	}
 
 	if g.sessionRPM > 0 && sessKey != "" {
@@ -189,7 +191,8 @@ func (g *Guardrail) Check(sessKey string, est int64) GuardrailDecision {
 		if w.count > g.sessionRPM {
 			d.RateLimited = true
 			g.stats.SessionRPMHits++
-			g.stats.LastHitAt = now
+			hit := now
+			g.stats.LastHitAt = &hit
 		}
 	}
 	return d
