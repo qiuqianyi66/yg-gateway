@@ -97,6 +97,28 @@ func TestCountTokensMalformedAndEmpty(t *testing.T) {
 	}
 }
 
+// TestEstimateBreakdownParts 估算构成必须可分解：宽字符/其余字符/图片块各自计数，
+// 总数由三者重建（2026-11-26 起归档同行落构成，用于按组成拟合权重）。
+func TestEstimateBreakdownParts(t *testing.T) {
+	raw := []byte(`{"messages":[{"content":"中文ab"},{"content":[{"type":"image_url","image_url":{"url":"data:image/png;base64,QUJD"}}]}]}`)
+	var b estBreakdown
+	b = estimateBreakdownJSON(raw)
+	// 字符串叶子：内容 "中文ab"（wide 2 / other 2）+ 块类型 "image_url"（other 9）；图片 1 块。
+	if b.Wide != 2 || b.Other != 11 || b.Images != 1 {
+		t.Fatalf("构成错误: %+v（want wide=2 other=11 images=1）", b)
+	}
+	if got, want := b.tokens(), 2+5+imageTokenCost; got != want {
+		t.Fatalf("tokens=%d want=%d（总数必须由三者重建）", got, want)
+	}
+	// Anthropic base64 源整块计一张图，块内字符串（含 media_type）不再按字符计；
+	// 外层 content 块类型 "image" 仍按文本计（other 5）。
+	raw2 := []byte(`{"messages":[{"content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"QUJDQUJD"}}]}]}`)
+	b2 := estimateBreakdownJSON(raw2)
+	if b2.Images != 1 || b2.Other != 5 || b2.Wide != 0 {
+		t.Fatalf("anthropic 源构成错误: %+v（want images=1 other=5）", b2)
+	}
+}
+
 func TestCountTokensBodyLimit(t *testing.T) {
 	h := NewHandler(Config{MaxBodyBytes: 16})
 	rec := doCountTokens(t, h, `{"messages":["`+strings.Repeat("x", 64)+`"]}`)

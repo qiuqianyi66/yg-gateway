@@ -80,21 +80,26 @@ type Event struct {
 	// Kind 调用种类（上方词表）。缺失 = 未知：V3-8 之前的历史归档行没有该字段，
 	// 消费方必须按三值处理（chat/probe/farming/缺失），禁止把空串读成 chat——
 	// 与 /v1/models 的三值口径同源（字段省略表达未知，不改变 wire 形状）。
-	Kind             string  `json:"kind,omitempty"`
-	Account          string  `json:"account,omitempty"`
-	Model            string  `json:"model,omitempty"`
-	Status           int     `json:"status"`
-	OK               bool    `json:"ok"`
-	Outcome          string  `json:"outcome"`
-	DurationMs       int64   `json:"duration_ms"`
-	TTFBMs           int64   `json:"ttfb_ms,omitempty"`
-	Attempts         int     `json:"attempts,omitempty"`
-	PromptTokens     int64   `json:"prompt_tokens,omitempty"`
+	Kind         string `json:"kind,omitempty"`
+	Account      string `json:"account,omitempty"`
+	Model        string `json:"model,omitempty"`
+	Status       int    `json:"status"`
+	OK           bool   `json:"ok"`
+	Outcome      string `json:"outcome"`
+	DurationMs   int64  `json:"duration_ms"`
+	TTFBMs       int64  `json:"ttfb_ms,omitempty"`
+	Attempts     int    `json:"attempts,omitempty"`
+	PromptTokens int64  `json:"prompt_tokens,omitempty"`
 	// EstPromptTokens 护栏对本次请求 prompt 的估算（derivation 启发式，非上游值）。
 	// 为什么与 prompt_tokens 同列：两者成对才能离线复算估算偏差（校准闭环的长期
 	// 侧），/status 的 20 条环形样本只覆盖最近请求。纯增量字段：估算未参与（护栏
 	// 未装配或请求被限流提前拒）时不出现，历史行形态不变。
-	EstPromptTokens  int64   `json:"est_prompt_tokens,omitempty"`
+	EstPromptTokens int64 `json:"est_prompt_tokens,omitempty"`
+	// 估算构成（2026-11-26 起）：图片块数 / 宽字符数 / 其余字符数。与
+	// est_prompt_tokens 同行，供按构成分组拟合权重；纯增量字段，历史行形态不变。
+	EstImages        int     `json:"est_images,omitempty"`
+	EstWideChars     int     `json:"est_wide_chars,omitempty"`
+	EstOtherChars    int     `json:"est_other_chars,omitempty"`
 	CompletionTokens int64   `json:"completion_tokens,omitempty"`
 	TotalTokens      int64   `json:"total_tokens,omitempty"`
 	Credit           float64 `json:"credit,omitempty"`

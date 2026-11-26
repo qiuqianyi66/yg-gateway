@@ -282,9 +282,11 @@ func (h *Handler) applyGuardrail(w http.ResponseWriter, r *http.Request, sessKey
 	if h.guardrail == nil {
 		return false
 	}
-	est := int64(estimateTokensJSON(reqView.Raw("system")) +
-		estimateTokensJSON(reqView.Raw("messages")) +
-		estimateTokensJSON(reqView.Raw("tools")))
+	var bd estBreakdown
+	bd.merge(estimateBreakdownJSON(reqView.Raw("system")))
+	bd.merge(estimateBreakdownJSON(reqView.Raw("messages")))
+	bd.merge(estimateBreakdownJSON(reqView.Raw("tools")))
+	est := int64(bd.tokens())
 	d := h.guardrail.Check(sessKey, est)
 	// 对照样本覆盖**所有放行请求**，不再只在 warn 命中时置位。
 	// 为什么改：2026-11-26 实弹 325 请求、guardrail_stats 恒为空——warn 阈值 500k
@@ -295,6 +297,11 @@ func (h *Handler) applyGuardrail(w http.ResponseWriter, r *http.Request, sessKey
 		run.guardrailEst = est
 		if run.st != nil {
 			run.st.estPrompt = est // 归档行与上游 prompt_tokens 成对落下（长期校准）
+			// 构成同行落下：只凭比率无法区分「图片固定成本偏高」与「文本密度偏低」，
+			// 分组拟合需要原语（2026-11-26 尾部 1.86 的归因就卡在这里）。
+			run.st.estImages = bd.Images
+			run.st.estWideChars = bd.Wide
+			run.st.estOtherChars = bd.Other
 		}
 	}
 	switch {

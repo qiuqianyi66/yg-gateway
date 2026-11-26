@@ -44,24 +44,29 @@ func SetChatLogOutput(w io.Writer) { chatLogOut = w }
 
 // chatStat 单个 chat 请求的日志统计；handler 挂 defer，请求出口后落一行。
 type chatStat struct {
-	start            time.Time
-	model            string
-	mode             string // "stream" | "sync"
-	uid              string // 完整 uid，展示时只取前 8 位
-	nick             string // 账号昵称（随选号同步），流水行经 logfmt.Label 拼成 "昵称(uid8)"
-	ttfb             time.Duration
-	toks             int // <0 表示 usage 缺失 → 显示 "-"
-	status           int
-	requestID        string
-	outcome          string
-	attempts         int
-	credit           float64
-	hasCredit        bool
-	promptTokens     int64
+	start        time.Time
+	model        string
+	mode         string // "stream" | "sync"
+	uid          string // 完整 uid，展示时只取前 8 位
+	nick         string // 账号昵称（随选号同步），流水行经 logfmt.Label 拼成 "昵称(uid8)"
+	ttfb         time.Duration
+	toks         int // <0 表示 usage 缺失 → 显示 "-"
+	status       int
+	requestID    string
+	outcome      string
+	attempts     int
+	credit       float64
+	hasCredit    bool
+	promptTokens int64
 	// estPrompt 护栏估算的 prompt token（derivation）。与 promptTokens（上游实际）
 	// 同一条归档行里成对出现，才使「估算 vs 实际」可长期离线复算——/status 的
 	// 对照环形样本只留 20 条（近期），跨天校准只能靠归档。
-	estPrompt        int64
+	estPrompt int64
+	// 估算构成（校准归因用）：图片块数、宽字符数、其余字符数。与 estPrompt 同源，
+	// 三者能重建出当时的权重假设；只剩总数时无法判断偏差来自图片还是文本。
+	estImages        int
+	estWideChars     int
+	estOtherChars    int
 	completionTokens int64
 	totalTokens      int64
 	// 缓存命中观测（usage.prompt_cache_hit_tokens / miss）：上游给到才有效。
@@ -415,6 +420,9 @@ func (t *requestTrace) event(status int) reqlog.Event {
 		e.Attempts = s.attempts
 		e.PromptTokens = s.promptTokens
 		e.EstPromptTokens = s.estPrompt
+		e.EstImages = s.estImages
+		e.EstWideChars = s.estWideChars
+		e.EstOtherChars = s.estOtherChars
 		e.CompletionTokens = s.completionTokens
 		e.TotalTokens = s.totalTokens
 		e.Credit = s.credit

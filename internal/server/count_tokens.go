@@ -62,50 +62,91 @@ func estimateTokens(s string) int {
 	return wide + (other*textTokenPermille+999)/1000
 }
 
-// estimateTokensValue 递归累加通用值里全部字符串叶子的估算；数值/布尔不计。
-// 图片载荷例外：OpenAI 的 data:image/ URL 与 Anthropic 的 base64 source 都按
-// 固定 imageTokenCost 计，不把 base64 字符当文本（见 imageTokenCost 注释）。
-func estimateTokensValue(v any) int {
+// estBreakdown 估算构成（校准用）：宽字符/其他字符/图片张数。
+// 为什么需要：只有总数时，估算偏高偏低只能看比率猜来源（2026-11-26 实弹：
+// 小请求 p90 1.86、大请求 0.92，无法判断是图片固定成本还是文本密度）。
+// 归档按请求落这三项，才能按构成分组拟合权重，而不是拿一个平均数硬调。
+type estBreakdown struct {
+	Wide   int // CJK 全角字符数（≥0x2E80）
+	Other  int // 其余字符数
+	Images int // 图片块数（按固定视觉成本计）
+}
+
+func (b *estBreakdown) addString(s string) {
+	if isImageDataURL(s) {
+		b.Images++
+		return
+	}
+	for _, r := range s {
+		if r >= 0x2E80 {
+			b.Wide++
+		} else {
+			b.Other++
+		}
+	}
+}
+
+func (b *estBreakdown) merge(o estBreakdown) {
+	b.Wide += o.Wide
+	b.Other += o.Other
+	b.Images += o.Images
+}
+
+func (b estBreakdown) tokens() int {
+	return b.Wide + (b.Other*textTokenPermille+999)/1000 + b.Images*imageTokenCost
+}
+
+func walkEst(v any, b *estBreakdown) {
 	switch t := v.(type) {
 	case string:
-		if isImageDataURL(t) {
-			return imageTokenCost
-		}
-		return estimateTokens(t)
+		b.addString(t)
 	case []any:
-		n := 0
 		for _, e := range t {
-			n += estimateTokensValue(e)
+			walkEst(e, b)
 		}
-		return n
 	case map[string]any:
 		// Anthropic 图片源 {"type":"base64","media_type":"image/...","data":"<raw b64>"}：
 		// 载荷是无 data: 前缀的裸 base64，字符串层认不出，这里按整块固定成本计。
 		if t["type"] == "base64" {
 			if data, ok := t["data"].(string); ok && len(data) > 0 {
-				return imageTokenCost
+				b.Images++
+				return
 			}
 		}
-		n := 0
 		for _, e := range t {
-			n += estimateTokensValue(e)
+			walkEst(e, b)
 		}
-		return n
 	}
-	return 0
+}
+
+// estimateTokensValue 递归累加通用值里全部字符串叶子的估算；数值/布尔不计。
+// 图片载荷例外：OpenAI 的 data:image/ URL 与 Anthropic 的 base64 source 都按
+// 固定 imageTokenCost 计，不把 base64 字符当文本（见 imageTokenCost 注释）。
+func estimateTokensValue(v any) int {
+	var b estBreakdown
+	walkEst(v, &b)
+	return b.tokens()
+}
+
+// estimateBreakdownJSON 解析一段 JSON 并返回构成；空段/不可解析（畸形子段）
+// 返回零值（宽容语义，不因局部畸形拒整体）。
+func estimateBreakdownJSON(raw json.RawMessage) estBreakdown {
+	var b estBreakdown
+	if len(raw) == 0 {
+		return b
+	}
+	var v any
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return b
+	}
+	walkEst(v, &b)
+	return b
 }
 
 // estimateTokensJSON 解析一段 JSON 并估算其字符串叶子；空段/不可解析（畸形子段）
 // 返回 0（宽容语义，不因局部畸形拒整体）。
 func estimateTokensJSON(raw json.RawMessage) int {
-	if len(raw) == 0 {
-		return 0
-	}
-	var v any
-	if err := json.Unmarshal(raw, &v); err != nil {
-		return 0
-	}
-	return estimateTokensValue(v)
+	return estimateBreakdownJSON(raw).tokens()
 }
 
 // countTokens POST /v1/messages/count_tokens。入站 body 上限与聊天同源
