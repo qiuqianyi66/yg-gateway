@@ -80,6 +80,13 @@ type GuardrailStats struct {
 	LastHitAt      time.Time         `json:"last_hit_at,omitempty"`
 	Calibration    []GuardrailSample `json:"calibration_samples,omitempty"`
 	EstVsUpstream  *GuardrailRatio   `json:"est_vs_upstream,omitempty"`
+
+	// 2026-11-26 追加：样本数为 0 时也要能看出「护栏已开、校准在收样本」，
+	// 否则 /status 整块消失，与「护栏没装/代码没生效」无法区分（当天实弹踩过一次）。
+	Samples    int   `json:"samples"`
+	WarnTokens int64 `json:"warn_tokens,omitempty"`
+	MaxTokens  int64 `json:"max_tokens,omitempty"`
+	SessionRPM int   `json:"session_rpm,omitempty"`
 }
 
 // guardrailCalibrationMax 对照样本上限（FIFO，防无限增长）。
@@ -225,6 +232,10 @@ func (g *Guardrail) Snapshot() GuardrailStats {
 	cp := g.stats
 	cp.Calibration = append([]GuardrailSample(nil), g.stats.Calibration...)
 	cp.EstVsUpstream = ratioSummary(cp.Calibration)
+	cp.Samples = len(cp.Calibration)
+	cp.WarnTokens = g.warnTokens
+	cp.MaxTokens = g.maxTokens
+	cp.SessionRPM = g.sessionRPM
 	return cp
 }
 

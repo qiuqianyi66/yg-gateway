@@ -390,8 +390,10 @@ func TestApplyGuardrailSessionRPM429(t *testing.T) {
 	}
 }
 
-func TestStatusOmitsGuardrailStatsWhenNoHits(t *testing.T) {
-	// G7：无任何命中时 /status 不输出 guardrail_stats 键（未知表达，与 agent_profile 同源）。
+func TestStatusExposesGuardrailStatsWhenNoHits(t *testing.T) {
+	// 2026-11-26 契约变更：护栏装配后即使零命中 / 零样本也输出 guardrail_stats，
+	// 块内 samples=0 表示「已开、还没样本」。旧契约（整块省略）无法区分「没命中」与
+	// 「没生效」，实弹时误判过一次；空态细节见 status_guardrail_test.go。
 	h := NewHandler(Config{Pool: testPoolWith(), Upstream: upstream.New(), Guardrail: NewGuardrail()})
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest("GET", "/status", nil))
@@ -399,8 +401,15 @@ func TestStatusOmitsGuardrailStatsWhenNoHits(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 		t.Fatalf("status 非 JSON：%v", err)
 	}
-	if _, ok := body["guardrail_stats"]; ok {
-		t.Fatalf("无命中时不应输出 guardrail_stats 键")
+	gs, ok := body["guardrail_stats"].(map[string]any)
+	if !ok {
+		t.Fatalf("护栏装配后应恒输出 guardrail_stats 键")
+	}
+	if gs["samples"] != float64(0) {
+		t.Fatalf("samples = %v, want 0", gs["samples"])
+	}
+	if _, hit := gs["warn_hits"]; hit {
+		t.Fatalf("零命中时不应输出 warn_hits")
 	}
 }
 
