@@ -5,10 +5,15 @@
 成本），它的正确性靠「归档行里 est_prompt_tokens 与 prompt_tokens 成对」来持续核对。
 /status 的 est_vs_upstream 只保留最近 20 条环形样本，跨天趋势只能从这里看。
 
-判据（预登记，改动前先改这里）：
-  样本 >= 20 才裁决；中位比率必须落在 [0.90, 1.10]，p90 不得超过 1.60。
-  中位低于 0.90 = 系统性低估（会漏拦，上游真 413 风险）；高于 1.10 = 系统性保守
-  （假性 413、压缩提前）；p90 超 1.60 = 尾部图多请求偏差过大。
+判据（预登记，改动前先改这里；2026-11-26 16:20 收紧）：
+  样本 >= 20 才裁决；中位比率必须落在 [0.95, 1.05]，p90 不得超过 1.25。
+  中位低于 0.95 = 系统性低估（会漏拦，上游真 413 风险）；高于 1.05 = 系统性保守
+  （假性 413、压缩提前）；p90 超 1.25 = 尾部偏差过大。
+
+  为什么从 [0.90,1.10]/1.60 收紧：结构字节（0.10 token/字节）计入后，真实流量 72 条
+  的 median=1.01、p90=1.03（其中 200k+ 的 71 条 median=1.01、max=1.03），旧带宽只剩
+  「什么都测不出来」的余量。新的 ±5% 带仍留有一定噪声余量（p90 实测 1.03），但能更早
+  发现权重回归；换模型/换上游计费口径时应先重跑拟合再加宽。
 
 退出码（四态）：
   0 = 在带内        1 = 漂移（需要重拟合）        2 = 样本不足（未知，不裁决）
@@ -22,8 +27,8 @@ import re
 import statistics
 import sys
 
-BAND_MEDIAN = (0.90, 1.10)
-BAND_P90 = 1.60
+BAND_MEDIAN = (0.95, 1.05)
+BAND_P90 = 1.25
 MIN_SAMPLES = 20
 
 
@@ -106,6 +111,17 @@ def main():
         print("insufficient samples: %d < %d，不裁决" % (s["n"], MIN_SAMPLES))
         return 2
     v = verdict(s)
+    # 分桶只做「看得见」用，不参与裁决：小请求（代码/JSON 载荷密度低）天然会高估，
+    # 混在大样本里会被中位数掩盖；这里单独列出，避免哪天它变成主要流量还没人发现。
+    buckets = {"<10k": [], "10-50k": [], "50-200k": [], "200k+": []}
+    for _, est, up in pairs:
+        key = "<10k" if up < 10000 else "10-50k" if up < 50000 else "50-200k" if up < 200000 else "200k+"
+        buckets[key].append((est, up))
+    for key, rows in buckets.items():
+        if not rows:
+            continue
+        bs = summarize([(None, e, u) for e, u in rows])
+        print("  by upstream %-8s n=%-3d median=%.2f p90=%.2f" % (key, bs["n"], bs["median"], bs["p90"]))
     print(f"verdict: {v}")
     return 0 if v == "OK" else 1
 

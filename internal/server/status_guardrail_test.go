@@ -35,6 +35,7 @@ func TestStatusGuardrailBlockAlwaysVisible(t *testing.T) {
 			EstVsUpstream *struct {
 				N      int     `json:"n"`
 				Median float64 `json:"median"`
+				P90    float64 `json:"p90"`
 			} `json:"est_vs_upstream"`
 		} `json:"guardrail_stats"`
 	}
@@ -66,5 +67,9 @@ func TestStatusGuardrailBlockAlwaysVisible(t *testing.T) {
 	}
 	if got := body.Guardrail.EstVsUpstream.Median; got < 1.08 || got > 1.10 {
 		t.Errorf("median = %v, want ≈1.09", got)
+	}
+	// 单样本时 p90 必须与 median 同值（同一秩），防止尾部指标写成固定 0/省略。
+	if got := body.Guardrail.EstVsUpstream.P90; got < 1.08 || got > 1.10 {
+		t.Errorf("p90 = %v, want ≈1.09（单样本应与 median 同值）", got)
 	}
 }

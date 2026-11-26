@@ -67,6 +67,7 @@ type GuardrailSample struct {
 type GuardrailRatio struct {
 	N      int     `json:"n"`
 	Median float64 `json:"median"`
+	P90    float64 `json:"p90"`
 	Min    float64 `json:"min"`
 	Max    float64 `json:"max"`
 }
@@ -263,9 +264,16 @@ func ratioSummary(samples []GuardrailSample) *GuardrailRatio {
 	if len(ratios)%2 == 0 {
 		med = (ratios[len(ratios)/2-1] + ratios[len(ratios)/2]) / 2
 	}
+	// p90：中位只能看出「整体准不准」，尾部（图多/代码载荷）要靠它。取与
+	// check-est-drift.py 同口径的最近秩（len*0.9 向下取整），两处判据才不会打架。
+	p90 := ratios[int(float64(len(ratios))*0.9)]
+	if p90 > ratios[len(ratios)-1] {
+		p90 = ratios[len(ratios)-1]
+	}
 	return &GuardrailRatio{
 		N:      len(ratios),
 		Median: math.Round(med*100) / 100,
+		P90:    math.Round(p90*100) / 100,
 		Min:    math.Round(ratios[0]*100) / 100,
 		Max:    math.Round(ratios[len(ratios)-1]*100) / 100,
 	}
