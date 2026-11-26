@@ -71,6 +71,7 @@ const (
 	ErrImageInvalid                  // 图片请求格式/数据无效 → 请求级错误：不罚号、不轮转，末端透传原文
 	ErrClient                        // 其他 4xx / 业务错误
 	ErrProvider                      // 非 codebuddy provider 的显式错误（有独立端点与状态码，不代表池内账号不可用）
+	ErrModelForbidden                // 11158 当前账号类型无该模型权限（账号/模型级 entitlement，不是请求体错误）
 )
 
 func (k ErrKind) String() string {
@@ -103,6 +104,8 @@ func (k ErrKind) String() string {
 		return "client"
 	case ErrProvider:
 		return "provider"
+	case ErrModelForbidden:
+		return "model_forbidden"
 	default:
 		return "none"
 	}
@@ -638,6 +641,13 @@ func Classify(status int, body string) ErrKind {
 				return ErrContentBlocked
 			}
 		}
+		// 11158「model not allowed for user type」：账号类型没有该模型权限。
+		// 这不是请求体错误；不要把账号记成故障，也不要让末端退化成 503
+		// no_healthy_account（生产 2026-11-26 free 账号探测实锤）。
+		if status == http.StatusBadRequest &&
+			(codeMarker(lower, "11158") || strings.Contains(lower, "not allowed for user type")) {
+			return ErrModelForbidden
+		}
 		// 请求级参数问题一律归 ErrBadParams：不冷却/不熔断/不计错，且**不轮转**。
 		//
 		//   - 11101 Unmarshal chat params failed：上游解析请求体失败。网关侧截断已由
@@ -776,6 +786,12 @@ func inferEvidenceLevel(kind ErrKind, status int, body string) EvidenceLevel {
 	case ErrProvider:
 		// provider 的 HTTP 状态码本身就是权威信号（401/429/5xx）。
 		return EvidenceHigh
+	case ErrModelForbidden:
+		// 11158 精确业务码 = 确定性；文案 "not allowed for user type" 是中等证据。
+		if codeMarker(strings.ToLower(body), "11158") {
+			return EvidenceHigh
+		}
+		return EvidenceMedium
 	default:
 		return EvidenceNone
 	}

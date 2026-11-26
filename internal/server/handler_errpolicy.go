@@ -158,6 +158,10 @@ func (h *Handler) applyErrorPolicy(uid string, kind upstream.ErrKind, body, mode
 		if h.isKnownModel(model) {
 			h.cfg.Pool.BlockModelBackoff(uid, model, upstream.ModelBlockReason)
 		}
+	case upstream.ErrModelForbidden:
+		// 11158「当前账号类型没有该模型权限」：账号本身健康，只是 entitlement
+		// 不覆盖该模型。**不冷却、不 NoteError/NoteFailures**；允许换到可能有
+		// 更高账号类型的号上重试，全池都不允许时由末端映射成 400 原文透传。
 	default:
 		// 其余（ErrClient/ErrNone）：只换号不罚（防雪崩），不喂熔断。
 		// ErrClient（未知 4xx）喂连败计数（issue #114）：连续 N 次该形态失败 →

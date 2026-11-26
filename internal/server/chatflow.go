@@ -311,6 +311,11 @@ func (h *Handler) finalErrorOf(
 			// 该做的是换个模型。用 400 + 明确的 code 把不可重试的性质讲清楚。
 			code = "model_unavailable"
 			status = http.StatusBadRequest
+		case upstream.ErrModelForbidden:
+			// 11158 账号类型无模型权限：不是池故障，也不是请求畸形；400 +
+			// 原文（含 requestId）让客户端明确「换号/换模型」的正确方向。
+			code = "model_forbidden"
+			status = http.StatusBadRequest
 		}
 		if s := strings.TrimSpace(ue.Msg); s != "" {
 			// 上游原文优先：透传 code/msg/requestId，不拼接本地前缀；但必须压成
