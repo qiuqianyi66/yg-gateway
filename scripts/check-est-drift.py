@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """check-est-drift.py —— 护栏估算 vs 上游实际的漂移守卫。
 
-为什么需要（2026-11-26 第五/六轮）：估算器是启发式（CJK 计 1、其余 1/4、图片固定
+为什么需要（2026-11-26 第五/六轮）：估算器是启发式（CJK 计 1、其余 0.38/字符、图片固定
 成本），它的正确性靠「归档行里 est_prompt_tokens 与 prompt_tokens 成对」来持续核对。
 /status 的 est_vs_upstream 只保留最近 20 条环形样本，跨天趋势只能从这里看。
 
@@ -14,9 +14,11 @@
   0 = 在带内        1 = 漂移（需要重拟合）        2 = 样本不足（未知，不裁决）
   3 = 没有归档文件
 """
+import argparse
 import glob
 import json
 import os
+import re
 import statistics
 import sys
 
@@ -25,7 +27,7 @@ BAND_P90 = 1.60
 MIN_SAMPLES = 20
 
 
-def load_pairs(days):
+def load_pairs(days, since=""):
     """返回 [(model, est, upstream)]，只取两值都已知的行（unknown 不冒充 0）。"""
     pairs = []
     files = []
@@ -43,8 +45,15 @@ def load_pairs(days):
                     continue
                 est = ev.get("est_prompt_tokens") or 0
                 up = ev.get("prompt_tokens") or 0
-                if est > 0 and up > 0:
-                    pairs.append((ev.get("model") or "-", est, up))
+                if est <= 0 or up <= 0:
+                    continue
+                ts = ev.get("time") or ""
+                if since and ts < since:
+                    continue
+                # model 字段带账号倍率标签（如 "cn:deepseek-v4.1-flash ×0.11"），
+                # 直接分组会把同一模型拆成按账号的多组、永远攒不满 20 条；按基名归并。
+                name = re.sub(r"\s+×[0-9.]+$", "", ev.get("model") or "-")
+                pairs.append((name, est, up))
     return pairs
 
 
@@ -71,12 +80,16 @@ def verdict(s):
 
 
 def main():
-    log_dir = sys.argv[1] if len(sys.argv) > 1 else r"D:\yg-gateway\data\request-logs"
+    ap = argparse.ArgumentParser(description="guardrail estimate drift guard")
+    ap.add_argument("log_dir", nargs="?", default=r"D:\yg-gateway\data\request-logs")
+    ap.add_argument("--since", default="", help="只统计 time >= 该 ISO 时间的行（换算法后复验用，如 2026-11-26T14:45:28）")
+    args = ap.parse_args()
+    log_dir = args.log_dir
     if not os.path.isdir(log_dir):
         print(f"no archive dir: {log_dir}")
         return 3
     days = [os.path.join(log_dir, "requests-*.jsonl")]
-    pairs = load_pairs(days)
+    pairs = load_pairs(days, args.since)
     if not pairs:
         print("insufficient samples: 0 pairs（归档里还没有带 est_prompt_tokens 的行）")
         return 2
