@@ -90,6 +90,11 @@ type Event struct {
 	TTFBMs           int64   `json:"ttfb_ms,omitempty"`
 	Attempts         int     `json:"attempts,omitempty"`
 	PromptTokens     int64   `json:"prompt_tokens,omitempty"`
+	// EstPromptTokens 护栏对本次请求 prompt 的估算（derivation 启发式，非上游值）。
+	// 为什么与 prompt_tokens 同列：两者成对才能离线复算估算偏差（校准闭环的长期
+	// 侧），/status 的 20 条环形样本只覆盖最近请求。纯增量字段：估算未参与（护栏
+	// 未装配或请求被限流提前拒）时不出现，历史行形态不变。
+	EstPromptTokens  int64   `json:"est_prompt_tokens,omitempty"`
 	CompletionTokens int64   `json:"completion_tokens,omitempty"`
 	TotalTokens      int64   `json:"total_tokens,omitempty"`
 	Credit           float64 `json:"credit,omitempty"`

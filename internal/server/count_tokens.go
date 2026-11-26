@@ -28,7 +28,12 @@ import (
 // 估成 ~16 万 token，6-7 张图即假性击穿 1M 护栏（2026-11-26 DSH 考试会话
 // 实弹：估算 107 万 vs 上游实际 usage 5-8 万）。图片一律按固定成本计，
 // 真实偏差由 /status calibration 样本持续校准。
-const imageTokenCost = 2000
+//
+// 取值来源（2026-11-26 校准）：两个真实会话重放 552 组「估算 vs 上游 usage」配对
+// 样本、3482 次图片出现，最小二乘拟合单图成本 = 1248；原拍 2000 使图多步骤
+// 估算/实际 p90 = 1.48（偏保守 48%）。取 1450 = 拟合值 + 16% 余量（护栏宁保守
+// 勿漏拦），校准后 p90 ≈ 1.39、中位 ≈ 0.99。样本不足或换模型时应重拟合。
+const imageTokenCost = 1450
 
 // isImageDataURL 识别 OpenAI 形状的内联图片（data:image/...;base64,...）。
 func isImageDataURL(s string) bool {

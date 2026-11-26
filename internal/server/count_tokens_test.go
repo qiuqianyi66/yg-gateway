@@ -174,3 +174,13 @@ func TestCountTokensHTTPImageURLStillText(t *testing.T) {
 		t.Fatalf("http URL 不应按整图成本计：%d", n)
 	}
 }
+
+// imageTokenCost 是校准值（2026-11-26 拟合 1248 + 16% 余量），不是随手写的常数。
+// 这条守卫防止后续调参把护栏调回「拍脑袋」区间：
+//   - 低于 1200 会跌破拟合值，图多请求转为系统性低估（漏拦）；
+//   - 高于 1700 会让图多请求回到 1.4 倍以上的保守偏差（假性 413）。
+func TestImageTokenCostInsideCalibratedBand(t *testing.T) {
+	if imageTokenCost < 1200 || imageTokenCost > 1700 {
+		t.Fatalf("imageTokenCost = %d，超出校准区间 [1200,1700]（拟合值 1248，见 count_tokens.go 注释）", imageTokenCost)
+	}
+}

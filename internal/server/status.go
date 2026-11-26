@@ -114,10 +114,12 @@ func (h *Handler) status(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// guardrail_stats 上下文护栏命中（REQ-context-guardrail-2026-10-31 / ADR-019）：
-	// 无任何命中时整块省略（与 agent_profile / task_metrics 同源，键缺失 = 未观测，
-	// 不是「零命中」）。估算 vs 上游对照样本（Calibration）随块透出供权重校准。
+	// 无命中且无对照样本时整块省略（与 agent_profile / task_metrics 同源，键缺失 =
+	// 未观测，不是「零命中」）。估算 vs 上游对照样本（Calibration / EstVsUpstream）
+	// 随块透出供权重校准——2026-11-26 起所有放行请求都会落样本，故「有样本无命中」
+	// 是常态，必须一并透出，否则校准闭环仍然看不见。
 	if h.guardrail != nil {
-		if gs := h.guardrail.Snapshot(); gs.WarnHits+gs.BlockedHits+gs.SessionRPMHits > 0 {
+		if gs := h.guardrail.Snapshot(); gs.WarnHits+gs.BlockedHits+gs.SessionRPMHits > 0 || len(gs.Calibration) > 0 {
 			body["guardrail_stats"] = gs
 		}
 	}

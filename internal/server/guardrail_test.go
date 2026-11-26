@@ -431,6 +431,84 @@ func TestStatusShowsGuardrailStatsAfterHits(t *testing.T) {
 	}
 }
 
+func TestApplyGuardrailSetsEstOnPass(t *testing.T) {
+	// 校准闭环前置条件：放行（未达任何阈值）的请求也必须置 run.guardrailEst，
+	// 否则上游 usage 回来后没有估算值可比，样本永远为空（2026-11-26 实弹：
+	// 325 请求 /status 恒为 {}，因为 est 只在 warn 分支置位，而 warn 阈值 500k）。
+	g := NewGuardrail()
+	g.SetContextWarnTokens(1000) // 远高于本请求估算 → 纯放行
+	g.SetContextMaxTokens(2000)
+	h := NewHandler(Config{Guardrail: g})
+	view, body := viewWithMessages(t, "hi")
+	req, tr := guardrailTestRequest(t, body)
+	run := &chatRun{st: &chatStat{}}
+
+	rec := httptest.NewRecorder()
+	if h.applyGuardrail(rec, req, "sess", view, run) {
+		t.Fatalf("未达阈值不得阻断")
+	}
+	if rec.Code != http.StatusOK {
+		t.Fatalf("放行不应写响应体：Code=%d", rec.Code)
+	}
+	if tr.guardrailHit != "" {
+		t.Fatalf("放行不应打命中标记，got %q", tr.guardrailHit)
+	}
+	if run.guardrailEst <= 0 {
+		t.Fatalf("放行路径未置 guardrailEst（校准样本将永远为空）")
+	}
+	if run.st != nil && run.st.estPrompt != run.guardrailEst {
+		t.Fatalf("归档 estPrompt = %d，want %d（与护栏估算同值）", run.st.estPrompt, run.guardrailEst)
+	}
+}
+
+func TestGuardrailSnapshotRatioSummary(t *testing.T) {
+	// EstVsUpstream：中位/极值比率，round 2 位；upstream<=0 不进表。
+	g := NewGuardrail()
+	g.RecordCalibration(100, 100) // 1.00
+	g.RecordCalibration(120, 100) // 1.20
+	g.RecordCalibration(80, 100)  // 0.80
+	g.RecordCalibration(500, 0)   // 上游缺失，丢弃
+
+	gs := g.Snapshot()
+	r := gs.EstVsUpstream
+	if r == nil || r.N != 3 {
+		t.Fatalf("EstVsUpstream = %+v，want N=3", r)
+	}
+	if r.Median != 1.00 || r.Min != 0.80 || r.Max != 1.20 {
+		t.Fatalf("中位/极值 = %.2f/%.2f/%.2f，want 1.00/0.80/1.20", r.Median, r.Min, r.Max)
+	}
+
+	if NewGuardrail().Snapshot().EstVsUpstream != nil {
+		t.Fatalf("无样本时不应有 EstVsUpstream")
+	}
+}
+
+func TestStatusShowsGuardrailStatsWithSamplesOnly(t *testing.T) {
+	// 常态场景：只有校准样本、零命中——guardrail_stats 仍须透出（否则校准看不见）。
+	g := NewGuardrail()
+	g.SetContextWarnTokens(1000)
+	h := NewHandler(Config{Pool: testPoolWith(), Upstream: upstream.New(), Guardrail: g})
+	g.RecordCalibration(60, 58)
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("GET", "/status", nil))
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("status 非 JSON：%v", err)
+	}
+	gs, ok := body["guardrail_stats"].(map[string]any)
+	if !ok {
+		t.Fatalf("有对照样本时 guardrail_stats 不应省略")
+	}
+	ratio, ok := gs["est_vs_upstream"].(map[string]any)
+	if !ok {
+		t.Fatalf("est_vs_upstream 缺失")
+	}
+	if ratio["n"].(float64) != 1 || ratio["median"].(float64) != 1.03 {
+		t.Fatalf("est_vs_upstream = %v，want n=1 median=1.03", ratio)
+	}
+}
+
 // ---- 测试辅助 ----
 
 // viewWithMessages 构造带 messages 的 RequestView，返回视图与其原始 body。

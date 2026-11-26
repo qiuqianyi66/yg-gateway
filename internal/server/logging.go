@@ -58,6 +58,10 @@ type chatStat struct {
 	credit           float64
 	hasCredit        bool
 	promptTokens     int64
+	// estPrompt 护栏估算的 prompt token（derivation）。与 promptTokens（上游实际）
+	// 同一条归档行里成对出现，才使「估算 vs 实际」可长期离线复算——/status 的
+	// 对照环形样本只留 20 条（近期），跨天校准只能靠归档。
+	estPrompt        int64
 	completionTokens int64
 	totalTokens      int64
 	// 缓存命中观测（usage.prompt_cache_hit_tokens / miss）：上游给到才有效。
@@ -410,6 +414,7 @@ func (t *requestTrace) event(status int) reqlog.Event {
 		e.TTFBMs = s.ttfb.Milliseconds()
 		e.Attempts = s.attempts
 		e.PromptTokens = s.promptTokens
+		e.EstPromptTokens = s.estPrompt
 		e.CompletionTokens = s.completionTokens
 		e.TotalTokens = s.totalTokens
 		e.Credit = s.credit

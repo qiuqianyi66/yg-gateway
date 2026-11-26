@@ -17,7 +17,9 @@ package server
 
 import (
 	"fmt"
+	"math"
 	"net/http"
+	"sort"
 	"sync"
 	"time"
 
@@ -57,14 +59,27 @@ type GuardrailSample struct {
 	Upstream int64 `json:"upstream"`
 }
 
-// GuardrailStats /status 聚合视图。无命中时整块省略（unknown 表达，与 agent_profile
-// 同源——缺失不是「零命中」，是「无观测」，实现侧由 handler 判断省略）。
+// GuardrailRatio 对照样本的比率汇总（est/upstream），供直接判断估算偏保守/偏激进。
+//
+// 为什么需要：原始样本逐条看要自己除法，且样本 FIFO 只留 20 条——真正被消费的是
+// 「估算比上游高/低多少」。2026-11-26 实弹：552 组会话语义重放样本中位比 1.02、
+// p90 1.48（图多时偏保守），单图成本拟合 1248（原拍 2000）。
+type GuardrailRatio struct {
+	N      int     `json:"n"`
+	Median float64 `json:"median"`
+	Min    float64 `json:"min"`
+	Max    float64 `json:"max"`
+}
+
+// GuardrailStats /status 聚合视图。无命中且无对照样本时整块省略（unknown 表达，与
+// agent_profile 同源——缺失不是「零命中」，是「无观测」，实现侧由 handler 判断省略）。
 type GuardrailStats struct {
 	WarnHits       int64             `json:"warn_hits,omitempty"`
 	BlockedHits    int64             `json:"blocked_hits,omitempty"`
 	SessionRPMHits int64             `json:"session_rpm_hits,omitempty"`
 	LastHitAt      time.Time         `json:"last_hit_at,omitempty"`
 	Calibration    []GuardrailSample `json:"calibration_samples,omitempty"`
+	EstVsUpstream  *GuardrailRatio   `json:"est_vs_upstream,omitempty"`
 }
 
 // guardrailCalibrationMax 对照样本上限（FIFO，防无限增长）。
@@ -209,7 +224,37 @@ func (g *Guardrail) Snapshot() GuardrailStats {
 	defer g.mu.Unlock()
 	cp := g.stats
 	cp.Calibration = append([]GuardrailSample(nil), g.stats.Calibration...)
+	cp.EstVsUpstream = ratioSummary(cp.Calibration)
 	return cp
+}
+
+// ratioSummary 把 20 条对照样本压成中位/极值比率（est/upstream）。
+// 无可比样本（upstream ≤ 0 已被 RecordCalibration 挡掉）时返回 nil，键随 omitempty 消失。
+func ratioSummary(samples []GuardrailSample) *GuardrailRatio {
+	if len(samples) == 0 {
+		return nil
+	}
+	ratios := make([]float64, 0, len(samples))
+	for _, s := range samples {
+		if s.Upstream <= 0 {
+			continue
+		}
+		ratios = append(ratios, float64(s.Est)/float64(s.Upstream))
+	}
+	if len(ratios) == 0 {
+		return nil
+	}
+	sort.Float64s(ratios)
+	med := ratios[len(ratios)/2]
+	if len(ratios)%2 == 0 {
+		med = (ratios[len(ratios)/2-1] + ratios[len(ratios)/2]) / 2
+	}
+	return &GuardrailRatio{
+		N:      len(ratios),
+		Median: math.Round(med*100) / 100,
+		Min:    math.Round(ratios[0]*100) / 100,
+		Max:    math.Round(ratios[len(ratios)-1]*100) / 100,
+	}
 }
 
 // applyGuardrail 在 chatCompletions 阶段②（deriveSessionKeys）之后、阶段③（提示词
@@ -227,6 +272,17 @@ func (h *Handler) applyGuardrail(w http.ResponseWriter, r *http.Request, sessKey
 		estimateTokensJSON(reqView.Raw("messages")) +
 		estimateTokensJSON(reqView.Raw("tools")))
 	d := h.guardrail.Check(sessKey, est)
+	// 对照样本覆盖**所有放行请求**，不再只在 warn 命中时置位。
+	// 为什么改：2026-11-26 实弹 325 请求、guardrail_stats 恒为空——warn 阈值 500k
+	// 而真实请求估算中位 ~6 万，CALIBRATION 永远拿不到样本，估算权重就没法用真机
+	// 数据校准（本文件头声明的「对照样本供校准」实际是空转）。置位本身无副作用：
+	// 只有上游真返回 prompt_tokens 时才落样本（RecordCalibration 挡 upstream<=0）。
+	if run != nil {
+		run.guardrailEst = est
+		if run.st != nil {
+			run.st.estPrompt = est // 归档行与上游 prompt_tokens 成对落下（长期校准）
+		}
+	}
 	switch {
 	case d.RateLimited:
 		// 会话级限流（ADR-019 D4）：429 与 server_busy 语义分离——这是会话自身速率，
@@ -256,9 +312,6 @@ func (h *Handler) applyGuardrail(w http.ResponseWriter, r *http.Request, sessKey
 			fmt.Sprintf("estimated prompt tokens %d exceed warn threshold %d", est, d.WarnTokens))
 		if tr := requestTraceFrom(r); tr != nil {
 			tr.setGuardrailHit("warn")
-		}
-		if run != nil {
-			run.guardrailEst = est // 上游返回 usage 后补对照样本（RecordCalibration）
 		}
 		return false
 	}
