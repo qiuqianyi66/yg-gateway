@@ -1,0 +1,25 @@
+name: apply-11158
+on:
+  push:
+    branches: [fix/11158-apply]
+permissions:
+  contents: write
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: fix/11158-apply
+      - name: Apply 11158 patch to main
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git apply --check 11158.patch
+          git apply 11158.patch
+          git add -A
+          git diff --cached --quiet && { echo 'no changes'; exit 1; }
+          git commit -m "fix(upstream): classify 11158 as model entitlement, not pool failure (400, no penalty)"
+          git push origin HEAD:main
