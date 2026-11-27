@@ -50,8 +50,8 @@ func TestCountTokensCJK(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
 		t.Fatal(err)
 	}
-	if out.InputTokens != 15 {
-		t.Fatalf("input_tokens = %d, want 15（CJK ×10 + role 2 + 结构字节 3）", out.InputTokens)
+	if out.InputTokens != 18 {
+		t.Fatalf("input_tokens = %d, want 18（护栏口径取两套估算的较大者：此形状影子=18 > 主口径 15）", out.InputTokens)
 	}
 }
 
@@ -137,6 +137,23 @@ func TestEstimateShadowTokens(t *testing.T) {
 	}
 	if b.tokens() == b.shadowTokens() {
 		t.Fatal("主口径与影子口径不应恒等（否则并行落档没有裁决价值）")
+	}
+}
+
+// TestGuardTokensTakesMax 护栏口径必须取两套估算的较大者：
+// 结构字节多、图片少 → 影子更大（主口径会低估）；图片多 → 主口径更大。
+func TestGuardTokensTakesMax(t *testing.T) {
+	var b estBreakdown
+	b.Wide, b.Other, b.StructBytes = 100, 1000, 50000
+	if b.guardTokens() != b.shadowTokens() {
+		t.Fatalf("结构重、无图时应取影子：guard=%d shadow=%d main=%d", b.guardTokens(), b.shadowTokens(), b.tokens())
+	}
+	b.Images = 50
+	if b.guardTokens() != b.tokens() {
+		t.Fatalf("50 张图时应取主口径：guard=%d shadow=%d main=%d", b.guardTokens(), b.shadowTokens(), b.tokens())
+	}
+	if b.guardTokens() < b.tokens() || b.guardTokens() < b.shadowTokens() {
+		t.Fatal("guardTokens 不可能低于任一单口径")
 	}
 }
 

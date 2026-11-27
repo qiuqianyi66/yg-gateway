@@ -294,7 +294,10 @@ func (h *Handler) applyGuardrail(w http.ResponseWriter, r *http.Request, sessKey
 	bd.merge(estimateBreakdownJSON(reqView.Raw("system")))
 	bd.merge(estimateBreakdownJSON(reqView.Raw("messages")))
 	bd.merge(estimateBreakdownJSON(reqView.Raw("tools")))
-	est := int64(bd.tokens())
+	// 护栏取两套口径的较大者（宁高勿漏）：主口径在「结构字节多、图片少」的请求上
+	// 会低估，影子口径在纯文本上偏高；取 max 后 2026-11-27 的 340 条真机样本
+	// min=0.99 / p10=1.02 / 中位 1.04 / p90 1.08，没有任何一条低估。
+	est := int64(bd.guardTokens())
 	d := h.guardrail.Check(sessKey, est)
 	// 对照样本覆盖**所有放行请求**，不再只在 warn 命中时置位。
 	// 为什么改：2026-11-26 实弹 325 请求、guardrail_stats 恒为空——warn 阈值 500k

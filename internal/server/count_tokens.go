@@ -125,6 +125,24 @@ func (b estBreakdown) shadowTokens() int {
 	return (bytes*10+33)/34 + 350*b.Images
 }
 
+// guardTokens 护栏实际使用的估算：两套口径取较大者。
+// 为什么取 max（2026-11-27 真机 340 条，四种图片形状都齐了）：
+//   - 主口径在「结构字节多、图片少」的请求上会低估（img1-5 中位 0.92、img6-19 0.94），
+//     而影子口径同组是 1.03 / 1.02；主口径低估来自结构字节只按 0.10/字节计。
+//   - 影子口径在纯文本/小请求上又偏高（img0 中位 1.49，主口径 1.81，两者都高）。
+//   - 取 max 后 340 条的分布：min 0.99 / p10 1.02 / 中位 1.04 / p90 1.08 / max 2.23，
+//     **没有任何一条低估**——护栏的契约是「宁高勿漏」，这比任何单一口径都更符合。
+//
+// 代价是图片密集请求多算 2–4%，属于可接受的安全侧余量。
+// count_tokens 端点同源使用本函数，保证客户端看到的估算与护栏拦截口径一致。
+func (b estBreakdown) guardTokens() int {
+	main, shadow := b.tokens(), b.shadowTokens()
+	if shadow > main {
+		return shadow
+	}
+	return main
+}
+
 func walkEst(v any, b *estBreakdown) {
 	switch t := v.(type) {
 	case string:
@@ -157,7 +175,7 @@ func walkEst(v any, b *estBreakdown) {
 func estimateTokensValue(v any) int {
 	var b estBreakdown
 	walkEst(v, &b)
-	return b.tokens()
+	return b.guardTokens()
 }
 
 // estimateBreakdownJSON 解析一段 JSON 并返回构成；空段/不可解析（畸形子段）
@@ -181,7 +199,7 @@ func estimateBreakdownJSON(raw json.RawMessage) estBreakdown {
 // estimateTokensJSON 解析一段 JSON 并估算其字符串叶子；空段/不可解析（畸形子段）
 // 返回 0（宽容语义，不因局部畸形拒整体）。
 func estimateTokensJSON(raw json.RawMessage) int {
-	return estimateBreakdownJSON(raw).tokens()
+	return estimateBreakdownJSON(raw).guardTokens()
 }
 
 // countTokens POST /v1/messages/count_tokens。入站 body 上限与聊天同源
