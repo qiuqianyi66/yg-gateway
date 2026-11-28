@@ -1,6 +1,6 @@
 # REQ: 11158 账号类型无模型权限的分类修正（2026-11-26）
 
-> 状态：**实施中**。对象是 `internal/upstream/errors.go` 分类、
+> 状态：**已实施并部署（2026-11-28）**。对象是 `internal/upstream/errors.go` 分类、
 > `internal/server/handler_errpolicy.go` 惩罚策略与 `finalErrorOf` 末端映射。
 
 ## 必要性
